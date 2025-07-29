@@ -1,2 +1,0 @@
-TOKEN = "7807559906:AAFA0bsnb_Y6m3JHKIeWk2hZ3_ytMvnC-as"
-STORAGE_FILE = "bookings.json"

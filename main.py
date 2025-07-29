@@ -1,17 +1,23 @@
 import asyncio
+import json
+import os
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-bot = Bot(token="7807559906:AAFA0bsnb_Y6m3JHKIeWk2hZ3_ytMvnC-as")
+# Конфигурация
+BOT_TOKEN = "7807559906:AAFA0bsnb_Y6m3JHKIeWk2hZ3_ytMvnC-as"
+BOOKINGS_FILE = "bookings.json"
+
+# Инициализация бота
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 # Хранение данных
 user_data = {}
-bookings = []  # Все бронирования
-booking_id_counter = 1  # Счетчик для ID бронирований
+booking_id_counter = 1
 
 # Главное меню
 main_menu = ReplyKeyboardMarkup(
@@ -21,6 +27,32 @@ main_menu = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True
 )
+
+def load_bookings():
+    """Загружает бронирования из файла"""
+    if not os.path.exists(BOOKINGS_FILE):
+        return []
+    
+    with open(BOOKINGS_FILE, "r", encoding="utf-8") as f:
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            return []
+
+def save_bookings(bookings_list):
+    """Сохраняет бронирования в файл"""
+    with open(BOOKINGS_FILE, "w", encoding="utf-8") as f:
+        json.dump(bookings_list, f, ensure_ascii=False, indent=2, default=str)
+
+def get_next_booking_id():
+    """Генерирует следующий ID для бронирования"""
+    global booking_id_counter
+    bookings = load_bookings()
+    if bookings:
+        booking_id_counter = max(b["id"] for b in bookings) + 1
+    else:
+        booking_id_counter = 1
+    return booking_id_counter
 
 def generate_calendar(year=None, month=None):
     """Генерирует календарь"""
@@ -103,6 +135,7 @@ def generate_confirmation():
 
 def generate_booking_list(user_id):
     """Генерирует список бронирований пользователя"""
+    bookings = load_bookings()
     user_bookings = [b for b in bookings if b["user_id"] == user_id]
     if not user_bookings:
         return None
@@ -110,7 +143,7 @@ def generate_booking_list(user_id):
     builder = InlineKeyboardBuilder()
     for booking in user_bookings:
         builder.row(types.InlineKeyboardButton(
-            text=f"{booking['date'].strftime('%d.%m.%Y')} {booking['time_start']}-{booking['time_end']} (ID: {booking['id']})",
+            text=f"{booking['date']} {booking['time_start']}-{booking['time_end']} (ID: {booking['id']})",
             callback_data=f"booking_info_{booking['id']}"
         ))
     
@@ -226,21 +259,25 @@ async def process_confirmation(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     
     if callback.data == "booking_confirm":
-        global booking_id_counter
+        booking_id = get_next_booking_id()
         booking = {
-            "id": booking_id_counter,
-            "date": user_data[user_id]["selected_date"],
+            "id": booking_id,
+            "date": user_data[user_id]["selected_date"].strftime("%Y-%m-%d"),
             "time_start": user_data[user_id]["time_start"],
             "time_end": user_data[user_id]["time_end"],
-            "user_id": user_id
+            "user_id": user_id,
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
+        
+        # Загружаем текущие бронирования, добавляем новое и сохраняем
+        bookings = load_bookings()
         bookings.append(booking)
-        booking_id_counter += 1
+        save_bookings(bookings)
         
         await callback.message.edit_text(
             "✅ Бронирование подтверждено!\n\n"
             f"ID: {booking['id']}\n"
-            f"Дата: {booking['date'].strftime('%d.%m.%Y')}\n"
+            f"Дата: {booking['date']}\n"
             f"Время: {booking['time_start']} - {booking['time_end']}\n\n"
             "Вы можете просмотреть или отменить бронирование через меню",
         )
@@ -253,6 +290,7 @@ async def process_confirmation(callback: types.CallbackQuery):
 @dp.callback_query(lambda c: c.data.startswith("booking_info_"))
 async def show_booking_info(callback: types.CallbackQuery):
     booking_id = int(callback.data.replace("booking_info_", ""))
+    bookings = load_bookings()
     booking = next((b for b in bookings if b["id"] == booking_id), None)
     
     if not booking:
@@ -262,8 +300,9 @@ async def show_booking_info(callback: types.CallbackQuery):
     await callback.message.edit_text(
         f"Информация о бронировании:\n\n"
         f"ID: {booking['id']}\n"
-        f"Дата: {booking['date'].strftime('%d.%m.%Y')}\n"
-        f"Время: {booking['time_start']} - {booking['time_end']}",
+        f"Дата: {booking['date']}\n"
+        f"Время: {booking['time_start']} - {booking['time_end']}\n"
+        f"Создано: {booking.get('created_at', 'неизвестно')}",
         reply_markup=generate_booking_actions(booking['id'])
     )
     await callback.answer()
@@ -271,6 +310,7 @@ async def show_booking_info(callback: types.CallbackQuery):
 @dp.callback_query(lambda c: c.data.startswith("cancel_booking_"))
 async def cancel_booking(callback: types.CallbackQuery):
     booking_id = int(callback.data.replace("cancel_booking_", ""))
+    bookings = load_bookings()
     booking = next((b for b in bookings if b["id"] == booking_id), None)
     
     if not booking:
@@ -281,10 +321,13 @@ async def cancel_booking(callback: types.CallbackQuery):
         await callback.answer("Вы не можете отменить чужое бронирование", show_alert=True)
         return
     
-    bookings.remove(booking)
+    # Удаляем бронирование и сохраняем изменения
+    updated_bookings = [b for b in bookings if b["id"] != booking_id]
+    save_bookings(updated_bookings)
+    
     await callback.message.edit_text(
         f"❌ Бронирование ID {booking_id} отменено\n\n"
-        f"Дата: {booking['date'].strftime('%d.%m.%Y')}\n"
+        f"Дата: {booking['date']}\n"
         f"Время: {booking['time_start']} - {booking['time_end']}"
     )
     await callback.answer()
