@@ -1,0 +1,10 @@
+{
+  "users": {},
+  "slots": {
+    "slot_1": {
+      "date": "25.11.2023",
+      "time": "14:00",
+      "booked": false
+    }
+  }
+}
