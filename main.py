@@ -29,8 +29,57 @@ main_menu = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+def generate_booking_types():
+    """Генерирует клавиатуру с типами бронирований"""
+    builder = InlineKeyboardBuilder()
+    for booking_type in BOOKING_TYPES:
+        builder.add(types.InlineKeyboardButton(
+            text=booking_type,
+            callback_data=f"booking_type_{booking_type}"
+        ))
+    builder.adjust(2)
+    return builder.as_markup()
+
+def merge_adjacent_bookings(bookings):
+    """Объединяет смежные бронирования одного типа"""
+    if not bookings:
+        return bookings
+    
+    # Сортируем бронирования по типу, дате и времени начала
+    sorted_bookings = sorted(bookings, key=lambda x: (
+        x['booking_type'],
+        x['date'],
+        x['time_start']
+    ))
+    
+    merged = []
+    current = sorted_bookings[0]
+    
+    for next_booking in sorted_bookings[1:]:
+        # Проверяем условия для объединения:
+        # 1. Один тип
+        # 2. Одна дата
+        # 3. Время конца текущего = времени начала следующего
+        if (current['booking_type'] == next_booking['booking_type'] and
+            current['date'] == next_booking['date'] and
+            current['time_end'] == next_booking['time_start']):
+            
+            # Объединяем бронирования
+            current = {
+                **current,
+                'time_end': next_booking['time_end'],
+                'id': min(current['id'], next_booking['id']),  # Сохраняем минимальный ID
+                'merged': True  # Помечаем как объединенное
+            }
+        else:
+            merged.append(current)
+            current = next_booking
+    
+    merged.append(current)
+    return merged
+
 def load_bookings():
-    """Загружает бронирования из файла"""
+    """Загружает бронирования из файла, объединяет смежные и удаляет прошедшие"""
     if not os.path.exists(BOOKINGS_FILE):
         return []
     
@@ -38,29 +87,69 @@ def load_bookings():
         try:
             data = json.load(f)
             valid_bookings = []
+            current_time = datetime.now()
+            
             for booking in data:
                 if 'date' not in booking:
                     continue
                 try:
+                    # Преобразуем дату и время бронирования
                     if isinstance(booking['date'], str):
-                        booking['date'] = datetime.strptime(booking['date'], "%Y-%m-%d").date()
-                    elif not isinstance(booking['date'], date):
+                        booking_date = datetime.strptime(booking['date'], "%Y-%m-%d").date()
+                    else:
                         continue
+                    
+                    time_end = datetime.strptime(booking['time_end'], "%H:%M").time()
+                    booking_datetime = datetime.combine(booking_date, time_end)
+                    
+                    # Проверяем, не прошло ли время бронирования
+                    if booking_datetime < current_time:
+                        continue
+                        
+                    booking['date'] = booking_date
                     valid_bookings.append(booking)
+                    
                 except ValueError:
                     continue
+            
+            # Объединяем смежные бронирования
+            valid_bookings = merge_adjacent_bookings(valid_bookings)
+            
+            # Если были изменения, сохраняем обновленный список
+            if len(valid_bookings) != len(data):
+                save_bookings(valid_bookings)
+                
             return valid_bookings
+            
         except (json.JSONDecodeError, KeyError, ValueError):
             return []
 
 def save_bookings(bookings_list):
-    """Сохраняет бронирования в файл"""
+    """Сохраняет бронирования в файл, фильтруя прошедшие"""
+    current_time = datetime.now()
     bookings_to_save = []
+    
     for booking in bookings_list:
-        booking_copy = booking.copy()
-        if isinstance(booking_copy['date'], date):
-            booking_copy['date'] = booking_copy['date'].strftime("%Y-%m-%d")
-        bookings_to_save.append(booking_copy)
+        try:
+            # Проверяем, не прошло ли время бронирования
+            if isinstance(booking['date'], date):
+                booking_date = booking['date']
+            elif isinstance(booking['date'], str):
+                booking_date = datetime.strptime(booking['date'], "%Y-%m-%d").date()
+            else:
+                continue
+                
+            time_end = datetime.strptime(booking['time_end'], "%H:%M").time()
+            booking_datetime = datetime.combine(booking_date, time_end)
+            
+            if booking_datetime >= current_time:
+                booking_copy = booking.copy()
+                if isinstance(booking_copy['date'], date):
+                    booking_copy['date'] = booking_copy['date'].strftime("%Y-%m-%d")
+                bookings_to_save.append(booking_copy)
+                
+        except (ValueError, KeyError):
+            continue
     
     with open(BOOKINGS_FILE, "w", encoding="utf-8") as f:
         json.dump(bookings_to_save, f, ensure_ascii=False, indent=2)
@@ -98,17 +187,6 @@ def has_booking_conflict(user_id, booking_type, date, time_start, time_end, excl
             if not (new_end <= existing_start or new_start >= existing_end):
                 return True
     return False
-
-def generate_booking_types():
-    """Генерирует клавиатуру с типами бронирований"""
-    builder = InlineKeyboardBuilder()
-    for booking_type in BOOKING_TYPES:
-        builder.add(types.InlineKeyboardButton(
-            text=booking_type,
-            callback_data=f"booking_type_{booking_type}"
-        ))
-    builder.adjust(2)
-    return builder.as_markup()
 
 def generate_calendar(year=None, month=None):
     """Генерирует календарь"""
@@ -212,8 +290,10 @@ def generate_booking_list(user_id):
         if isinstance(booking_date, str):
             booking_date = datetime.strptime(booking_date, "%Y-%m-%d").date()
         
+        # Добавляем пометку, если бронь была объединена
+        merged_note = " (объединено)" if booking.get('merged', False) else ""
         builder.row(types.InlineKeyboardButton(
-            text=f"{booking['booking_type']} {booking_date.strftime('%d.%m.%Y')} {booking['time_start']}-{booking['time_end']} (ID: {booking['id']})",
+            text=f"{booking['booking_type']}{merged_note} {booking_date.strftime('%d.%m.%Y')} {booking['time_start']}-{booking['time_end']} (ID: {booking['id']})",
             callback_data=f"booking_info_{booking['id']}"
         ))
     
@@ -493,7 +573,17 @@ async def back_handler(callback: types.CallbackQuery):
         )
     await callback.answer()
 
+async def cleanup_old_bookings():
+    """Периодически очищает старые бронирования"""
+    while True:
+        # Загружаем и сохраняем - это автоматически удалит старые записи
+        bookings = load_bookings()
+        save_bookings(bookings)
+        # Проверяем каждые 6 часов
+        await asyncio.sleep(6 * 60 * 60)
+
 async def main():
+    asyncio.create_task(cleanup_old_bookings())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
