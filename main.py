@@ -8,7 +8,7 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # Конфигурация
-BOT_TOKEN = "7807559906:AAFA0bsnb_Y6m3JHKIeWk2hZ3_ytMvnC-as"
+BOT_TOKEN = "8413883420:AAGL9-27CcgEUsaCbP-PJ8ukuh1u1x3YPbQ"
 BOOKINGS_FILE = "bookings.json"
 BOOKING_TYPES = ["Тип1", "Тип2", "Тип3", "Тип4"]
 
@@ -126,33 +126,62 @@ def load_bookings():
 
 def save_bookings(bookings_list):
     """Сохраняет бронирования в файл, фильтруя прошедшие"""
-    current_time = datetime.now()
-    bookings_to_save = []
-    
-    for booking in bookings_list:
-        try:
-            # Проверяем, не прошло ли время бронирования
-            if isinstance(booking['date'], date):
-                booking_date = booking['date']
-            elif isinstance(booking['date'], str):
-                booking_date = datetime.strptime(booking['date'], "%Y-%m-%d").date()
-            else:
+    try:
+        print(f"Попытка сохранения {len(bookings_list)} бронирований")
+        
+        current_time = datetime.now()
+        bookings_to_save = []
+        
+        for booking in bookings_list:
+            try:
+                # Проверяем обязательные поля
+                if 'date' not in booking or 'time_end' not in booking:
+                    continue
+                    
+                # Преобразуем дату
+                if isinstance(booking['date'], date):
+                    booking_date = booking['date']
+                elif isinstance(booking['date'], str):
+                    booking_date = datetime.strptime(booking['date'], "%Y-%m-%d").date()
+                else:
+                    continue
+                
+                # Преобразуем время
+                time_end = datetime.strptime(booking['time_end'], "%H:%M").time()
+                booking_datetime = datetime.combine(booking_date, time_end)
+                
+                # Фильтруем прошедшие бронирования
+                if booking_datetime >= current_time:
+                    booking_copy = {
+                        'id': booking.get('id'),
+                        'booking_type': booking.get('booking_type'),
+                        'date': booking_date.strftime("%Y-%m-%d"),
+                        'time_start': booking.get('time_start'),
+                        'time_end': booking.get('time_end'),
+                        'user_id': booking.get('user_id'),
+                        'created_at': booking.get('created_at', datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                    }
+                    bookings_to_save.append(booking_copy)
+                
+            except Exception as e:
+                print(f"Ошибка обработки бронирования {booking}: {e}")
                 continue
-                
-            time_end = datetime.strptime(booking['time_end'], "%H:%M").time()
-            booking_datetime = datetime.combine(booking_date, time_end)
+        
+        print(f"Сохраняем {len(bookings_to_save)} действительных бронирований")
+        
+        # Создаём директорию, если её нет
+        os.makedirs(os.path.dirname(BOOKINGS_FILE) or ".", exist_ok=True)
+        
+        # Сохраняем в файл
+        with open(BOOKINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(bookings_to_save, f, ensure_ascii=False, indent=2)
             
-            if booking_datetime >= current_time:
-                booking_copy = booking.copy()
-                if isinstance(booking_copy['date'], date):
-                    booking_copy['date'] = booking_copy['date'].strftime("%Y-%m-%d")
-                bookings_to_save.append(booking_copy)
-                
-        except (ValueError, KeyError):
-            continue
-    
-    with open(BOOKINGS_FILE, "w", encoding="utf-8") as f:
-        json.dump(bookings_to_save, f, ensure_ascii=False, indent=2)
+        print("Данные успешно сохранены в файл")
+        return True
+        
+    except Exception as e:
+        print(f"Критическая ошибка при сохранении: {e}")
+        return False
 
 def get_next_booking_id():
     """Генерирует следующий ID для бронирования"""
@@ -587,4 +616,6 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
+    print("Текущая директория:", os.getcwd())
+    print("Полный путь к файлу:", os.path.abspath(BOOKINGS_FILE))
     asyncio.run(main())
