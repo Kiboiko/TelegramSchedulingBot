@@ -8,7 +8,7 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # Конфигурация
-BOT_TOKEN = "7807559906:AAFA0bsnb_Y6m3JHKIeWk2hZ3_ytMvnC-as"
+BOT_TOKEN = "8413883420:AAGL9-27CcgEUsaCbP-PJ8ukuh1u1x3YPbQ"
 BOOKINGS_FILE = "bookings.json"
 BOOKING_TYPES = ["Тип1", "Тип2", "Тип3", "Тип4"]
 
