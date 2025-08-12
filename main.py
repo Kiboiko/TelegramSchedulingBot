@@ -234,11 +234,11 @@ def generate_time_slots(selected_date=None):
         current_time += timedelta(minutes=30)
 
     builder.adjust(4)
-    if selected_date:
-        builder.row(types.InlineKeyboardButton(
-            text="❌ Отменить выбор времени",
-            callback_data="cancel_time_selection"
-        ))
+    # Добавляем кнопку отмены внизу
+    builder.row(types.InlineKeyboardButton(
+        text="❌ Отменить выбор времени",
+        callback_data="cancel_time_selection"
+    ))
     return builder.as_markup()
 
 
@@ -480,15 +480,45 @@ async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(BookingStates.SELECT_START_TIME, F.data.startswith("time_slot_"))
 async def process_start_time(callback: types.CallbackQuery, state: FSMContext):
-    time_start = callback.data.replace("time_slot_", "")
-    await state.update_data(time_start=time_start)
+    try:
+        # Получаем выбранное время начала
+        time_start = callback.data.replace("time_slot_", "")
+        
+        # Проверяем корректность формата времени
+        try:
+            datetime.strptime(time_start, "%H:%M")
+        except ValueError:
+            await callback.answer("Некорректный формат времени!", show_alert=True)
+            return
 
-    await callback.message.edit_text(
-        f"Начальное время: {time_start}\nВыберите конечное время:",
-        reply_markup=generate_time_slots()
-    )
-    await state.set_state(BookingStates.SELECT_END_TIME)
-    await callback.answer()
+        # Обновляем состояние
+        await state.update_data(time_start=time_start)
+        data = await state.get_data()
+        selected_date = data.get('selected_date')
+
+        # Формируем текст сообщения
+        booking_type = data.get('booking_type', 'не указан')
+        message_text = (
+            f"Тип бронирования: {booking_type}\n"
+            f"Дата: {selected_date.strftime('%d.%m.%Y')}\n"
+            f"Выбрано время начала: {time_start}\n\n"
+            "Выберите время окончания:"
+        )
+
+        # Отправляем обновленное сообщение с клавиатурой
+        await callback.message.edit_text(
+            text=message_text,
+            reply_markup=generate_time_slots(selected_date)
+        )
+        
+        # Меняем состояние на выбор времени окончания
+        await state.set_state(BookingStates.SELECT_END_TIME)
+        await callback.answer()
+
+    except Exception as e:
+        logging.error(f"Error in process_start_time: {e}")
+        await callback.answer("Произошла ошибка, попробуйте позже", show_alert=True)
+        await state.clear()
 
 
 @dp.callback_query(BookingStates.SELECT_END_TIME, F.data.startswith("time_slot_"))
@@ -537,17 +567,41 @@ async def process_end_time(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@dp.callback_query(F.data == "cancel_time_selection")
-async def cancel_time_selection(callback: types.CallbackQuery):
-    await callback.message.edit_text(
-        "Выбор времени отменён. Можете начать заново.",
-        reply_markup=None
-    )
-    await callback.message.answer(
-        "Выберите действие:",
-        reply_markup=main_menu
-    )
-    await callback.answer()
+@dp.callback_query(BookingStates.SELECT_END_TIME, F.data == "cancel_time_selection")
+async def cancel_end_time_selection(callback: types.CallbackQuery, state: FSMContext):
+    try:
+        # Получаем данные из состояния
+        data = await state.get_data()
+        booking_type = data.get('booking_type', 'неизвестный тип')
+        selected_date = data.get('selected_date')
+
+        # Формируем сообщение об отмене
+        cancel_message = (
+            f"❌ Выбор времени для бронирования '{booking_type}' "
+            f"на {selected_date.strftime('%d.%m.%Y')} отменен.\n\n"
+            "Вы можете начать процесс заново."
+        )
+
+        # Редактируем сообщение и очищаем клавиатуру
+        await callback.message.edit_text(
+            text=cancel_message,
+            reply_markup=None
+        )
+
+        # Предлагаем вернуться в меню
+        await callback.message.answer(
+            "Выберите действие:",
+            reply_markup=main_menu
+        )
+
+        # Очищаем состояние
+        await state.clear()
+        await callback.answer()
+
+    except Exception as e:
+        logging.error(f"Error in cancel_end_time_selection: {e}")
+        await callback.answer("Произошла ошибка", show_alert=True)
+        await state.clear()
 
 
 # В функции process_confirmation изменим сохранение бронирования:
