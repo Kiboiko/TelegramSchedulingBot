@@ -1,14 +1,175 @@
 [
   {
-    "id": 1,
-    "booking_type": "",
-    "date": "2025-08-15",
-    "time_start": "11:00",
-    "time_end": "14:30",
-    "user_id": 1180878673,
-    "user_name": "Омнимэн омнимэн",
+    "user_name": "Бойко Кирилл",
+    "user_role": "teacher",
+    "booking_type": "Тип1",
+    "date": "2025-08-06",
+    "start_time": "16:00",
+    "end_time": "16:30",
+    "user_id": 973231400,
+    "created_at": "2025-08-06 13:59:14",
+    "subjects": [
+      "rus"
+    ],
+    "id": 5
+  },
+  {
+    "user_name": "Писька писька",
     "user_role": "student",
-    "created_at": "2025-08-05 14:39:40",
-    "subject": "inf"
+    "booking_type": "Тип1",
+    "date": "2025-08-06",
+    "start_time": "18:00",
+    "end_time": "20:00",
+    "user_id": 973231400,
+    "created_at": "2025-08-05 18:15:51",
+    "subject": "math",
+    "id": 5
+  },
+  {
+    "user_name": "Спайдэр Мэн",
+    "user_role": "student",
+    "booking_type": "Тип1",
+    "date": "2025-08-20",
+    "start_time": "15:30",
+    "end_time": "18:30",
+    "user_id": 1180878673,
+    "created_at": "2025-08-06 14:01:00",
+    "subject": "inf",
+    "id": 8
+  },
+  {
+    "user_name": "Пупупу папапа",
+    "user_role": "student",
+    "booking_type": "Тип2",
+    "date": "2025-08-07",
+    "start_time": "09:00",
+    "end_time": "11:30",
+    "user_id": 973231400,
+    "created_at": "2025-08-06 14:00:38",
+    "subject": "inf",
+    "id": 7
+  },
+  {
+    "user_name": "Зинченко Александр Вячеславович",
+    "user_role": "teacher",
+    "booking_type": "Тип2",
+    "date": "2025-08-07",
+    "start_time": "13:30",
+    "end_time": "16:00",
+    "user_id": 1312414595,
+    "created_at": "2025-08-06 11:05:57",
+    "subjects": [
+      "inf",
+      "rus"
+    ],
+    "id": 3
+  },
+  {
+    "user_name": "Зинченко Александр",
+    "user_role": "student",
+    "booking_type": "Тип2",
+    "date": "2025-08-08",
+    "start_time": "14:00",
+    "end_time": "16:00",
+    "user_id": 1312414595,
+    "created_at": "2025-08-06 14:26:56",
+    "subject": "phys",
+    "id": 14
+  },
+  {
+    "user_name": "Лишили лодок",
+    "user_role": "teacher",
+    "booking_type": "Тип3",
+    "date": "2025-08-06",
+    "start_time": "13:30",
+    "end_time": "16:30",
+    "user_id": 973231400,
+    "created_at": "2025-08-06 14:01:45",
+    "subjects": [
+      "rus"
+    ],
+    "id": 9
+  },
+  {
+    "user_name": "Кокоджамбов Даниил",
+    "user_role": "teacher",
+    "booking_type": "Тип3",
+    "date": "2025-08-07",
+    "start_time": "10:00",
+    "end_time": "18:00",
+    "user_id": 1312414595,
+    "created_at": "2025-08-06 14:06:58",
+    "subjects": [
+      "inf",
+      "rus"
+    ],
+    "id": 10,
+    "merged": true
+  },
+  {
+    "user_name": "Зинченко Александр",
+    "user_role": "teacher",
+    "booking_type": "Тип4",
+    "date": "2025-08-07",
+    "start_time": "09:00",
+    "end_time": "12:00",
+    "user_id": 1312414595,
+    "created_at": "2025-08-06 14:19:38",
+    "subjects": [
+      "inf",
+      "rus"
+    ],
+    "id": 12
+  },
+  {
+    "user_name": "Кокоджамбов Данька",
+    "user_role": "student",
+    "booking_type": "Тип4",
+    "date": "2025-08-09",
+    "start_time": "11:00",
+    "end_time": "14:00",
+    "user_id": 1312414595,
+    "created_at": "2025-08-06 14:20:25",
+    "subject": "inf",
+    "id": 13
+  },
+  {
+    "user_name": "Брэд Питт",
+    "user_role": "teacher",
+    "booking_type": "Тип4",
+    "date": "2025-08-14",
+    "start_time": "15:00",
+    "end_time": "16:30",
+    "user_id": 1180878673,
+    "created_at": "2025-08-06 14:00:18",
+    "subjects": [
+      "phys",
+      "math"
+    ],
+    "id": 6
+  },
+  {
+    "user_name": "Тайлер Дэрден",
+    "user_role": "student",
+    "booking_type": "Тип4",
+    "date": "2025-08-30",
+    "start_time": "11:00",
+    "end_time": "16:30",
+    "user_id": 1180878673,
+    "created_at": "2025-08-06 11:57:25",
+    "subject": "phys",
+    "id": 4
+  },
+  {
+    "user_name": "Белых Степан",
+    "user_role": "student",
+    "booking_type": "Тип4",
+    "date": "2025-08-31",
+    "start_time": "13:00",
+    "end_time": "16:30",
+    "user_id": 1180878673,
+    "created_at": "2025-08-05 18:11:44",
+    "subject": "inf",
+    "id": 1
   }
 ]

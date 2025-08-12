@@ -152,3 +152,29 @@ class GoogleSheetsManager:
         if rows:
             worksheet.batch_clear(['A2:Z1000'])
             worksheet.append_rows(rows)
+
+
+def update_all_sheets(self, bookings: List[Dict[str, Any]]):
+    try:
+        if not self.client:
+            print("Клиент не подключен, пытаюсь подключиться...")
+            self.connect()
+
+        if not self.spreadsheet:
+            print("Таблица не загружена, пытаюсь получить доступ...")
+            self.spreadsheet = self.client.open_by_key(self.spreadsheet_id)
+
+        print(f"Начало обновления Google Sheets. Записей: {len(bookings)}")
+
+        # Разделяем данные на преподавателей и учеников
+        teachers = [b for b in bookings if b.get('user_role') == 'teacher']
+        students = [b for b in bookings if b.get('user_role') == 'student']
+
+        print(f"Преподавателей: {len(teachers)}, учеников: {len(students)}")
+
+        self._update_sheet('Преподаватели', teachers, is_teacher=True)
+        self._update_sheet('Ученики', students, is_teacher=False)
+        print("Обновление Google Sheets завершено успешно")
+    except Exception as e:
+        print(f"Ошибка при обновлении Google Sheets: {str(e)}")
+        raise
