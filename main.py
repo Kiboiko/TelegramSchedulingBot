@@ -19,7 +19,7 @@ import threading
 from gsheets_manager import GoogleSheetsManager
 from storage import JSONStorage
 
-BOT_TOKEN = "8413883420:AAGL9-27CcgEUsaCbP-PJ8ukuh1u1x3YPbQ"
+BOT_TOKEN = "8357310050:AAFhoQI1a908g89P_wKOG90hONfdfGYoVc0"
 BOOKINGS_FILE = "bookings.json"
 
 BOOKING_TYPES = ["Тип1", "Тип2", "Тип3", "Тип4"]
@@ -556,6 +556,7 @@ async def process_confirmation(callback: types.CallbackQuery, state: FSMContext)
     if callback.data == "booking_confirm":
         data = await state.get_data()
 
+        # Проверка конфликтов
         if has_booking_conflict(
                 user_id=callback.from_user.id,
                 booking_type=data['booking_type'],
@@ -563,13 +564,11 @@ async def process_confirmation(callback: types.CallbackQuery, state: FSMContext)
                 time_start=data['time_start'],
                 time_end=data['time_end']
         ):
-            await callback.message.edit_text(
-                "К сожалению, это время стало недоступно. Пожалуйста, начните бронирование заново."
-            )
+            await callback.message.edit_text("❌ Время уже занято! Выберите другое.")
             await state.clear()
-            await callback.answer()
             return
 
+        # Формируем данные брони
         booking_data = {
             "user_name": data['user_name'],
             "user_role": data['user_role'],
@@ -586,25 +585,27 @@ async def process_confirmation(callback: types.CallbackQuery, state: FSMContext)
         else:
             booking_data["subject"] = data.get('subject', '')
 
-        # Добавляем бронирование (автоматически сохранится и в JSON и в Google Sheets)
-        booking = storage.add_booking(booking_data)
+        # Сохраняем бронь
+        try:
+            booking = storage.add_booking(booking_data)
+            print(f"Бронь сохранена в JSON. ID: {booking.get('id')}")
 
-        role_text = "ученик" if booking['user_role'] == 'student' else "преподаватель"
+            # Принудительное обновление Google Sheets
+            all_bookings = storage.load()
+            if gsheets.update_all_sheets(all_bookings):
+                print("Данные успешно отправлены в Google Sheets!")
+            else:
+                print("⚠️ Предупреждение: не удалось обновить Google Sheets")
 
-        if booking['user_role'] == 'teacher':
-            subjects_text = ", ".join(SUBJECTS[subj] for subj in booking.get('subjects', []))
-        else:
-            subjects_text = SUBJECTS.get(booking.get('subject', ''), "Не указан")
-
-        await callback.message.edit_text(
-            "✅ Бронирование подтверждено!\n\n"
-            f"Тип: {booking['booking_type']}\n"
-            f"Роль: {role_text}\n"
-            f"Предмет(ы): {subjects_text}\n"
-            f"Дата: {booking['date']}\n"
-            f"Время: {booking['start_time']} - {booking['end_time']}\n\n"
-            "Вы можете просмотреть или отменить бронирование через меню",
-        )
+            await callback.message.edit_text(
+                "✅ Бронирование подтверждено!\n"
+                f"📅 Дата: {data['selected_date'].strftime('%d.%m.%Y')}\n"
+                f"⏰ Время: {data['time_start']}-{data['time_end']}\n"
+                f"📌 Тип: {data['booking_type']}"
+            )
+        except Exception as e:
+            await callback.message.edit_text("❌ Ошибка при сохранении брони!")
+            print(f"Ошибка: {e}")
     else:
         await callback.message.edit_text("❌ Бронирование отменено")
 
