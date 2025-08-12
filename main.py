@@ -18,8 +18,12 @@ from aiogram.fsm.state import State, StatesGroup
 import threading
 from gsheets_manager import GoogleSheetsManager
 from storage import JSONStorage
+from dotenv import load_dotenv
+import os
 
-BOT_TOKEN = "8357310050:AAFhoQI1a908g89P_wKOG90hONfdfGYoVc0"
+load_dotenv()
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 BOOKINGS_FILE = "bookings.json"
 
 BOOKING_TYPES = ["Тип1", "Тип2", "Тип3", "Тип4"]
@@ -217,30 +221,59 @@ def generate_calendar(year=None, month=None):
     return builder.as_markup()
 
 
-def generate_time_slots(selected_date=None):
-    """Генерирует выбор времени с кнопкой отмены"""
+def generate_time_slots(selected_date=None, selected_start=None, selected_end=None):
+    """Генерирует клавиатуру выбора времени с визуальным выделением"""
     builder = InlineKeyboardBuilder()
 
+    # Определяем рабочие часы (9:00 - 20:00)
     start_time = datetime.strptime("09:00", "%H:%M")
     end_time = datetime.strptime("20:00", "%H:%M")
     current_time = start_time
 
+    # Преобразуем строки времени в объекты времени для сравнения
+    start_obj = datetime.strptime(selected_start, "%H:%M").time() if selected_start else None
+    end_obj = datetime.strptime(selected_end, "%H:%M").time() if selected_end else None
+
     while current_time <= end_time:
         time_str = current_time.strftime("%H:%M")
+        current_obj = current_time.time()
+        
+        # Определяем стиль кнопки в зависимости от позиции в выбранном диапазоне
+        if selected_start and selected_end:
+            if current_obj == start_obj:
+                # Начальная точка - зеленая
+                button_text = f"🟢 {time_str}"
+            elif current_obj == end_obj:
+                # Конечная точка - красная
+                button_text = f"🔴 {time_str}"
+            elif start_obj < current_obj < end_obj:
+                # Промежуточные точки - синие
+                button_text = f"🔵 {time_str}"
+            else:
+                # Вне диапазона - обычный вид
+                button_text = time_str
+        elif selected_start and current_obj == start_obj:
+            # Только начальное время выбрано - зеленая
+            button_text = f"🟢 {time_str}"
+        else:
+            # Ничего не выбрано - обычный вид
+            button_text = time_str
+
         builder.add(types.InlineKeyboardButton(
-            text=time_str,
+            text=button_text,
             callback_data=f"time_slot_{time_str}"
         ))
         current_time += timedelta(minutes=30)
 
     builder.adjust(4)
-    # Добавляем кнопку отмены внизу
+    
+    # Добавляем кнопку отмены
     builder.row(types.InlineKeyboardButton(
         text="❌ Отменить выбор времени",
         callback_data="cancel_time_selection"
     ))
+    
     return builder.as_markup()
-
 
 def generate_confirmation():
     """Клавиатура подтверждения"""
@@ -505,10 +538,13 @@ async def process_start_time(callback: types.CallbackQuery, state: FSMContext):
             "Выберите время окончания:"
         )
 
-        # Отправляем обновленное сообщение с клавиатурой
+        # Отправляем обновленное сообщение с клавиатурой (выделяем только начало)
         await callback.message.edit_text(
             text=message_text,
-            reply_markup=generate_time_slots(selected_date)
+            reply_markup=generate_time_slots(
+                selected_date=selected_date,
+                selected_start=time_start
+            )
         )
         
         # Меняем состояние на выбор времени окончания
@@ -523,29 +559,99 @@ async def process_start_time(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(BookingStates.SELECT_END_TIME, F.data.startswith("time_slot_"))
 async def process_end_time(callback: types.CallbackQuery, state: FSMContext):
-    time_end = callback.data.replace("time_slot_", "")
+    try:
+        time_end = callback.data.replace("time_slot_", "")
+        data = await state.get_data()
+        time_start = data['time_start']
+
+        # Проверяем, что время окончания после времени начала
+        if datetime.strptime(time_end, "%H:%M") <= datetime.strptime(time_start, "%H:%M"):
+            await callback.answer("Время окончания должно быть после времени начала!", show_alert=True)
+            return
+
+        # Обновляем состояние
+        await state.update_data(time_end=time_end)
+        data = await state.get_data()
+
+        role_text = "ученик" if data['user_role'] == 'student' else "преподаватель"
+
+        if data['user_role'] == 'teacher':
+            subjects_text = ", ".join(SUBJECTS[subj] for subj in data.get('subjects', []))
+        else:
+            subjects_text = SUBJECTS.get(data.get('subject', ''), "Не указан")
+
+        # Создаем клавиатуру с кнопками действий
+        builder = InlineKeyboardBuilder()
+        builder.row(
+            types.InlineKeyboardButton(
+                text="✅ Подтвердить время",
+                callback_data="confirm_time_selection"
+            ),
+            types.InlineKeyboardButton(
+                text="🔄 Изменить время окончания",
+                callback_data="change_end_time"
+            )
+        )
+        builder.row(
+            types.InlineKeyboardButton(
+                text="❌ Отменить бронирование",
+                callback_data="cancel_time_selection"
+            )
+        )
+
+        # Формируем сообщение с текущим выбором
+        await callback.message.edit_text(
+            f"📋 Текущий выбор времени:\n\n"
+            f"Тип: {data['booking_type']}\n"
+            f"Роль: {role_text}\n"
+            f"Предмет(ы): {subjects_text}\n"
+            f"Дата: {data['selected_date'].strftime('%d.%m.%Y')}\n"
+            f"Время: {data['time_start']} - {time_end}\n\n"
+            "Вы можете подтвердить время или изменить окончание:",
+            reply_markup=builder.as_markup()
+        )
+        
+        # Остаемся в том же состоянии SELECT_END_TIME
+        await callback.answer()
+
+    except Exception as e:
+        logging.error(f"Error in process_end_time: {e}")
+        await callback.answer("Произошла ошибка, попробуйте позже", show_alert=True)
+        await state.clear()
+
+@dp.callback_query(BookingStates.SELECT_END_TIME, F.data == "change_end_time")
+async def change_end_time(callback: types.CallbackQuery, state: FSMContext):
+    """Обработчик кнопки изменения времени окончания"""
     data = await state.get_data()
-    time_start = data['time_start']
+    
+    # Возвращаем пользователя к выбору времени окончания
+    await callback.message.edit_text(
+        f"Выберите новое время окончания (начало в {data['time_start']}):",
+        reply_markup=generate_time_slots(
+            selected_date=data.get('selected_date'),
+            selected_start=data.get('time_start')
+        )
+    )
+    await callback.answer()
 
-    if datetime.strptime(time_end, "%H:%M") <= datetime.strptime(time_start, "%H:%M"):
-        await callback.answer("Время окончания должно быть после времени начала!", show_alert=True)
-        return
-
-    # Проверка на конфликты только для текущего типа бронирования
+@dp.callback_query(BookingStates.SELECT_END_TIME, F.data == "confirm_time_selection")
+async def confirm_time_selection(callback: types.CallbackQuery, state: FSMContext):
+    """Обработчик подтверждения выбранного времени"""
+    data = await state.get_data()
+    
+    # Проверка на конфликты
     if has_booking_conflict(
             user_id=callback.from_user.id,
             booking_type=data['booking_type'],
             date=data['selected_date'],
             time_start=data['time_start'],
-            time_end=time_end
+            time_end=data['time_end']
     ):
         await callback.answer(
             f"У вас уже есть бронь типа '{data['booking_type']}' на это время!",
             show_alert=True
         )
         return
-
-    await state.update_data(time_end=time_end)
 
     role_text = "ученик" if data['user_role'] == 'student' else "преподаватель"
 
@@ -554,13 +660,14 @@ async def process_end_time(callback: types.CallbackQuery, state: FSMContext):
     else:
         subjects_text = SUBJECTS.get(data.get('subject', ''), "Не указан")
 
+    # Переходим к финальному подтверждению
     await callback.message.edit_text(
         f"📋 Подтвердите бронирование:\n\n"
         f"Тип: {data['booking_type']}\n"
         f"Роль: {role_text}\n"
         f"Предмет(ы): {subjects_text}\n"
         f"Дата: {data['selected_date'].strftime('%d.%m.%Y')}\n"
-        f"Время: {time_start} - {time_end}",
+        f"Время: {data['time_start']} - {data['time_end']}",
         reply_markup=generate_confirmation()
     )
     await state.set_state(BookingStates.CONFIRMATION)
