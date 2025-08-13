@@ -1,6 +1,6 @@
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Any
 
 
@@ -60,7 +60,6 @@ class GoogleSheetsManager:
             return False
 
     def _update_sheet(self, sheet_name: str, bookings: List[Dict[str, Any]], is_teacher: bool):
-        """Обновляет конкретный лист"""
         try:
             # Получаем или создаем лист
             try:
@@ -71,16 +70,24 @@ class GoogleSheetsManager:
                 worksheet = self.spreadsheet.add_worksheet(
                     title=sheet_name, rows=100, cols=20)
 
-            # Собираем уникальные даты
-            all_dates = sorted(
-                {self.format_date(b['date']) for b in bookings},
-                key=lambda x: datetime.strptime(x, '%d.%m.%Y')
-            )
+            # Фиксированные даты учебного года (2025-2026)
+            start_date = datetime(2025, 9, 1)  # 1 сентября 2025
+            end_date = datetime(2026, 1, 4)    # 4 января 2026
+            
+            # Генерируем все даты в этом диапазоне
+            all_dates = []
+            current_date = start_date
+            while current_date <= end_date:
+                all_dates.append(current_date)
+                current_date += timedelta(days=1)
 
-            # Формируем заголовки
+            # Форматируем даты в нужный формат (DD.MM.YYYY)
+            formatted_dates = [self.format_date(d.strftime('%Y-%m-%d')) for d in all_dates]
+
+            # Формируем заголовки (две колонки на каждую дату)
             new_headers = ['Имя', 'Предмет'] + [
-                date for date in all_dates for _ in (0, 1)
-            ]  # Две колонки на дату
+                date for date in formatted_dates for _ in (0, 1)
+            ]
 
             # Полностью пересоздаем лист если структура изменилась
             current_headers = worksheet.row_values(1)
@@ -122,16 +129,18 @@ class GoogleSheetsManager:
                         'bookings': {}
                     }
 
-                records[key]['bookings'][date] = {
-                    'start': booking['start_time'],
-                    'end': booking['end_time']
-                }
+                # Добавляем только те записи, которые попадают в наш диапазон
+                if date in formatted_dates:
+                    records[key]['bookings'][date] = {
+                        'start': booking['start_time'],
+                        'end': booking['end_time']
+                    }
 
             # Формируем строки для вставки
             rows = []
             for record in records.values():
                 row = [record['name'], record['subject']]
-                for date in all_dates:
+                for date in formatted_dates:
                     if date in record['bookings']:
                         row.extend([
                             record['bookings'][date]['start'],

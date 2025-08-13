@@ -29,6 +29,7 @@ venv.bak/
 .env.test
 .env.production
 credentials.json
+bookings.json
 *.json
 /secrets/
 /credentials/
