@@ -1,1 +1,17 @@
-[]
+[
+  {
+    "user_name": "Гргогт оооо",
+    "user_role": "teacher",
+    "booking_type": "Тип1",
+    "date": "2025-09-01",
+    "start_time": "11:30",
+    "end_time": "16:30",
+    "user_id": 973231400,
+    "created_at": "2025-08-14 11:48:32",
+    "subjects": [
+      "math",
+      "inf"
+    ],
+    "id": 1
+  }
+]
