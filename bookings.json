@@ -1,17 +1,5 @@
 [
   {
-    "user_name": "Адоклвт алвтала",
-    "user_role": "student",
-    "booking_type": "Тип1",
-    "date": "2025-08-12",
-    "start_time": "09:00",
-    "end_time": "16:00",
-    "user_id": 973231400,
-    "created_at": "2025-08-12 14:02:14",
-    "subject": "rus",
-    "id": 1
-  },
-  {
     "user_name": "Мистер Исключительный",
     "user_role": "teacher",
     "booking_type": "Тип1",
@@ -25,21 +13,6 @@
       "inf"
     ],
     "id": 7
-  },
-  {
-    "user_name": "Аджара Гуджу",
-    "user_role": "teacher",
-    "booking_type": "Тип2",
-    "date": "2025-08-13",
-    "start_time": "09:00",
-    "end_time": "12:30",
-    "user_id": 1180878673,
-    "created_at": "2025-08-12 14:05:55",
-    "subjects": [
-      "phys",
-      "inf"
-    ],
-    "id": 2
   },
   {
     "user_name": "Пабло Пикассо",
@@ -105,6 +78,21 @@
     "id": 10
   },
   {
+    "user_name": "Андрюха Смаев",
+    "user_role": "teacher",
+    "booking_type": "Тип3",
+    "date": "2025-08-28",
+    "start_time": "11:00",
+    "end_time": "12:30",
+    "user_id": 1180878673,
+    "created_at": "2025-08-12 15:13:03",
+    "subjects": [
+      "phys",
+      "inf"
+    ],
+    "id": 11
+  },
+  {
     "user_name": "Питер Паркер",
     "user_role": "student",
     "booking_type": "Тип4",
@@ -130,21 +118,6 @@
       "inf"
     ],
     "id": 4
-  },
-  {
-    "user_name": "Андрюха Смаев",
-    "user_role": "teacher",
-    "booking_type": "Тип3",
-    "date": "2025-08-28",
-    "start_time": "11:00",
-    "end_time": "12:30",
-    "user_id": 1180878673,
-    "created_at": "2025-08-12 15:13:03",
-    "subjects": [
-      "phys",
-      "inf"
-    ],
-    "id": 11
   },
   {
     "user_name": "Иван золо",
