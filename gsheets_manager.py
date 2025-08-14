@@ -39,14 +39,6 @@ class GoogleSheetsManager:
         except ValueError:
             return date_str
 
-    def parse_date(self, date_str: str) -> str:
-        """Парсит дату из DD.MM.YYYY в YYYY-MM-DD"""
-        try:
-            date_obj = datetime.strptime(date_str, '%d.%m.%Y')
-            return date_obj.strftime('%Y-%m-%d')
-        except ValueError:
-            return date_str
-
     def clear_sheet(self, sheet_name: str):
         """Полностью очищает лист"""
         try:
@@ -57,75 +49,6 @@ class GoogleSheetsManager:
         except Exception as e:
             logger.error(f"Ошибка при очистке листа: {e}")
             return False
-
-    def read_all_sheets(self) -> List[Dict[str, Any]]:
-        """Читает данные из всех листов и возвращает в формате JSON"""
-        if not self.client and not self.connect():
-            return []
-
-        try:
-            teachers_sheet = self._read_sheet('Преподаватели', is_teacher=True)
-            students_sheet = self._read_sheet('Ученики', is_teacher=False)
-            return teachers_sheet + students_sheet
-        except Exception as e:
-            logger.error(f"Ошибка при чтении данных: {e}")
-            return []
-
-    def _read_sheet(self, sheet_name: str, is_teacher: bool) -> List[Dict[str, Any]]:
-        """Читает данные из конкретного листа"""
-        try:
-            worksheet = self._get_or_create_worksheet(sheet_name)
-            if not worksheet:
-                return []
-
-            records = []
-            data = worksheet.get_all_values()
-
-            if not data or len(data) < 2:
-                return records
-
-            headers = data[0]
-            date_columns = headers[3:]  # Пропускаем ID, Имя, Предмет
-
-            for row in data[1:]:
-                if not row or len(row) < 3:
-                    continue
-
-                user_id = row[0]
-                user_name = row[1]
-                subjects = row[2]
-
-                # Для каждого дня проверяем наличие брони
-                for i in range(0, len(date_columns), 2):
-                    if i + 1 >= len(row):
-                        break
-
-                    date_str = date_columns[i]
-                    start_time = row[3 + i]
-                    end_time = row[3 + i + 1] if (3 + i + 1) < len(row) else ''
-
-                    if start_time and end_time:
-                        booking = {
-                            'user_id': int(user_id) if user_id.isdigit() else 0,
-                            'user_name': user_name,
-                            'date': self.parse_date(date_str),
-                            'start_time': start_time,
-                            'end_time': end_time,
-                            'user_role': 'teacher' if is_teacher else 'student',
-                            'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        }
-
-                        if is_teacher:
-                            booking['subjects'] = [s.strip().lower() for s in subjects.split(',')]
-                        else:
-                            booking['subject'] = subjects.lower()
-
-                        records.append(booking)
-
-            return records
-        except Exception as e:
-            logger.error(f"Ошибка при чтении листа '{sheet_name}': {e}")
-            return []
 
     def update_all_sheets(self, bookings: List[Dict[str, Any]]):
         """Полностью перезаписывает данные в таблицах"""
@@ -151,6 +74,34 @@ class GoogleSheetsManager:
             return success
         except Exception as e:
             logger.error(f"Критическая ошибка при обновлении: {e}")
+            return False
+
+    def _update_sheet(self, sheet_name: str, bookings: List[Dict[str, Any]], is_teacher: bool):
+        """Полностью перезаписывает данные в листе"""
+        try:
+            worksheet = self._get_or_create_worksheet(sheet_name)
+            if not worksheet:
+                return False
+
+            # Фиксированные даты учебного года (2025-2026)
+            start_date = datetime(2025, 9, 1)
+            end_date = datetime(2026, 1, 4)
+
+            # Генерируем и форматируем даты
+            formatted_dates = self._generate_formatted_dates(start_date, end_date)
+
+            # Полностью очищаем и пересоздаем структуру
+            self._ensure_sheet_structure(worksheet, formatted_dates)
+
+            # Формируем данные для вставки
+            records = self._prepare_records(bookings, formatted_dates, is_teacher)
+
+            # Вставляем данные
+            self._update_worksheet_data(worksheet, records, formatted_dates)
+
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка при обновлении листа '{sheet_name}': {e}")
             return False
 
     def _get_or_create_worksheet(self, sheet_name: str):
@@ -261,30 +212,95 @@ class GoogleSheetsManager:
 
         logger.info(f"Обновлено {len(rows)} строк в листе '{worksheet.title}'")
 
-    def _update_sheet(self, sheet_name: str, bookings: List[Dict[str, Any]], is_teacher: bool):
-        """Полностью перезаписывает данные в листе"""
+    def get_bookings_from_sheet(self, sheet_name: str, is_teacher: bool) -> List[Dict[str, Any]]:
         try:
-            worksheet = self._get_or_create_worksheet(sheet_name)
-            if not worksheet:
-                return False
+            worksheet = self.spreadsheet.worksheet(sheet_name)
+            data = worksheet.get_all_values()
 
-            # Фиксированные даты учебного года (2025-2026)
-            start_date = datetime(2025, 9, 1)
-            end_date = datetime(2026, 1, 4)
+            if len(data) < 2:  # Только заголовки
+                return []
 
-            # Генерируем и форматируем даты
-            formatted_dates = self._generate_formatted_dates(start_date, end_date)
+            headers = data[0]
+            bookings = []
 
-            # Полностью очищаем и пересоздаем структуру
-            self._ensure_sheet_structure(worksheet, formatted_dates)
+            for row in data[1:]:
+                if not row or not row[0]:  # Пропускаем пустые строки
+                    continue
 
-            # Формируем данные для вставки
-            records = self._prepare_records(bookings, formatted_dates, is_teacher)
+                # Безопасное получение ID
+                try:
+                    user_id = int(row[0]) if row[0].strip() else None
+                except ValueError:
+                    user_id = None
 
-            # Вставляем данные
-            self._update_worksheet_data(worksheet, records, formatted_dates)
+                user_name = row[1] if len(row) > 1 else ""
+                subject = row[2] if len(row) > 2 else ""
 
-            return True
+                # Обрабатываем даты и времена
+                for i in range(3, len(row), 2):
+                    if i + 1 >= len(row):
+                        break
+
+                    date_header = headers[i].split()[0] if i < len(headers) else ""
+                    start_time = row[i] if i < len(row) else ""
+                    end_time = row[i + 1] if i + 1 < len(row) else ""
+
+                    if not date_header or not start_time or not end_time:
+                        continue
+
+                    try:
+                        # Преобразуем дату из DD.MM.YYYY в YYYY-MM-DD
+                        date_obj = datetime.strptime(date_header, "%d.%m.%Y")
+                        date_str = date_obj.strftime("%Y-%m-%d")
+
+                        booking = {
+                            "user_id": user_id if user_id is not None else -1,
+                            "user_name": user_name,
+                            "date": date_str,
+                            "start_time": start_time,
+                            "end_time": end_time,
+                            "user_role": "teacher" if is_teacher else "student",
+                            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        }
+
+                        if is_teacher:
+                            booking["subjects"] = [s.strip() for s in subject.split(",")] if subject else []
+                            booking["booking_type"] = "Тип1"
+                        else:
+                            booking["subject"] = subject
+                            booking["booking_type"] = "Тип1"
+
+                        bookings.append(booking)
+                    except ValueError as e:
+                        logger.error(f"Ошибка обработки данных: {e}")
+                        continue
+
+            return bookings
         except Exception as e:
-            logger.error(f"Ошибка при обновлении листа '{sheet_name}': {e}")
+            logger.error(f"Ошибка чтения из листа '{sheet_name}': {e}")
+            return []
+
+    def sync_from_gsheets_to_json(self, storage):
+        """Синхронизирует данные из Google Sheets в JSON хранилище"""
+        try:
+            # Получаем данные из обеих таблиц
+            teacher_bookings = self.get_bookings_from_sheet("Преподаватели", is_teacher=True)
+            student_bookings = self.get_bookings_from_sheet("Ученики", is_teacher=False)
+
+            # Объединяем и обновляем хранилище
+            all_bookings = teacher_bookings + student_bookings
+
+            # Используем replace_all_bookings вместо save
+            if hasattr(storage, 'replace_all_bookings'):
+                storage.replace_all_bookings(all_bookings)
+                logger.info(f"Успешно синхронизировано {len(all_bookings)} записей из Google Sheets в JSON")
+                return True
+            else:
+                # Fallback для обратной совместимости
+                storage.save(all_bookings, sync_to_gsheets=False)
+                logger.warning("Использован fallback метод save вместо replace_all_bookings")
+                return True
+
+        except Exception as e:
+            logger.error(f"Ошибка синхронизации из Google Sheets: {e}")
             return False

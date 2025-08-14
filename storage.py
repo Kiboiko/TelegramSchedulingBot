@@ -26,11 +26,12 @@ class JSONStorage:
             logger.error(f"Ошибка при загрузке данных: {e}")
             return []
 
-    def save(self, data: List[Dict[str, Any]]):
-        """Сохраняет данные в JSON файл"""
+    def save(self, data: List[Dict[str, Any]], sync_to_gsheets: bool = True):
         try:
             with open(self.file_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+            if sync_to_gsheets and self.gsheets:
+                self._sync_with_gsheets()
         except Exception as e:
             logger.error(f"Ошибка при сохранении данных: {e}")
 
@@ -53,21 +54,6 @@ class JSONStorage:
             self.save(bookings)
             return True
         return False
-
-    def update_booking(self, booking_id: int, new_data: Dict[str, Any]) -> bool:
-        """Обновляет существующее бронирование"""
-        bookings = self.load()
-        updated = False
-
-        for booking in bookings:
-            if booking.get('id') == booking_id:
-                booking.update(new_data)
-                updated = True
-                break
-
-        if updated:
-            self.save(bookings)
-        return updated
 
     def _filter_old_bookings(self, bookings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Фильтрует старые бронирования"""
@@ -124,37 +110,23 @@ class JSONStorage:
         if updated:
             self.save(bookings)
 
-    def sync_from_gsheets(self, gsheets_data: List[Dict[str, Any]]):
-        """Синхронизирует данные из Google Sheets в JSON"""
-        current_data = self.load()
-        updated = False
+    def replace_all_bookings(self, new_bookings: List[Dict[str, Any]]):
+        # Фильтруем старые бронирования перед сохранением
+        valid_bookings = self._filter_old_bookings(new_bookings)
 
-        # Создаем словарь текущих бронирований по ID для быстрого поиска
-        current_bookings = {b['id']: b for b in current_data if 'id' in b}
+        # Убедимся, что все ID уникальны
+        used_ids = set()
+        for booking in valid_bookings:
+            if 'id' not in booking or booking['id'] <= 0:
+                # Генерируем новый ID, если его нет или он невалидный
+                booking['id'] = max(used_ids or [0]) + 1
+            while booking['id'] in used_ids:
+                booking['id'] += 1
+            used_ids.add(booking['id'])
 
-        # Обрабатываем данные из Google Sheets
-        for gs_booking in gsheets_data:
-            if 'id' not in gs_booking:
-                continue
-
-            booking_id = gs_booking['id']
-
-            if booking_id in current_bookings:
-                # Проверяем, есть ли изменения
-                current_booking = current_bookings[booking_id]
-                needs_update = False
-
-                for key, value in gs_booking.items():
-                    if current_booking.get(key) != value:
-                        needs_update = True
-                        break
-
-                if needs_update:
-                    self.update_booking(booking_id, gs_booking)
-                    updated = True
-            else:
-                # Добавляем новое бронирование
-                self.add_booking(gs_booking)
-                updated = True
-
-        return updated
+        # Сохраняем без синхронизации с Google Sheets (чтобы избежать цикла)
+        try:
+            with open(self.file_path, 'w', encoding='utf-8') as f:
+                json.dump(valid_bookings, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"Ошибка при сохранении данных: {e}")
