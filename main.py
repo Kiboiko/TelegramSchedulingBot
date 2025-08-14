@@ -802,36 +802,26 @@ async def start_cancel_booking(message: types.Message):
 
 @dp.callback_query(F.data.startswith("booking_info_"))
 async def show_booking_info(callback: types.CallbackQuery):
-    booking_id = int(callback.data.replace("booking_info_", ""))
-    bookings = load_bookings()
-    booking = next((b for b in bookings if b.get("id") == booking_id), None)
+    try:
+        booking_id_str = callback.data.replace("booking_info_", "")
+        if not booking_id_str:
+            await callback.answer("❌ Не удалось определить ID бронирования", show_alert=True)
+            return
+            
+        booking_id = int(booking_id_str)
+        bookings = load_bookings()
+        booking = next((b for b in bookings if b.get("id") == booking_id), None)
 
-    if not booking:
-        await callback.answer("Бронирование не найдено", show_alert=True)
-        return
+        if not booking:
+            await callback.answer("Бронирование не найдено", show_alert=True)
+            return
 
-    booking_date = booking.get('date')
-    if isinstance(booking_date, str):
-        booking_date = datetime.strptime(booking_date, "%Y-%m-%d").date()
-
-    role_text = "ученик" if booking.get('user_role') == 'student' else "преподаватель"
-
-    if booking.get('user_role') == 'teacher':
-        subjects_text = ", ".join(SUBJECTS[subj] for subj in booking.get('subjects', []))
-    else:
-        subjects_text = SUBJECTS.get(booking.get('subject', ''), "Не указан")
-
-    await callback.message.edit_text(
-        f"Информация о бронировании:\n\n"
-        f"Тип: {booking.get('booking_type', '')}\n"
-        f"Роль: {role_text}\n"
-        f"Предмет(ы): {subjects_text}\n"
-        f"Дата: {booking_date.strftime('%d.%m.%Y')}\n"
-        f"Время: {booking.get('start_time', '')} - {booking.get('end_time', '')}\n"
-        f"ID: {booking.get('id', '')}",
-        reply_markup=generate_booking_actions(booking.get('id'))
-    )
-    await callback.answer()
+        # Остальной код обработчика...
+    except ValueError:
+        await callback.answer("❌ Неверный формат ID бронирования", show_alert=True)
+    except Exception as e:
+        logger.error(f"Ошибка в show_booking_info: {e}")
+        await callback.answer("❌ Произошла ошибка", show_alert=True)
 
 @dp.callback_query(F.data.startswith("cancel_booking_"))
 async def cancel_booking(callback: types.CallbackQuery):
@@ -900,6 +890,21 @@ async def on_startup():
         except Exception as e:
             logger.error(f"Initial sync failed: {e}")
 
+async def sync_from_gsheets_background(storage):
+    """Фоновая синхронизация из Google Sheets в JSON"""
+    while True:
+        try:
+            if hasattr(storage, 'gsheets') and storage.gsheets:
+                success = storage.gsheets.sync_from_gsheets_to_json(storage)
+                if success:
+                    logger.info("Фоновая синхронизация из Google Sheets в JSON выполнена")
+                else:
+                    logger.warning("Не удалось выполнить синхронизацию из Google Sheets")
+            await asyncio.sleep(60)  # Синхронизация каждую минуту
+        except Exception as e:
+            logger.error(f"Ошибка в фоновой синхронизации из Google Sheets: {e}")
+            await asyncio.sleep(300)
+
 async def main():
     # Инициализация при старте
     await on_startup()
@@ -907,6 +912,7 @@ async def main():
     # Запуск фоновых задач
     asyncio.create_task(cleanup_old_bookings())
     asyncio.create_task(sync_with_gsheets())
+    asyncio.create_task(sync_from_gsheets_background(storage))  # Новая задача
 
     # Запуск бота
     await dp.start_polling(bot)

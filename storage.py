@@ -26,12 +26,12 @@ class JSONStorage:
             logger.error(f"Ошибка при загрузке данных: {e}")
             return []
 
-    def save(self, data: List[Dict[str, Any]]):
-        """Сохраняет данные в JSON файл"""
+    def save(self, data: List[Dict[str, Any]], sync_to_gsheets: bool = True):
         try:
             with open(self.file_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-            self._sync_with_gsheets()
+            if sync_to_gsheets and self.gsheets:
+                self._sync_with_gsheets()
         except Exception as e:
             logger.error(f"Ошибка при сохранении данных: {e}")
 
@@ -109,3 +109,24 @@ class JSONStorage:
 
         if updated:
             self.save(bookings)
+    
+    def replace_all_bookings(self, new_bookings: List[Dict[str, Any]]):
+        # Фильтруем старые бронирования перед сохранением
+        valid_bookings = self._filter_old_bookings(new_bookings)
+        
+        # Убедимся, что все ID уникальны
+        used_ids = set()
+        for booking in valid_bookings:
+            if 'id' not in booking or booking['id'] <= 0:
+                # Генерируем новый ID, если его нет или он невалидный
+                booking['id'] = max(used_ids or [0]) + 1
+            while booking['id'] in used_ids:
+                booking['id'] += 1
+            used_ids.add(booking['id'])
+        
+        # Сохраняем без синхронизации с Google Sheets (чтобы избежать цикла)
+        try:
+            with open(self.file_path, 'w', encoding='utf-8') as f:
+                json.dump(valid_bookings, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"Ошибка при сохранении данных: {e}")

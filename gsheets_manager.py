@@ -211,3 +211,96 @@ class GoogleSheetsManager:
             worksheet.update(f"A2:{gspread.utils.rowcol_to_a1(len(rows) + 1, len(rows[0]))}", rows)
 
         logger.info(f"Обновлено {len(rows)} строк в листе '{worksheet.title}'")
+
+    def get_bookings_from_sheet(self, sheet_name: str, is_teacher: bool) -> List[Dict[str, Any]]:
+        try:
+            worksheet = self.spreadsheet.worksheet(sheet_name)
+            data = worksheet.get_all_values()
+            
+            if len(data) < 2:  # Только заголовки
+                return []
+                
+            headers = data[0]
+            bookings = []
+            
+            for row in data[1:]:
+                if not row or not row[0]:  # Пропускаем пустые строки
+                    continue
+                    
+                # Безопасное получение ID
+                try:
+                    user_id = int(row[0]) if row[0].strip() else None
+                except ValueError:
+                    user_id = None
+                    
+                user_name = row[1] if len(row) > 1 else ""
+                subject = row[2] if len(row) > 2 else ""
+                
+                # Обрабатываем даты и времена
+                for i in range(3, len(row), 2):
+                    if i+1 >= len(row):
+                        break
+                        
+                    date_header = headers[i].split()[0] if i < len(headers) else ""
+                    start_time = row[i] if i < len(row) else ""
+                    end_time = row[i+1] if i+1 < len(row) else ""
+                    
+                    if not date_header or not start_time or not end_time:
+                        continue
+                        
+                    try:
+                        # Преобразуем дату из DD.MM.YYYY в YYYY-MM-DD
+                        date_obj = datetime.strptime(date_header, "%d.%m.%Y")
+                        date_str = date_obj.strftime("%Y-%m-%d")
+                        
+                        booking = {
+                            "user_id": user_id if user_id is not None else -1,
+                            "user_name": user_name,
+                            "date": date_str,
+                            "start_time": start_time,
+                            "end_time": end_time,
+                            "user_role": "teacher" if is_teacher else "student",
+                            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        }
+                        
+                        if is_teacher:
+                            booking["subjects"] = [s.strip() for s in subject.split(",")] if subject else []
+                            booking["booking_type"] = "Тип1"
+                        else:
+                            booking["subject"] = subject
+                            booking["booking_type"] = "Тип1"
+                            
+                        bookings.append(booking)
+                    except ValueError as e:
+                        logger.error(f"Ошибка обработки данных: {e}")
+                        continue
+                        
+            return bookings
+        except Exception as e:
+            logger.error(f"Ошибка чтения из листа '{sheet_name}': {e}")
+            return []
+        
+    def sync_from_gsheets_to_json(self, storage):
+        """Синхронизирует данные из Google Sheets в JSON хранилище"""
+        try:
+            # Получаем данные из обеих таблиц
+            teacher_bookings = self.get_bookings_from_sheet("Преподаватели", is_teacher=True)
+            student_bookings = self.get_bookings_from_sheet("Ученики", is_teacher=False)
+            
+            # Объединяем и обновляем хранилище
+            all_bookings = teacher_bookings + student_bookings
+            
+            # Используем replace_all_bookings вместо save
+            if hasattr(storage, 'replace_all_bookings'):
+                storage.replace_all_bookings(all_bookings)
+                logger.info(f"Успешно синхронизировано {len(all_bookings)} записей из Google Sheets в JSON")
+                return True
+            else:
+                # Fallback для обратной совместимости
+                storage.save(all_bookings, sync_to_gsheets=False)
+                logger.warning("Использован fallback метод save вместо replace_all_bookings")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Ошибка синхронизации из Google Sheets: {e}")
+            return False
