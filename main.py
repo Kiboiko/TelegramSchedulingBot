@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import logging
 from datetime import datetime, timedelta, date
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandStart
@@ -19,7 +20,10 @@ import threading
 from gsheets_manager import GoogleSheetsManager
 from storage import JSONStorage
 from dotenv import load_dotenv
-import os
+
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -34,7 +38,6 @@ SUBJECTS = {
     "phys": "Физика"
 }
 
-
 class BookingStates(StatesGroup):
     SELECT_ROLE = State()
     INPUT_NAME = State()
@@ -46,8 +49,6 @@ class BookingStates(StatesGroup):
     SELECT_END_TIME = State()
     CONFIRMATION = State()
 
-
-# main.py (часть инициализации)
 # Инициализация бота
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -57,20 +58,14 @@ storage = JSONStorage(file_path=BOOKINGS_FILE)
 try:
     gsheets = GoogleSheetsManager(
         credentials_file='credentials.json',
-        spreadsheet_id='1r1MU8k8umwHx_E4Z-jFHRJ-kdwC43Jw0nwpVeH7T1GU'  # Убедитесь, что ID правильный
+        spreadsheet_id='1r1MU8k8umwHx_E4Z-jFHRJ-kdwC43Jw0nwpVeH7T1GU'
     )
-    # Проверяем подключение
-    gsheets.connect()  # Явно вызываем подключение
+    gsheets.connect()
     storage.set_gsheets_manager(gsheets)
-    print("Google Sheets integration initialized successfully")
-
-    # Принудительное обновление при старте
-    initial_data = storage.load()
-    gsheets.update_all_sheets(initial_data)
+    logger.info("Google Sheets integration initialized successfully")
 except Exception as e:
-    print(f"Google Sheets initialization error: {e}")
-    # Даже если есть ошибка, бот продолжит работать, но без Google Sheets
-
+    logger.error(f"Google Sheets initialization error: {e}")
+    gsheets = None
 def generate_booking_types():
     """Генерирует клавиатуру с типами бронирований"""
     builder = InlineKeyboardBuilder()
@@ -870,19 +865,60 @@ async def back_handler(callback: types.CallbackQuery):
 async def cleanup_old_bookings():
     """Периодически очищает старые бронирования"""
     while True:
-        # Загружаем и сохраняем - это автоматически удалит старые записи
-        bookings = load_bookings()
-        storage.save(bookings)
-        # Проверяем каждые 6 часов
-        await asyncio.sleep(6 * 60 * 60)
+        try:
+            bookings = storage.load()
+            storage.save(bookings)  # Это вызовет фильтрацию старых записей
+            logger.info("Cleanup of old bookings completed")
+            await asyncio.sleep(6 * 60 * 60)  # Каждые 6 часов
+        except Exception as e:
+            logger.error(f"Error in cleanup_old_bookings: {e}")
+            await asyncio.sleep(60)  # Подождать минуту при ошибке
+
+
+
+async def on_startup():
+    """Действия при запуске бота"""
+    # Принудительная синхронизация при старте
+    if gsheets:
+        try:
+            bookings = storage.load()
+            gsheets.update_all_sheets(bookings)
+            logger.info("Initial sync with Google Sheets completed")
+        except Exception as e:
+            logger.error(f"Initial sync failed: {e}")
+
+
+async def sync_with_gsheets():
+    """Фоновая синхронизация с Google Sheets"""
+    while True:
+        try:
+            if hasattr(storage, 'gsheets') and storage.gsheets:
+                bookings = storage.load()
+                success = storage.gsheets.update_all_sheets(bookings)
+                if success:
+                    logger.info("Фоновая синхронизация с Google Sheets выполнена")
+                else:
+                    logger.warning("Не удалось выполнить синхронизацию с Google Sheets")
+            await asyncio.sleep(3600)  # Каждый час
+        except Exception as e:
+            logger.error(f"Ошибка в фоновой синхронизации: {e}")
+            await asyncio.sleep(600)  # Ждем 10 минут при ошибке
 
 
 async def main():
+    # Запуск фоновых задач
     asyncio.create_task(cleanup_old_bookings())
+    asyncio.create_task(sync_with_gsheets())
+
+    # Запуск бота
     await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
-    print("Текущая директория:", os.getcwd())
-    print("Полный путь к файлу:", os.path.abspath(BOOKINGS_FILE))
-    asyncio.run(main())
+    logger.info("Starting bot...")
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        logger.error(f"Fatal error: {e}")
