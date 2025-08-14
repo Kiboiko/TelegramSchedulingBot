@@ -25,10 +25,6 @@ from dotenv import load_dotenv
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -42,6 +38,7 @@ SUBJECTS = {
     "phys": "Физика"
 }
 
+
 class BookingStates(StatesGroup):
     SELECT_ROLE = State()
     INPUT_NAME = State()
@@ -51,6 +48,7 @@ class BookingStates(StatesGroup):
     SELECT_DATE = State()
     SELECT_TIME_RANGE = State()  # Объединенное состояние для выбора времени
     CONFIRMATION = State()
+
 
 # Инициализация бота
 bot = Bot(token=BOT_TOKEN)
@@ -69,6 +67,8 @@ try:
 except Exception as e:
     logger.error(f"Google Sheets initialization error: {e}")
     gsheets = None
+
+
 def generate_booking_types():
     """Генерирует клавиатуру с типами бронирований"""
     builder = InlineKeyboardBuilder()
@@ -79,6 +79,7 @@ def generate_booking_types():
         ))
     builder.adjust(2)
     return builder.as_markup()
+
 
 def merge_adjacent_bookings(bookings):
     """Объединяет смежные бронирования одного типа"""
@@ -112,6 +113,7 @@ def merge_adjacent_bookings(bookings):
     merged.append(current)
     return merged
 
+
 def load_bookings():
     """Загружает бронирования из файла, объединяет смежные и удаляет прошедшие"""
     data = storage.load()
@@ -143,6 +145,7 @@ def load_bookings():
     valid_bookings = merge_adjacent_bookings(valid_bookings)
     return valid_bookings
 
+
 def has_booking_conflict(user_id, booking_type, date, time_start, time_end, exclude_id=None):
     """Проверяет есть ли конфликтующие бронирования того же типа"""
     bookings = load_bookings()
@@ -166,6 +169,7 @@ def has_booking_conflict(user_id, booking_type, date, time_start, time_end, excl
             if not (new_end <= existing_start or new_start >= existing_end):
                 return True
     return False
+
 
 def generate_calendar(year=None, month=None):
     """Генерирует календарь"""
@@ -214,6 +218,7 @@ def generate_calendar(year=None, month=None):
 
     return builder.as_markup()
 
+
 def generate_time_range_keyboard(selected_date=None, start_time=None, end_time=None, selecting_start=True):
     """Генерирует клавиатуру выбора временного диапазона"""
     builder = InlineKeyboardBuilder()
@@ -226,14 +231,14 @@ def generate_time_range_keyboard(selected_date=None, start_time=None, end_time=N
     while current <= end:
         time_str = current.strftime("%H:%M")
         time_obj = current.time()
-        
+
         # Определяем стиль кнопки
         if start_time and time_str == start_time:
             button_text = "🟢 " + time_str  # Начало - зеленый
         elif end_time and time_str == end_time:
             button_text = "🔴 " + time_str  # Конец - красный
-        elif (start_time and end_time and 
-              datetime.strptime(start_time, "%H:%M").time() < time_obj < 
+        elif (start_time and end_time and
+              datetime.strptime(start_time, "%H:%M").time() < time_obj <
               datetime.strptime(end_time, "%H:%M").time()):
             button_text = "🔵 " + time_str  # Промежуток - синий
         else:
@@ -246,7 +251,7 @@ def generate_time_range_keyboard(selected_date=None, start_time=None, end_time=N
         current += timedelta(minutes=30)
 
     builder.adjust(4)
-    
+
     # Добавляем кнопки управления
     buttons = []
     if start_time and end_time:
@@ -254,20 +259,21 @@ def generate_time_range_keyboard(selected_date=None, start_time=None, end_time=N
             text="✅ Подтвердить",
             callback_data="confirm_time_range"
         ))
-    
+
     buttons.append(types.InlineKeyboardButton(
         text=f"{'🔄 Выбрать начало' if not selecting_start else '🔄 Выбрать конец'}",
         callback_data="switch_selection_mode"
     ))
-    
+
     builder.row(*buttons)
-    
+
     builder.row(types.InlineKeyboardButton(
         text="❌ Отменить",
         callback_data="cancel_time_selection"
     ))
-    
+
     return builder.as_markup()
+
 
 def generate_confirmation():
     """Клавиатура подтверждения"""
@@ -277,6 +283,7 @@ def generate_confirmation():
         types.InlineKeyboardButton(text="❌ Отменить", callback_data="booking_cancel"),
     )
     return builder.as_markup()
+
 
 def generate_booking_list(user_id):
     """Генерирует список бронирований пользователя с сортировкой по дате и времени"""
@@ -313,6 +320,7 @@ def generate_booking_list(user_id):
     ))
     return builder.as_markup()
 
+
 def generate_booking_actions(booking_id):
     """Клавиатура действий с бронированием"""
     builder = InlineKeyboardBuilder()
@@ -321,6 +329,7 @@ def generate_booking_actions(booking_id):
         types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_bookings"),
     )
     return builder.as_markup()
+
 
 def generate_subjects_keyboard(selected_subjects=None, is_teacher=False):
     builder = InlineKeyboardBuilder()
@@ -341,6 +350,7 @@ def generate_subjects_keyboard(selected_subjects=None, is_teacher=False):
 
     return builder.as_markup()
 
+
 main_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📅 Забронировать время")],
@@ -349,6 +359,7 @@ main_menu = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     await message.answer(
@@ -356,6 +367,7 @@ async def cmd_start(message: types.Message):
         "Используйте кнопки ниже для навигации:",
         reply_markup=main_menu
     )
+
 
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
@@ -374,6 +386,7 @@ async def cmd_help(message: types.Message):
         "/help - показать эту справку"
     )
 
+
 @dp.message(F.text == "📅 Забронировать время")
 @dp.message(Command("book"))
 async def start_booking(message: types.Message, state: FSMContext):
@@ -387,6 +400,7 @@ async def start_booking(message: types.Message, state: FSMContext):
     )
     await state.set_state(BookingStates.SELECT_ROLE)
 
+
 @dp.callback_query(F.data.startswith("role_"))
 async def process_role_selection(callback: types.CallbackQuery, state: FSMContext):
     role = callback.data.split("_")[1]
@@ -395,6 +409,7 @@ async def process_role_selection(callback: types.CallbackQuery, state: FSMContex
     await callback.message.edit_text("Введите ваше полное ФИО:")
     await state.set_state(BookingStates.INPUT_NAME)
     await callback.answer()
+
 
 @dp.message(BookingStates.INPUT_NAME)
 async def process_name(message: types.Message, state: FSMContext):
@@ -418,6 +433,7 @@ async def process_name(message: types.Message, state: FSMContext):
         )
         await state.set_state(BookingStates.SELECT_SUBJECT)
 
+
 @dp.callback_query(BookingStates.TEACHER_SUBJECTS, F.data.startswith("subject_"))
 async def process_teacher_subjects(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -435,7 +451,9 @@ async def process_teacher_subjects(callback: types.CallbackQuery, state: FSMCont
     )
     await callback.answer()
 
+
 @dp.callback_query(BookingStates.TEACHER_SUBJECTS, F.data == "subjects_done")
+
 async def process_subjects_done(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     if not data.get("subjects"):
@@ -447,6 +465,7 @@ async def process_subjects_done(callback: types.CallbackQuery, state: FSMContext
     await state.set_state(BookingStates.SELECT_BOOKING_TYPE)
     await callback.answer()
 
+
 @dp.callback_query(BookingStates.SELECT_SUBJECT, F.data.startswith("subject_"))
 async def process_student_subject(callback: types.CallbackQuery, state: FSMContext):
     subject_id = callback.data.split("_")[1]
@@ -456,6 +475,7 @@ async def process_student_subject(callback: types.CallbackQuery, state: FSMConte
     await callback.message.answer("Выберите тип бронирования:", reply_markup=generate_booking_types())
     await state.set_state(BookingStates.SELECT_BOOKING_TYPE)
     await callback.answer()
+
 
 @dp.callback_query(BookingStates.SELECT_BOOKING_TYPE, F.data.startswith("booking_type_"))
 async def process_booking_type(callback: types.CallbackQuery, state: FSMContext):
@@ -467,6 +487,7 @@ async def process_booking_type(callback: types.CallbackQuery, state: FSMContext)
     )
     await state.set_state(BookingStates.SELECT_DATE)
     await callback.answer()
+
 
 @dp.callback_query(BookingStates.SELECT_DATE, F.data.startswith("calendar_"))
 async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
@@ -483,7 +504,7 @@ async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
             time_end=None,
             selecting_start=True
         )
-        
+
         await callback.message.edit_text(
             f"Выбрана дата: {day}.{month}.{year}\n"
             "Сейчас вы выбираете время НАЧАЛА (зеленый маркер)\n"
@@ -502,20 +523,22 @@ async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
         await callback.message.edit_reply_markup(reply_markup=generate_calendar(year, month))
         await callback.answer()
 
+
 @dp.callback_query(BookingStates.SELECT_TIME_RANGE, F.data.startswith("time_point_"))
 async def process_time_point(callback: types.CallbackQuery, state: FSMContext):
     time_str = callback.data.replace("time_point_", "")
     data = await state.get_data()
     selecting_start = data.get('selecting_start', True)
-    
+
     if selecting_start:
         # Выбираем начало
         await state.update_data(time_start=time_str)
-        
+
         # Проверяем, если уже есть конец и он раньше начала
-        if data.get('time_end') and datetime.strptime(time_str, "%H:%M") >= datetime.strptime(data['time_end'], "%H:%M"):
+        if data.get('time_end') and datetime.strptime(time_str, "%H:%M") >= datetime.strptime(data['time_end'],
+                                                                                              "%H:%M"):
             await state.update_data(time_end=None)
-            
+
         await callback.message.edit_text(
             f"Выбрано начало: {time_str}\n"
             "Теперь выберите время ОКОНЧАНИЯ (красный маркер)\n"
@@ -532,13 +555,13 @@ async def process_time_point(callback: types.CallbackQuery, state: FSMContext):
         if not data.get('time_start'):
             await callback.answer("Сначала выберите время начала!", show_alert=True)
             return
-            
+
         if datetime.strptime(time_str, "%H:%M") <= datetime.strptime(data['time_start'], "%H:%M"):
             await callback.answer("Время окончания должно быть после времени начала!", show_alert=True)
             return
-            
+
         await state.update_data(time_end=time_str)
-        
+
         await callback.message.edit_text(
             f"Выбрано:\n"
             f"Начало: {data['time_start']} (зеленый)\n"
@@ -554,20 +577,22 @@ async def process_time_point(callback: types.CallbackQuery, state: FSMContext):
                 selecting_start=False
             )
         )
-    
+
     await callback.answer()
 
+
 @dp.callback_query(BookingStates.SELECT_TIME_RANGE, F.data == "switch_selection_mode")
+
 async def switch_selection_mode(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     current_mode = data.get('selecting_start', True)
     new_mode = not current_mode
-    
+
     await state.update_data(selecting_start=new_mode)
-    
+
     time_start = data.get('time_start')
     time_end = data.get('time_end')
-    
+
     if new_mode:
         message_text = "Сейчас вы выбираете время НАЧАЛА (зеленый маркер)\n"
         if time_start:
@@ -582,7 +607,7 @@ async def switch_selection_mode(callback: types.CallbackQuery, state: FSMContext
         if time_end:
             message_text += f"Текущий конец: {time_end}\n"
         message_text += "Нажмите на новое время окончания:"
-    
+
     await callback.message.edit_text(
         message_text,
         reply_markup=generate_time_range_keyboard(
@@ -594,10 +619,12 @@ async def switch_selection_mode(callback: types.CallbackQuery, state: FSMContext
     )
     await callback.answer()
 
+
 @dp.callback_query(BookingStates.SELECT_TIME_RANGE, F.data == "confirm_time_range")
+
 async def confirm_time_range(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    
+
     # Проверка на конфликты
     if has_booking_conflict(
             user_id=callback.from_user.id,
@@ -632,7 +659,9 @@ async def confirm_time_range(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(BookingStates.CONFIRMATION)
     await callback.answer()
 
+
 @dp.callback_query(BookingStates.SELECT_TIME_RANGE, F.data == "cancel_time_selection")
+
 async def cancel_time_selection(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     booking_type = data.get('booking_type', 'неизвестный тип')
@@ -652,6 +681,7 @@ async def cancel_time_selection(callback: types.CallbackQuery, state: FSMContext
 
     await state.clear()
     await callback.answer()
+
 
 @dp.callback_query(BookingStates.CONFIRMATION, F.data.in_(["booking_confirm", "booking_cancel"]))
 async def process_confirmation(callback: types.CallbackQuery, state: FSMContext):
@@ -714,6 +744,7 @@ async def process_confirmation(callback: types.CallbackQuery, state: FSMContext)
     await state.clear()
     await callback.answer()
 
+
 @dp.message(F.text == "📋 Мои бронирования")
 @dp.message(Command("my_bookings"))
 async def show_bookings(message: types.Message):
@@ -724,6 +755,7 @@ async def show_bookings(message: types.Message):
 
     await message.answer("Ваши бронирования (отсортированы по дате и времени):", reply_markup=keyboard)
 
+
 @dp.message(Command("my_role"))
 async def show_role(message: types.Message):
     role = storage.get_user_role(message.from_user.id)
@@ -731,6 +763,7 @@ async def show_role(message: types.Message):
         await message.answer(f"Ваша роль: {'ученик' if role == 'student' else 'преподаватель'}")
     else:
         await message.answer("Ваша роль еще не определена. Используйте /book чтобы установить роль.")
+
 
 @dp.message(F.text == "❌ Отменить бронь")
 async def start_cancel_booking(message: types.Message):
@@ -740,6 +773,7 @@ async def start_cancel_booking(message: types.Message):
         return
 
     await message.answer("Выберите бронирование для отмены:", reply_markup=keyboard)
+
 
 @dp.callback_query(F.data.startswith("booking_info_"))
 async def show_booking_info(callback: types.CallbackQuery):
@@ -774,6 +808,7 @@ async def show_booking_info(callback: types.CallbackQuery):
     )
     await callback.answer()
 
+
 @dp.callback_query(F.data.startswith("cancel_booking_"))
 async def cancel_booking(callback: types.CallbackQuery):
     booking_id = int(callback.data.replace("cancel_booking_", ""))
@@ -782,6 +817,7 @@ async def cancel_booking(callback: types.CallbackQuery):
     else:
         await callback.message.edit_text("❌ Не удалось отменить бронирование")
     await callback.answer()
+
 
 @dp.callback_query(F.data.in_(["back_to_menu", "back_to_bookings"]))
 async def back_handler(callback: types.CallbackQuery):
@@ -802,6 +838,7 @@ async def back_handler(callback: types.CallbackQuery):
         )
     await callback.answer()
 
+
 async def cleanup_old_bookings():
     """Периодически очищает старые бронирования"""
     while True:
@@ -813,19 +850,6 @@ async def cleanup_old_bookings():
         except Exception as e:
             logger.error(f"Error in cleanup_old_bookings: {e}")
             await asyncio.sleep(60)  # Подождать минуту при ошибке
-
-
-
-async def on_startup():
-    """Действия при запуске бота"""
-    # Принудительная синхронизация при старте
-    if gsheets:
-        try:
-            bookings = storage.load()
-            gsheets.update_all_sheets(bookings)
-            logger.info("Initial sync with Google Sheets completed")
-        except Exception as e:
-            logger.error(f"Initial sync failed: {e}")
 
 
 async def sync_with_gsheets():
@@ -844,13 +868,46 @@ async def sync_with_gsheets():
             logger.error(f"Ошибка в фоновой синхронизации: {e}")
             await asyncio.sleep(600)  # Ждем 10 минут при ошибке
 
+
+async def sync_from_gsheets():
+    """Фоновая синхронизация данных из Google Sheets"""
+    while True:
+        try:
+            if hasattr(storage, 'gsheets') and storage.gsheets:
+                # Читаем данные из Google Sheets
+                gsheets_data = storage.gsheets.read_all_sheets()
+
+                # Синхронизируем с JSON
+                if storage.sync_from_gsheets(gsheets_data):
+                    logger.info("Данные успешно синхронизированы из Google Sheets")
+
+        except Exception as e:
+            logger.error(f"Ошибка синхронизации из Google Sheets: {e}")
+
+        await asyncio.sleep(60)  # Синхронизация каждую минуту
+
+
+async def on_startup():
+    """Действия при запуске бота"""
+    # Принудительная синхронизация при старте
+    if gsheets:
+        try:
+            bookings = storage.load()
+            gsheets.update_all_sheets(bookings)
+            logger.info("Initial sync with Google Sheets completed")
+        except Exception as e:
+            logger.error(f"Initial sync failed: {e}")
+
+
 async def main():
     # Запуск фоновых задач
     asyncio.create_task(cleanup_old_bookings())
     asyncio.create_task(sync_with_gsheets())
+    asyncio.create_task(sync_from_gsheets())
 
     # Запуск бота
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     logger.info("Starting bot...")

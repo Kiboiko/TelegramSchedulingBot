@@ -39,6 +39,14 @@ class GoogleSheetsManager:
         except ValueError:
             return date_str
 
+    def parse_date(self, date_str: str) -> str:
+        """Парсит дату из DD.MM.YYYY в YYYY-MM-DD"""
+        try:
+            date_obj = datetime.strptime(date_str, '%d.%m.%Y')
+            return date_obj.strftime('%Y-%m-%d')
+        except ValueError:
+            return date_str
+
     def clear_sheet(self, sheet_name: str):
         """Полностью очищает лист"""
         try:
@@ -49,6 +57,75 @@ class GoogleSheetsManager:
         except Exception as e:
             logger.error(f"Ошибка при очистке листа: {e}")
             return False
+
+    def read_all_sheets(self) -> List[Dict[str, Any]]:
+        """Читает данные из всех листов и возвращает в формате JSON"""
+        if not self.client and not self.connect():
+            return []
+
+        try:
+            teachers_sheet = self._read_sheet('Преподаватели', is_teacher=True)
+            students_sheet = self._read_sheet('Ученики', is_teacher=False)
+            return teachers_sheet + students_sheet
+        except Exception as e:
+            logger.error(f"Ошибка при чтении данных: {e}")
+            return []
+
+    def _read_sheet(self, sheet_name: str, is_teacher: bool) -> List[Dict[str, Any]]:
+        """Читает данные из конкретного листа"""
+        try:
+            worksheet = self._get_or_create_worksheet(sheet_name)
+            if not worksheet:
+                return []
+
+            records = []
+            data = worksheet.get_all_values()
+
+            if not data or len(data) < 2:
+                return records
+
+            headers = data[0]
+            date_columns = headers[3:]  # Пропускаем ID, Имя, Предмет
+
+            for row in data[1:]:
+                if not row or len(row) < 3:
+                    continue
+
+                user_id = row[0]
+                user_name = row[1]
+                subjects = row[2]
+
+                # Для каждого дня проверяем наличие брони
+                for i in range(0, len(date_columns), 2):
+                    if i + 1 >= len(row):
+                        break
+
+                    date_str = date_columns[i]
+                    start_time = row[3 + i]
+                    end_time = row[3 + i + 1] if (3 + i + 1) < len(row) else ''
+
+                    if start_time and end_time:
+                        booking = {
+                            'user_id': int(user_id) if user_id.isdigit() else 0,
+                            'user_name': user_name,
+                            'date': self.parse_date(date_str),
+                            'start_time': start_time,
+                            'end_time': end_time,
+                            'user_role': 'teacher' if is_teacher else 'student',
+                            'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        }
+
+                        if is_teacher:
+                            booking['subjects'] = [s.strip().lower() for s in subjects.split(',')]
+                        else:
+                            booking['subject'] = subjects.lower()
+
+                        records.append(booking)
+
+            return records
+        except Exception as e:
+            logger.error(f"Ошибка при чтении листа '{sheet_name}': {e}")
+            return []
 
     def update_all_sheets(self, bookings: List[Dict[str, Any]]):
         """Полностью перезаписывает данные в таблицах"""
@@ -74,34 +151,6 @@ class GoogleSheetsManager:
             return success
         except Exception as e:
             logger.error(f"Критическая ошибка при обновлении: {e}")
-            return False
-
-    def _update_sheet(self, sheet_name: str, bookings: List[Dict[str, Any]], is_teacher: bool):
-        """Полностью перезаписывает данные в листе"""
-        try:
-            worksheet = self._get_or_create_worksheet(sheet_name)
-            if not worksheet:
-                return False
-
-            # Фиксированные даты учебного года (2025-2026)
-            start_date = datetime(2025, 9, 1)
-            end_date = datetime(2026, 1, 4)
-
-            # Генерируем и форматируем даты
-            formatted_dates = self._generate_formatted_dates(start_date, end_date)
-
-            # Полностью очищаем и пересоздаем структуру
-            self._ensure_sheet_structure(worksheet, formatted_dates)
-
-            # Формируем данные для вставки
-            records = self._prepare_records(bookings, formatted_dates, is_teacher)
-
-            # Вставляем данные
-            self._update_worksheet_data(worksheet, records, formatted_dates)
-
-            return True
-        except Exception as e:
-            logger.error(f"Ошибка при обновлении листа '{sheet_name}': {e}")
             return False
 
     def _get_or_create_worksheet(self, sheet_name: str):
@@ -211,3 +260,31 @@ class GoogleSheetsManager:
             worksheet.update(f"A2:{gspread.utils.rowcol_to_a1(len(rows) + 1, len(rows[0]))}", rows)
 
         logger.info(f"Обновлено {len(rows)} строк в листе '{worksheet.title}'")
+
+    def _update_sheet(self, sheet_name: str, bookings: List[Dict[str, Any]], is_teacher: bool):
+        """Полностью перезаписывает данные в листе"""
+        try:
+            worksheet = self._get_or_create_worksheet(sheet_name)
+            if not worksheet:
+                return False
+
+            # Фиксированные даты учебного года (2025-2026)
+            start_date = datetime(2025, 9, 1)
+            end_date = datetime(2026, 1, 4)
+
+            # Генерируем и форматируем даты
+            formatted_dates = self._generate_formatted_dates(start_date, end_date)
+
+            # Полностью очищаем и пересоздаем структуру
+            self._ensure_sheet_structure(worksheet, formatted_dates)
+
+            # Формируем данные для вставки
+            records = self._prepare_records(bookings, formatted_dates, is_teacher)
+
+            # Вставляем данные
+            self._update_worksheet_data(worksheet, records, formatted_dates)
+
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка при обновлении листа '{sheet_name}': {e}")
+            return False

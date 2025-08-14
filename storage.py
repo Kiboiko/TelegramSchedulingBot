@@ -31,7 +31,6 @@ class JSONStorage:
         try:
             with open(self.file_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-            self._sync_with_gsheets()
         except Exception as e:
             logger.error(f"Ошибка при сохранении данных: {e}")
 
@@ -54,6 +53,21 @@ class JSONStorage:
             self.save(bookings)
             return True
         return False
+
+    def update_booking(self, booking_id: int, new_data: Dict[str, Any]) -> bool:
+        """Обновляет существующее бронирование"""
+        bookings = self.load()
+        updated = False
+
+        for booking in bookings:
+            if booking.get('id') == booking_id:
+                booking.update(new_data)
+                updated = True
+                break
+
+        if updated:
+            self.save(bookings)
+        return updated
 
     def _filter_old_bookings(self, bookings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Фильтрует старые бронирования"""
@@ -109,3 +123,38 @@ class JSONStorage:
 
         if updated:
             self.save(bookings)
+
+    def sync_from_gsheets(self, gsheets_data: List[Dict[str, Any]]):
+        """Синхронизирует данные из Google Sheets в JSON"""
+        current_data = self.load()
+        updated = False
+
+        # Создаем словарь текущих бронирований по ID для быстрого поиска
+        current_bookings = {b['id']: b for b in current_data if 'id' in b}
+
+        # Обрабатываем данные из Google Sheets
+        for gs_booking in gsheets_data:
+            if 'id' not in gs_booking:
+                continue
+
+            booking_id = gs_booking['id']
+
+            if booking_id in current_bookings:
+                # Проверяем, есть ли изменения
+                current_booking = current_bookings[booking_id]
+                needs_update = False
+
+                for key, value in gs_booking.items():
+                    if current_booking.get(key) != value:
+                        needs_update = True
+                        break
+
+                if needs_update:
+                    self.update_booking(booking_id, gs_booking)
+                    updated = True
+            else:
+                # Добавляем новое бронирование
+                self.add_booking(gs_booking)
+                updated = True
+
+        return updated
