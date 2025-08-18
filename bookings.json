@@ -1,169 +1,16 @@
 [
   {
-    "user_id": 973231400,
-    "user_name": "Стёпа лох",
-    "date": "2025-09-03",
-    "start_time": "09:00",
-    "end_time": "13:30",
-    "user_role": "teacher",
-    "created_at": "2025-08-18 13:45:39",
-    "subjects": [
-      "инф",
-      "мат",
-      "рус",
-      "физ"
-    ],
-    "booking_type": "Тип1",
-    "priority": "",
-    "id": 1
-  },
-  {
-    "user_id": 1180878673,
-    "user_name": "Мега мозг",
-    "date": "2025-09-02",
-    "start_time": "13:30",
-    "end_time": "16:00",
-    "user_role": "teacher",
-    "created_at": "2025-08-18 13:45:39",
-    "subjects": [
-      "2",
-      "4",
-      "3"
-    ],
-    "booking_type": "Тип1",
-    "priority": "",
-    "id": 2
-  },
-  {
-    "user_id": 1180878673,
-    "user_name": "Кирилл Лох",
-    "date": "2025-09-01",
-    "start_time": "12:00",
-    "end_time": "19:30",
-    "user_role": "teacher",
-    "created_at": "2025-08-18 13:45:39",
-    "subjects": [
-      "2",
-      "4",
-      "3"
-    ],
-    "booking_type": "Тип1",
-    "priority": "",
-    "id": 3
-  },
-  {
-    "user_id": 1180878673,
-    "user_name": "пипи пупу чек",
-    "date": "2025-09-03",
-    "start_time": "12:00",
-    "end_time": "16:30",
-    "user_role": "teacher",
-    "created_at": "2025-08-18 13:45:39",
-    "subjects": [
-      "2",
-      "4",
-      "3"
-    ],
-    "booking_type": "Тип1",
-    "priority": "",
-    "id": 4
-  },
-  {
-    "user_id": 1180878673,
-    "user_name": "Десантник степочкин",
-    "date": "2025-09-05",
-    "start_time": "09:00",
-    "end_time": "18:30",
-    "user_role": "teacher",
-    "created_at": "2025-08-18 13:45:39",
-    "subjects": [
-      "2",
-      "4",
-      "3"
-    ],
-    "booking_type": "Тип1",
-    "priority": "50",
-    "id": 5
-  },
-  {
-    "user_id": 1180878673,
-    "user_name": "кубек кубеков",
-    "date": "2025-09-02",
-    "start_time": "12:00",
-    "end_time": "16:30",
-    "user_role": "teacher",
-    "created_at": "2025-08-18 13:45:39",
-    "subjects": [
-      "2",
-      "4",
-      "3"
-    ],
-    "booking_type": "Тип1",
-    "priority": "2",
-    "id": 6
-  },
-  {
-    "user_id": 1180878673,
-    "user_name": "Тайно дергал",
-    "date": "2025-09-04",
-    "start_time": "09:30",
-    "end_time": "12:30",
-    "user_role": "teacher",
-    "created_at": "2025-08-18 13:45:39",
-    "subjects": [
-      "2",
-      "4",
-      "3"
-    ],
-    "booking_type": "Тип1",
-    "priority": "1",
-    "id": 7
-  },
-  {
-    "user_id": 1180878673,
-    "user_name": "Тупак шакур",
-    "date": "2025-09-06",
-    "start_time": "13:00",
-    "end_time": "18:30",
-    "user_role": "teacher",
-    "created_at": "2025-08-18 13:45:39",
-    "subjects": [
-      "2",
-      "4",
-      "3"
-    ],
-    "booking_type": "Тип1",
-    "priority": "1",
-    "id": 8
-  },
-  {
-    "user_id": 1180878673,
-    "user_name": "Кто я",
-    "date": "2025-09-09",
-    "start_time": "15:00",
-    "end_time": "20:00",
-    "user_role": "teacher",
-    "created_at": "2025-08-18 13:45:39",
-    "subjects": [
-      "2",
-      "4",
-      "3"
-    ],
-    "booking_type": "Тип1",
-    "priority": "2",
-    "id": 9
-  },
-  {
     "user_id": 1180878673,
     "user_name": "Молния Маккуин",
     "date": "2025-09-07",
     "start_time": "09:00",
     "end_time": "15:30",
     "user_role": "student",
-    "created_at": "2025-08-18 13:45:40",
+    "created_at": "2025-08-18 14:15:44",
     "subject": "4",
     "booking_type": "Тип1",
-    "id": 10
+    "priority": "",
+    "id": 1
   },
   {
     "user_id": 1180878673,
@@ -172,9 +19,10 @@
     "start_time": "17:00",
     "end_time": "18:00",
     "user_role": "student",
-    "created_at": "2025-08-18 13:45:40",
+    "created_at": "2025-08-18 14:15:44",
     "subject": "2",
     "booking_type": "Тип1",
-    "id": 11
+    "priority": "",
+    "id": 2
   }
 ]
