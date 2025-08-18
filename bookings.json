@@ -1,64 +1,26 @@
 [
   {
-    "user_id": 1180878673,
-    "user_name": "Молния Маккуин",
-    "date": "2025-09-07",
-    "start_time": "09:00",
-    "end_time": "15:30",
-    "user_role": "student",
-    "created_at": "2025-08-18 15:12:04",
-    "subject": "4",
-    "booking_type": "Тип1",
-    "priority": "",
-    "id": 1
-  },
-  {
-    "user_id": 1180878673,
-    "user_name": "Валя карнавал",
-    "date": "2025-09-08",
-    "start_time": "17:00",
-    "end_time": "18:00",
-    "user_role": "student",
-    "created_at": "2025-08-18 15:12:04",
-    "subject": "2",
-    "booking_type": "Тип1",
-    "priority": "",
-    "id": 2
-  },
-  {
     "user_id": 973231400,
     "user_name": "Бойко Кирилл",
     "date": "2025-09-01",
     "start_time": "09:00",
     "end_time": "11:30",
     "user_role": "student",
-    "created_at": "2025-08-18 15:12:04",
-    "subject": "мат",
+    "created_at": "2025-08-18 17:07:41",
+    "subject": "Математика",
     "booking_type": "Тип1",
-    "id": 3
+    "id": 1
   },
   {
     "user_id": 973231400,
     "user_name": "Бойко Кирилл",
-    "date": "2025-09-02",
-    "start_time": "13:30",
-    "end_time": "14:30",
+    "date": "2025-09-03",
+    "start_time": "12:30",
+    "end_time": "14:00",
     "user_role": "student",
-    "created_at": "2025-08-18 15:12:04",
-    "subject": "рус",
+    "created_at": "2025-08-18 17:07:41",
+    "subject": "Информатика",
     "booking_type": "Тип1",
-    "id": 4
-  },
-  {
-    "user_name": "Бойко Кирилл",
-    "user_role": "student",
-    "booking_type": "Тип1",
-    "date": "2025-09-02",
-    "start_time": "11:00",
-    "end_time": "12:00",
-    "user_id": 973231400,
-    "created_at": "2025-08-18 15:12:16",
-    "subject": "math",
-    "id": 5
+    "id": 2
   }
 ]

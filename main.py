@@ -44,7 +44,6 @@ class BookingStates(StatesGroup):
     INPUT_NAME = State()
     TEACHER_SUBJECTS = State()
     SELECT_SUBJECT = State()
-    SELECT_BOOKING_TYPE = State()
     SELECT_DATE = State()
     SELECT_TIME_RANGE = State()  # Объединенное состояние для выбора времени
     CONFIRMATION = State()
@@ -146,14 +145,18 @@ def load_bookings():
     return valid_bookings
 
 
-def has_booking_conflict(user_id, booking_type, date, time_start, time_end, exclude_id=None):
-    """Проверяет есть ли конфликтующие бронирования того же типа"""
+def has_booking_conflict(user_id, date, time_start, time_end, subject=None, exclude_id=None):
+    """Проверяет конфликты бронирований с учетом предмета для учеников"""
     bookings = load_bookings()
     for booking in bookings:
         if (booking.get('user_id') == user_id and
-                booking.get('booking_type') == booking_type and
-                booking.get('date') == date):
-
+            booking.get('date') == date):
+            
+            # Для учеников проверяем еще и совпадение предмета
+            if booking.get('user_role') == 'student' and subject:
+                if booking.get('subject') != subject:
+                    continue
+                    
             if exclude_id and booking.get('id') == exclude_id:
                 continue
 
@@ -172,75 +175,118 @@ def has_booking_conflict(user_id, booking_type, date, time_start, time_end, excl
 
 
 def generate_calendar(year=None, month=None):
-    """Генерирует календарь, начиная с 1 сентября или текущей даты (если она позже)"""
+    """Генерирует календарь с корректной обработкой переключения месяцев"""
     now = datetime.now()
-    year = year or now.year
-    month = month or now.month
+    if year is None:
+        year = now.year
+    if month is None:
+        month = now.month
 
-    # Определяем минимальную дату для отображения (1 сентября текущего года)
+    # Определяем минимальную дату (1 сентября текущего года)
     min_date = datetime(year=now.year, month=9, day=1).date()
-
-    # Если текущая дата позже 1 сентября, используем текущую дату как минимальную
     if now.date() > min_date:
         min_date = now.date()
 
     builder = InlineKeyboardBuilder()
 
+    # Заголовок с месяцем и годом
     month_name = datetime(year, month, 1).strftime("%B %Y")
-    builder.row(types.InlineKeyboardButton(text=month_name, callback_data="ignore"))
+    builder.row(types.InlineKeyboardButton(
+        text=month_name, 
+        callback_data="ignore_month_header"
+    ))
 
+    # Дни недели
     week_days = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
-    builder.row(*[types.InlineKeyboardButton(text=day, callback_data="ignore") for day in week_days])
+    builder.row(*[
+        types.InlineKeyboardButton(text=day, callback_data="ignore_weekday") 
+        for day in week_days
+    ])
 
+    # Генерация дней месяца
     first_day = datetime(year, month, 1)
-    start_weekday = first_day.weekday()
-    days_in_month = (datetime(year, month + 1, 1) - first_day).days
+    start_weekday = first_day.weekday()  # 0-6 (пн-вс)
+    days_in_month = (datetime(year, month + 1, 1) - first_day).days if month < 12 else 31
 
     buttons = []
+    # Пустые кнопки для дней предыдущего месяца
     for _ in range(start_weekday):
-        buttons.append(types.InlineKeyboardButton(text=" ", callback_data="ignore"))
+        buttons.append(types.InlineKeyboardButton(
+            text=" ", 
+            callback_data="ignore_empty_day"
+        ))
 
+    # Кнопки дней текущего месяца
     for day in range(1, days_in_month + 1):
         current_date = datetime(year, month, day).date()
         if current_date < min_date:
-            buttons.append(types.InlineKeyboardButton(text=" ", callback_data="ignore"))
+            buttons.append(types.InlineKeyboardButton(
+                text=" ", 
+                callback_data="ignore_past_day"
+            ))
         else:
             buttons.append(types.InlineKeyboardButton(
                 text=str(day),
                 callback_data=f"calendar_day_{year}-{month}-{day}"
             ))
+
+        # Перенос строки после каждого воскресенья
         if (day + start_weekday) % 7 == 0 or day == days_in_month:
             builder.row(*buttons)
             buttons = []
 
-    # Добавляем кнопки навигации только если есть месяцы для навигации
+    # Кнопки навигации
     prev_month = month - 1 if month > 1 else 12
     prev_year = year if month > 1 else year - 1
-
-    # Проверяем, можно ли перейти на предыдущий месяц
-    prev_month_min_date = datetime(prev_year, prev_month, 1).date()
-    show_prev = prev_month_min_date >= min_date or (prev_year > now.year or (prev_year == now.year and prev_month >= 9))
-
     next_month = month + 1 if month < 12 else 1
     next_year = year if month < 12 else year + 1
-    show_next = True  # Всегда можно перейти вперед
+
+    # Проверяем, можно ли перейти на предыдущий месяц
+    show_prev = datetime(prev_year, prev_month, 1).date() >= min_date
 
     nav_buttons = []
     if show_prev:
-        nav_buttons.append(
-            types.InlineKeyboardButton(text="⬅️", callback_data=f"calendar_change_{prev_year}-{prev_month}"))
+        nav_buttons.append(types.InlineKeyboardButton(
+            text="⬅️", 
+            callback_data=f"calendar_change_{prev_year}-{prev_month}"
+        ))
     else:
-        nav_buttons.append(types.InlineKeyboardButton(text=" ", callback_data="ignore"))
+        nav_buttons.append(types.InlineKeyboardButton(
+            text=" ", 
+            callback_data="ignore_prev_disabled"
+        ))
 
-    if show_next:
-        nav_buttons.append(
-            types.InlineKeyboardButton(text="➡️", callback_data=f"calendar_change_{next_year}-{next_month}"))
-    else:
-        nav_buttons.append(types.InlineKeyboardButton(text=" ", callback_data="ignore"))
+    # Всегда показываем кнопку "вперед"
+    nav_buttons.append(types.InlineKeyboardButton(
+        text="➡️", 
+        callback_data=f"calendar_change_{next_year}-{next_month}"
+    ))
 
     builder.row(*nav_buttons)
 
     return builder.as_markup()
+
+@dp.callback_query(
+    BookingStates.SELECT_DATE, 
+    F.data.startswith("calendar_change_")
+)
+async def process_calendar_change(callback: types.CallbackQuery):
+    try:
+        date_str = callback.data.replace("calendar_change_", "")
+        year, month = map(int, date_str.split("-"))
+        
+        await callback.message.edit_reply_markup(
+            reply_markup=generate_calendar(year, month)
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error changing calendar month: {e}")
+        await callback.answer("Не удалось изменить месяц", show_alert=True)
+
+@dp.callback_query(F.data.startswith("ignore_"))
+async def ignore_callback(callback: types.CallbackQuery):
+    """Обрабатывает все callback'и, которые должны игнорироваться"""
+    await callback.answer()
 
 
 def generate_time_range_keyboard(selected_date=None, start_time=None, end_time=None):
@@ -471,22 +517,23 @@ async def ensure_user_name(user_id: int) -> str:
 @dp.message(F.text == "📅 Забронировать время")
 @dp.message(Command("book"))
 async def start_booking(message: types.Message, state: FSMContext):
+    # Устанавливаем тип бронирования по умолчанию
+    await state.update_data(booking_type="Тип1")
+    
     user_id = message.from_user.id
-    user_name = await ensure_user_name(user_id)
+    user_name = storage.get_user_name(user_id)
     
     if user_name:
         await state.update_data(user_name=user_name)
-        # Всегда запрашиваем роль при новом бронировании
         builder = InlineKeyboardBuilder()
-        builder.button(text="👨‍🎓 Как ученик", callback_data="role_student")
-        builder.button(text="👨‍🏫 Как преподаватель", callback_data="role_teacher")
+        builder.button(text="👨‍🎓 Я ученик", callback_data="role_student")
+        builder.button(text="👨‍🏫 Я преподаватель", callback_data="role_teacher")
         await message.answer(
-            f"{user_name}, выберите роль для этого бронирования:",
+            "Выберите роль для бронирования:",
             reply_markup=builder.as_markup()
         )
         await state.set_state(BookingStates.SELECT_ROLE)
     else:
-        # Если ФИО нет, начинаем с ввода имени
         await message.answer("Введите ваше полное ФИО:")
         await state.set_state(BookingStates.INPUT_NAME)
 
@@ -494,21 +541,21 @@ async def start_booking(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data.startswith("role_"))
 async def process_role_selection(callback: types.CallbackQuery, state: FSMContext):
     role = callback.data.split("_")[1]
-    await state.update_data(user_role=role)
-    
-    # Сохраняем роль только для текущей сессии
-    data = await state.get_data()
     user_id = callback.from_user.id
-    storage.save_user_info(user_id, None, role)  # Обновляем только роль
+    
+    await state.update_data(user_role=role)
     
     if role == 'teacher':
         await callback.message.edit_text(
+            "Вы выбрали роль преподавателя\n"
             "Выберите предметы, которые вы преподаете:",
             reply_markup=generate_subjects_keyboard(is_teacher=True)
         )
         await state.set_state(BookingStates.TEACHER_SUBJECTS)
     else:
+        # Для ученика сразу запрашиваем предмет
         await callback.message.edit_text(
+            "Вы выбрали роль ученика\n"
             "Выберите предмет для занятия:",
             reply_markup=generate_subjects_keyboard()
         )
@@ -590,13 +637,24 @@ async def process_subjects_done(callback: types.CallbackQuery, state: FSMContext
 @dp.callback_query(BookingStates.SELECT_SUBJECT, F.data.startswith("subject_"))
 async def process_student_subject(callback: types.CallbackQuery, state: FSMContext):
     subject_id = callback.data.split("_")[1]
-    await state.update_data(
-        subject=subject_id,
-        booking_type="Тип1"  # Устанавливаем тип по умолчанию
+    user_id = callback.from_user.id
+    
+    # Сохраняем предмет для текущего бронирования
+    await state.update_data(subject=subject_id, booking_type="Тип1")
+    
+    # Получаем имя пользователя (оно уже должно быть в состоянии)
+    data = await state.get_data()
+    user_name = data.get('user_name', '')
+    
+    # Сохраняем связь пользователь-предмет в Google Sheets
+    if gsheets:
+        gsheets.save_user_subject(user_id, user_name, subject_id)
+    
+    await callback.message.edit_text(
+        f"Выбран предмет: {SUBJECTS[subject_id]}\n"
+        "Теперь выберите дату:",
+        reply_markup=generate_calendar()
     )
-
-    await callback.message.edit_text(f"Выбран предмет: {SUBJECTS[subject_id]}")
-    await callback.message.answer("Выберите дату:", reply_markup=generate_calendar())  # Пропускаем выбор типа
     await state.set_state(BookingStates.SELECT_DATE)
     await callback.answer()
 
@@ -612,25 +670,30 @@ async def process_student_subject(callback: types.CallbackQuery, state: FSMConte
 #     await state.set_state(BookingStates.SELECT_DATE)
 #     await callback.answer()
 
-@dp.callback_query(BookingStates.SELECT_DATE, F.data.startswith("calendar_"))
+@dp.callback_query(BookingStates.SELECT_DATE, F.data.startswith("calendar_day_"))
 async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
     data = callback.data
+    user_id = callback.from_user.id
 
     if data.startswith("calendar_day_"):
         date_str = data.replace("calendar_day_", "")
         year, month, day = map(int, date_str.split("-"))
         selected_date = datetime(year, month, day).date()
+        formatted_date = selected_date.strftime("%Y-%m-%d")
 
-        # Проверяем, что выбранная дата не раньше минимальной
-        now = datetime.now()
-        min_date = datetime(year=now.year, month=9, day=1).date()
-        if now.date() > min_date:
-            min_date = now.date()
+        # Получаем данные из состояния
+        state_data = await state.get_data()
+        role = state_data.get('user_role')
 
-        if selected_date < min_date:
-            await callback.answer("Нельзя выбрать дату раньше " + min_date.strftime('%d.%m.%Y'), show_alert=True)
+        # Проверяем существующие брони
+        if storage.has_booking_on_date(user_id, formatted_date, role):
+            await callback.answer(
+                f"У вас уже есть бронь на {day}.{month}.{year} в роли {'преподавателя' if role == 'teacher' else 'ученика'}",
+                show_alert=True
+            )
             return
 
+        # Продолжаем процесс бронирования
         await state.update_data(
             selected_date=selected_date,
             time_start=None,
@@ -647,12 +710,6 @@ async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
             )
         )
         await state.set_state(BookingStates.SELECT_TIME_RANGE)
-        await callback.answer()
-
-    elif data.startswith("calendar_change_"):
-        date_str = data.replace("calendar_change_", "")
-        year, month = map(int, date_str.split("-"))
-        await callback.message.edit_reply_markup(reply_markup=generate_calendar(year, month))
         await callback.answer()
 
 
@@ -762,41 +819,46 @@ async def switch_selection_mode(callback: types.CallbackQuery, state: FSMContext
 @dp.callback_query(BookingStates.SELECT_TIME_RANGE, F.data == "confirm_time_range")
 async def confirm_time_range(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
+    
+    # Гарантируем, что booking_type = "Тип1"
+    data['booking_type'] = "Тип1"
+    await state.update_data(booking_type="Тип1")
 
-    # Проверка что выбраны оба времени
-    if not data.get('time_start') or not data.get('time_end'):
-        await callback.answer(
-            "❌ Необходимо выбрать и начало, и конец времени!",
-            show_alert=True
-        )
-        return
-
-    # Проверка на конфликты
+    subject = data.get('subject') if data.get('user_role') == 'student' else None
+    
+    # Проверка конфликтов с учетом предмета
     if has_booking_conflict(
-            user_id=callback.from_user.id,
-            booking_type=data['booking_type'],
-            date=data['selected_date'],
-            time_start=data['time_start'],
-            time_end=data['time_end']
+        user_id=callback.from_user.id,
+        date=data['selected_date'].strftime("%Y-%m-%d"),
+        time_start=data['time_start'],
+        time_end=data['time_end'],
+        subject=subject
     ):
         await callback.answer(
-            f"У вас уже есть бронь на это время!",
+            "У вас уже есть бронь на это время!",
             show_alert=True
         )
         return
+    
+    # Проверка наличия всех необходимых данных
+    required_fields = ['user_name', 'user_role', 'selected_date', 'time_start', 'time_end']
+    for field in required_fields:
+        if field not in data:
+            await callback.answer(f"Ошибка: отсутствует {field}", show_alert=True)
+            return
 
     role_text = "ученик" if data['user_role'] == 'student' else "преподаватель"
-
+    
     if data['user_role'] == 'teacher':
         subjects_text = ", ".join(SUBJECTS[subj] for subj in data.get('subjects', []))
     else:
         subjects_text = SUBJECTS.get(data.get('subject', ''), "Не указан")
 
-    # Переходим к финальному подтверждению
     await callback.message.edit_text(
         f"📋 Подтвердите бронирование:\n\n"
         f"Роль: {role_text}\n"
         f"Предмет(ы): {subjects_text}\n"
+        f"Тип: ТИП1 (автоматически)\n"
         f"Дата: {data['selected_date'].strftime('%d.%m.%Y')}\n"
         f"Время: {data['time_start']} - {data['time_end']}",
         reply_markup=generate_confirmation()
@@ -805,66 +867,44 @@ async def confirm_time_range(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@dp.callback_query(BookingStates.CONFIRMATION, F.data.in_(["booking_confirm", "booking_cancel"]))
+@dp.callback_query(BookingStates.CONFIRMATION, F.data == "booking_confirm")
 async def process_confirmation(callback: types.CallbackQuery, state: FSMContext):
-    if callback.data == "booking_confirm":
-        data = await state.get_data()
-
-        # Проверка конфликтов
-        if has_booking_conflict(
-                user_id=callback.from_user.id,
-                booking_type=data['booking_type'],
-                date=data['selected_date'],
-                time_start=data['time_start'],
-                time_end=data['time_end']
-        ):
-            await callback.message.edit_text("❌ Время уже занято! Выберите другое.")
-            await state.clear()
-            return
-
-        # Формируем данные брони
-        booking_data = {
-            "user_name": data['user_name'],
-            "user_role": data['user_role'],
-            "booking_type": data['booking_type'],
-            "date": data['selected_date'].strftime("%Y-%m-%d"),
-            "start_time": data['time_start'],
-            "end_time": data['time_end'],
-            "user_id": callback.from_user.id,
-            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
-
-        if data['user_role'] == 'teacher':
-            booking_data["subjects"] = data.get('subjects', [])
-        else:
-            booking_data["subject"] = data.get('subject', '')
-
-        # Сохраняем бронь
-        try:
-            booking = storage.add_booking(booking_data)
-            logger.info(f"Бронь сохранена в JSON. ID: {booking.get('id')}")
-
-            # Принудительное обновление Google Sheets
-            all_bookings = storage.load()
-            if gsheets and gsheets.update_all_sheets(all_bookings):
-                logger.info("Данные успешно отправлены в Google Sheets!")
-            else:
-                logger.warning("Не удалось обновить Google Sheets")
-
-            await callback.message.edit_text(
-                "✅ Бронирование подтверждено!\n"
-                f"📅 Дата: {data['selected_date'].strftime('%d.%m.%Y')}\n"
-                f"⏰ Время: {data['time_start']}-{data['time_end']}\n"
-                f"📌 Тип: {data['booking_type']}"
-            )
-        except Exception as e:
-            await callback.message.edit_text("❌ Ошибка при сохранении брони!")
-            logger.error(f"Ошибка: {e}")
+    data = await state.get_data()
+    
+    # Гарантируем тип бронирования
+    data['booking_type'] = "Тип1"
+    
+    # Формируем данные брони
+    booking_data = {
+        "user_id": callback.from_user.id,
+        "user_name": data['user_name'],
+        "user_role": data['user_role'],
+        "booking_type": "Тип1",  # Всегда Тип1
+        "date": data['selected_date'].strftime("%Y-%m-%d"),
+        "start_time": data['time_start'],
+        "end_time": data['time_end'],
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    
+    if data['user_role'] == 'teacher':
+        booking_data["subjects"] = data.get('subjects', [])
     else:
-        await callback.message.edit_text("❌ Бронирование отменено")
+        booking_data["subject"] = data.get('subject', '')
 
+    # Сохраняем бронь
+    try:
+        booking = storage.add_booking(booking_data)
+        await callback.message.edit_text(
+            "✅ Бронирование подтверждено!\n"
+            f"📅 Дата: {data['selected_date'].strftime('%d.%m.%Y')}\n"
+            f"⏰ Время: {data['time_start']}-{data['time_end']}\n"
+            f"📌 Тип: ТИП1"
+        )
+    except Exception as e:
+        await callback.message.edit_text("❌ Ошибка при сохранении брони!")
+        logger.error(f"Ошибка сохранения: {e}")
+    
     await state.clear()
-    await callback.answer()
 
 
 @dp.message(F.text == "📋 Мои бронирования")

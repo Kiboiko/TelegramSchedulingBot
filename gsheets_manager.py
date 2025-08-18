@@ -3,11 +3,16 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 import logging
-
 logger = logging.getLogger(__name__)
 
 
 class GoogleSheetsManager:
+    SUBJECTS = {
+        "1": "Математика",
+        "2": "Физика",
+        "3": "Информатика",
+        "4": "Русский язык"
+    }
     def __init__(self, credentials_file: str, spreadsheet_id: str):
         self.credentials_file = credentials_file
         self.spreadsheet_id = spreadsheet_id
@@ -143,16 +148,10 @@ class GoogleSheetsManager:
         worksheet.append_row(headers)
 
     def _prepare_records(self, bookings: List[Dict[str, Any]],
-                         formatted_dates: List[str], is_teacher: bool) -> Dict[str, Any]:
-        """Подготавливает данные для вставки"""
+                     formatted_dates: List[str], is_teacher: bool) -> Dict[str, Any]:
+        """Подготавливает данные для вставки с учетом предметов учеников"""
         records = {}
-        subject_mapping = {
-            'math': 'математика',
-            'inf': 'информатика',
-            'rus': 'русский язык',
-            'phys': 'физика'
-        }
-
+        
         for booking in bookings:
             if 'user_name' not in booking or 'date' not in booking:
                 continue
@@ -162,17 +161,15 @@ class GoogleSheetsManager:
             date = self.format_date(booking['date'])
 
             if is_teacher:
-                subjects = []
-                for subj in booking.get('subjects', []):
-                    full_name = subject_mapping.get(subj, subj)
-                    subjects.append(self.qual_map.get(full_name.lower(), subj))
+                # Логика для преподавателей (оставляем как было)
+                subjects = [self.SUBJECTS.get(subj, subj) for subj in booking.get('subjects', [])]
                 subject_str = ', '.join(subjects)
-                priority = str(booking.get('priority', ''))
-                key = f"{user_id}_{name}_{priority}"
+                key = f"{user_id}_{name}"
             else:
-                full_name = subject_mapping.get(booking.get('subject', ''), booking.get('subject', ''))
-                subject_str = self.qual_map.get(full_name.lower(), booking.get('subject', ''))
-                key = f"{user_id}_{name}_{subject_str}"
+                # Для учеников используем связку user_id + subject
+                subject = booking.get('subject', '')
+                subject_str = self.SUBJECTS.get(subject, subject)
+                key = f"{user_id}_{subject_str}"  # Ключ теперь включает предмет
 
             if key not in records:
                 records[key] = {
@@ -181,8 +178,6 @@ class GoogleSheetsManager:
                     'subject': subject_str,
                     'bookings': {}
                 }
-                if is_teacher:
-                    records[key]['priority'] = priority
 
             if date in formatted_dates:
                 records[key]['bookings'][date] = {
@@ -429,4 +424,30 @@ class GoogleSheetsManager:
             return True
         except Exception as e:
             logger.error(f"Ошибка при сохранении данных пользователя: {e}")
+            return False
+        
+    def save_user_subject(self, user_id: int, user_name: str, subject_id: str) -> bool:
+        """Сохраняет связь пользователь-предмет для учеников"""
+        try:
+            worksheet = self._get_or_create_worksheet("Ученики")
+            records = worksheet.get_all_records()
+            
+            # Ищем существующую запись с таким user_id и subject_id
+            row_num = None
+            for i, record in enumerate(records, start=2):
+                if (str(record.get('user_id')) == str(user_id) and 
+                    record.get('subject') == subject_id):
+                    row_num = i
+                    break
+            
+            if row_num:
+                # Обновляем существующую запись
+                worksheet.update(f"A{row_num}:C{row_num}", [[user_id, user_name, subject_id]])
+            else:
+                # Добавляем новую запись
+                worksheet.append_row([user_id, user_name, subject_id])
+            
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка сохранения предмета ученика: {e}")
             return False
