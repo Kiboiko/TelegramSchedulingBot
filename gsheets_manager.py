@@ -3,6 +3,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 import logging
+
 logger = logging.getLogger(__name__)
 
 
@@ -13,6 +14,7 @@ class GoogleSheetsManager:
         "3": "Информатика",
         "4": "Русский язык"
     }
+
     def __init__(self, credentials_file: str, spreadsheet_id: str):
         self.credentials_file = credentials_file
         self.spreadsheet_id = spreadsheet_id
@@ -140,18 +142,78 @@ class GoogleSheetsManager:
     def _ensure_sheet_structure(self, worksheet, formatted_dates: List[str], is_teacher: bool):
         """Создает структуру листа заново"""
         headers = ['ID', 'Имя', 'Предмет']
+
         if is_teacher:
-            headers.append('Приоритет')  # Добавляем столбец Приоритет для преподавателей
+            headers.append('Приоритет')
+        else:
+            headers.append('Потребность во внимании (мин)')
 
         headers += [date for date in formatted_dates for _ in (0, 1)]
         worksheet.clear()
         worksheet.append_row(headers)
 
+    # def _prepare_records(self, bookings: List[Dict[str, Any]],
+    #                      formatted_dates: List[str], is_teacher: bool) -> Dict[str, Any]:
+    #     """Подготавливает данные для вставки с учетом предметов учеников"""
+    #     records = {}
+    #
+    #     for booking in bookings:
+    #         if 'user_name' not in booking or 'date' not in booking:
+    #             continue
+    #
+    #         name = booking['user_name']
+    #         user_id = str(booking.get('user_id', ''))
+    #         date = self.format_date(booking['date'])
+    #
+    #         if is_teacher:
+    #             # Для преподавателей используем ID предметов
+    #             subjects = booking.get('subjects', [])
+    #             subject_str = ', '.join(subjects)
+    #             key = f"{user_id}_{name}"
+    #         else:
+    #             # Для учеников используем ID предмета
+    #             subject = booking.get('subject', '')
+    #             subject_str = subject
+    #             key = f"{user_id}_{subject_str}"
+    #
+    #         if key not in records:
+    #             records[key] = {
+    #                 'id': user_id,
+    #                 'name': name,
+    #                 'subject': subject_str,
+    #                 'attention_need': booking.get('attention_need', ''),
+    #                 'bookings': {}
+    #             }
+    #
+    #         if date in formatted_dates:
+    #             records[key]['bookings'][date] = {
+    #                 'start': booking.get('start_time', ''),
+    #                 'end': booking.get('end_time', '')
+    #             }
+    #
+    #     return records
     def _prepare_records(self, bookings: List[Dict[str, Any]],
-                     formatted_dates: List[str], is_teacher: bool) -> Dict[str, Any]:
+                         formatted_dates: List[str], is_teacher: bool) -> Dict[str, Any]:
         """Подготавливает данные для вставки с учетом предметов учеников"""
+        # Сначала загружаем текущие данные из таблицы
+        try:
+            worksheet = self.spreadsheet.worksheet("Преподаватели" if is_teacher else "Ученики")
+            existing_data = worksheet.get_all_records()
+        except Exception as e:
+            logger.error(f"Ошибка при чтении существующих данных: {e}")
+            existing_data = []
+
         records = {}
-        
+
+        # Создаем словарь для быстрого поиска существующих значений приоритета/потребности
+        existing_values = {}
+        for row in existing_data:
+            key = f"{row['ID']}_{row['Имя']}" if is_teacher else f"{row['ID']}_{row['Предмет']}"
+            if is_teacher:
+                existing_values[key] = row.get('Приоритет', '')
+            else:
+                existing_values[key] = row.get('Потребность во внимании (мин)', '')
+
         for booking in bookings:
             if 'user_name' not in booking or 'date' not in booking:
                 continue
@@ -161,21 +223,24 @@ class GoogleSheetsManager:
             date = self.format_date(booking['date'])
 
             if is_teacher:
-                # Логика для преподавателей (оставляем как было)
-                subjects = [self.SUBJECTS.get(subj, subj) for subj in booking.get('subjects', [])]
+                subjects = booking.get('subjects', [])
                 subject_str = ', '.join(subjects)
                 key = f"{user_id}_{name}"
             else:
-                # Для учеников используем связку user_id + subject
                 subject = booking.get('subject', '')
-                subject_str = self.SUBJECTS.get(subject, subject)
-                key = f"{user_id}_{subject_str}"  # Ключ теперь включает предмет
+                subject_str = subject
+                key = f"{user_id}_{subject_str}"
 
             if key not in records:
+                # Используем существующее значение или значение из booking, или пустую строку
+                priority_or_attention = existing_values.get(key, booking.get(
+                    'priority' if is_teacher else 'attention_need', ''))
+
                 records[key] = {
                     'id': user_id,
                     'name': name,
                     'subject': subject_str,
+                    'priority' if is_teacher else 'attention_need': priority_or_attention,
                     'bookings': {}
                 }
 
@@ -198,8 +263,11 @@ class GoogleSheetsManager:
         rows = []
         for record in records.values():
             row = [record['id'], record['name'], record['subject']]
+
             if is_teacher:
                 row.append(record.get('priority', ''))
+            else:
+                row.append(record.get('attention_need', ''))
 
             for date in formatted_dates:
                 if date in record['bookings']:
@@ -217,6 +285,91 @@ class GoogleSheetsManager:
 
         logger.info(f"Обновлено {len(rows)} строк в листе '{worksheet.title}'")
 
+    # def get_bookings_from_sheet(self, sheet_name: str, is_teacher: bool) -> List[Dict[str, Any]]:
+    #     try:
+    #         worksheet = self.spreadsheet.worksheet(sheet_name)
+    #         data = worksheet.get_all_values()
+    #
+    #         if len(data) < 2:
+    #             return []
+    #
+    #         headers = data[0]
+    #         bookings = []
+    #         reverse_qual_map = {v: k for k, v in self.qual_map.items()}
+    #
+    #         for row in data[1:]:
+    #             if not row or not row[0]:
+    #                 continue
+    #
+    #             try:
+    #                 user_id = int(row[0]) if row[0].strip() else None
+    #             except ValueError:
+    #                 user_id = None
+    #
+    #             user_name = row[1] if len(row) > 1 else ""
+    #             subject = row[2] if len(row) > 2 else ""
+    #
+    #             if is_teacher:
+    #                 priority = row[3] if len(row) > 3 else ""
+    #             else:
+    #                 attention_need = row[3] if len(row) > 3 else ""
+    #
+    #             start_col = 4 if is_teacher else 4  # Для всех начинаем с колонки E (после ID, Имя, Предмет, Потребность/Приоритет)
+    #
+    #             for i in range(start_col, len(row), 2):
+    #                 if i + 1 >= len(row):
+    #                     break
+    #
+    #                 date_header = headers[i].split()[0] if i < len(headers) else ""
+    #                 start_time = row[i] if i < len(row) else ""
+    #                 end_time = row[i + 1] if i + 1 < len(row) else ""
+    #
+    #                 if not date_header or not start_time or not end_time:
+    #                     continue
+    #
+    #                 try:
+    #                     date_obj = datetime.strptime(date_header, "%d.%m.%Y")
+    #                     date_str = date_obj.strftime("%Y-%m-%d")
+    #
+    #                     booking = {
+    #                         "user_id": user_id if user_id is not None else -1,
+    #                         "user_name": user_name,
+    #                         "date": date_str,
+    #                         "start_time": start_time,
+    #                         "end_time": end_time,
+    #                         "user_role": "teacher" if is_teacher else "student",
+    #                         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    #                     }
+    #
+    #                     if is_teacher:
+    #                         subjects = []
+    #                         for subj in subject.split(","):
+    #                             subj = subj.strip()
+    #                             if subj in reverse_qual_map:
+    #                                 subjects.append(reverse_qual_map[subj])
+    #                             else:
+    #                                 subjects.append(subj)
+    #                         booking["subjects"] = subjects
+    #                         booking["booking_type"] = "Тип1"
+    #                         booking["priority"] = priority
+    #                     else:
+    #                         if subject in reverse_qual_map:
+    #                             booking["subject"] = reverse_qual_map[subject]
+    #                         else:
+    #                             booking["subject"] = subject
+    #                         booking["booking_type"] = "Тип1"
+    #                         booking["attention_need"] = attention_need
+    #
+    #                     bookings.append(booking)
+    #                 except ValueError as e:
+    #                     logger.error(f"Ошибка обработки данных: {e}")
+    #                     continue
+    #
+    #         return bookings
+    #     except Exception as e:
+    #         logger.error(f"Ошибка чтения из листа '{sheet_name}': {e}")
+    #         return []
+
     def get_bookings_from_sheet(self, sheet_name: str, is_teacher: bool) -> List[Dict[str, Any]]:
         try:
             worksheet = self.spreadsheet.worksheet(sheet_name)
@@ -225,7 +378,7 @@ class GoogleSheetsManager:
             if len(data) < 2:
                 return []
 
-            headers = data[0]
+            headers = [h.lower() for h in data[0]]  # Приводим заголовки к нижнему регистру для удобства
             bookings = []
             reverse_qual_map = {v: k for k, v in self.qual_map.items()}
 
@@ -240,9 +393,18 @@ class GoogleSheetsManager:
 
                 user_name = row[1] if len(row) > 1 else ""
                 subject = row[2] if len(row) > 2 else ""
-                priority = row[3] if is_teacher and len(row) > 3 else ""
 
-                start_col = 4 if is_teacher else 3  # Для преподавателей начинаем с колонки E
+                # Получаем приоритет/потребность независимо от регистра в заголовке
+                priority_or_attention = ''
+                if is_teacher:
+                    if 'приоритет' in headers and len(row) > headers.index('приоритет'):
+                        priority_or_attention = row[headers.index('приоритет')]
+                else:
+                    if 'потребность во внимании (мин)' in headers and len(row) > headers.index(
+                            'потребность во внимании (мин)'):
+                        priority_or_attention = row[headers.index('потребность во внимании (мин)')]
+
+                start_col = 4  # Начинаем с колонки E (после ID, Имя, Предмет, Приоритет/Потребность)
 
                 for i in range(start_col, len(row), 2):
                     if i + 1 >= len(row):
@@ -279,13 +441,14 @@ class GoogleSheetsManager:
                                     subjects.append(subj)
                             booking["subjects"] = subjects
                             booking["booking_type"] = "Тип1"
-                            booking["priority"] = priority
+                            booking["priority"] = priority_or_attention
                         else:
                             if subject in reverse_qual_map:
                                 booking["subject"] = reverse_qual_map[subject]
                             else:
                                 booking["subject"] = subject
                             booking["booking_type"] = "Тип1"
+                            booking["attention_need"] = priority_or_attention
 
                         bookings.append(booking)
                     except ValueError as e:
@@ -317,12 +480,11 @@ class GoogleSheetsManager:
         except Exception as e:
             logger.error(f"Ошибка синхронизации из Google Sheets: {e}")
             return False
-        
+
     def get_user_name(self, user_id: int) -> str:
         """Получает ФИО пользователя без создания дубликатов"""
         try:
             worksheet = self._get_or_create_users_worksheet()
-            # Используем формулу Google Sheets для поиска
             cell = worksheet.find(str(user_id), in_column=1)
             return worksheet.cell(cell.row, 2).value if cell else ""
         except Exception as e:
@@ -334,37 +496,37 @@ class GoogleSheetsManager:
         try:
             worksheet = self._get_or_create_users_worksheet()
             cell = worksheet.find(str(user_id), in_column=1)
-            
-            if cell:  # Если пользователь существует - обновляем
+
+            if cell:
                 worksheet.update_cell(cell.row, 2, user_name)
-            else:    # Если нет - добавляем новую запись
+            else:
                 worksheet.append_row([user_id, user_name])
-            
+
             return True
         except Exception as e:
             logger.error(f"User save error: {e}")
             return False
-    
+
     def _get_or_create_users_worksheet(self):
         """Создает лист пользователей с улучшенной структурой"""
         try:
             worksheet = self.spreadsheet.worksheet("Пользователи")
         except gspread.WorksheetNotFound:
             worksheet = self.spreadsheet.add_worksheet(
-                title="Пользователи", 
-                rows=100, 
+                title="Пользователи",
+                rows=100,
                 cols=3
             )
             worksheet.update("A1:C1", [["user_id", "user_name", "last_used_role"]])
         return worksheet
-    
+
     def save_user_info(self, user_id: int, user_name: str, role: str = None) -> bool:
         """Сохраняет информацию о пользователе"""
         try:
             worksheet = self._get_or_create_users_worksheet()
             cell = worksheet.find(str(user_id), in_column=1)
-            
-            if cell:  # Обновляем существующую запись
+
+            if cell:
                 updates = {}
                 if user_name:
                     updates["B"] = user_name
@@ -375,9 +537,9 @@ class GoogleSheetsManager:
                         'range': f"{k}{cell.row}",
                         'values': [[v]]
                     } for k, v in updates.items()])
-            else:    # Создаем новую запись
+            else:
                 worksheet.append_row([user_id, user_name, role])
-            
+
             return True
         except Exception as e:
             logger.error(f"Error saving user info: {e}")
@@ -388,7 +550,7 @@ class GoogleSheetsManager:
         try:
             worksheet = self._get_or_create_users_worksheet()
             records = worksheet.get_all_records()
-            
+
             for record in records:
                 if str(record.get("user_id")) == str(user_id):
                     return record
@@ -403,50 +565,43 @@ class GoogleSheetsManager:
             worksheet = self._get_or_create_users_worksheet()
             records = worksheet.get_all_records()
             user_id = str(user_data["user_id"])
-            
-            # Ищем существующую запись
+
             row_num = None
             for i, record in enumerate(records, start=2):
                 if str(record.get("user_id")) == user_id:
                     row_num = i
                     break
-            
-            # Подготавливаем данные для записи
+
             data_to_save = [user_id, user_data.get("user_name", "")]
-            
+
             if row_num:
-                # Обновляем существующую запись
                 worksheet.update(f"A{row_num}:B{row_num}", [data_to_save])
             else:
-                # Добавляем новую запись
                 worksheet.append_row(data_to_save)
-            
+
             return True
         except Exception as e:
             logger.error(f"Ошибка при сохранении данных пользователя: {e}")
             return False
-        
+
     def save_user_subject(self, user_id: int, user_name: str, subject_id: str) -> bool:
         """Сохраняет связь пользователь-предмет для учеников"""
         try:
             worksheet = self._get_or_create_worksheet("Ученики")
             records = worksheet.get_all_records()
-            
-            # Ищем существующую запись с таким user_id и subject_id
+
             row_num = None
             for i, record in enumerate(records, start=2):
-                if (str(record.get('user_id')) == str(user_id) and 
-                    record.get('subject') == subject_id):
+                if (str(record.get('user_id')) == str(user_id) and
+                        record.get('subject') == subject_id):
                     row_num = i
                     break
-            
+
             if row_num:
-                # Обновляем существующую запись
                 worksheet.update(f"A{row_num}:C{row_num}", [[user_id, user_name, subject_id]])
             else:
-                # Добавляем новую запись
                 worksheet.append_row([user_id, user_name, subject_id])
-            
+
             return True
         except Exception as e:
             logger.error(f"Ошибка сохранения предмета ученика: {e}")
