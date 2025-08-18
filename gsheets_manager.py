@@ -322,3 +322,111 @@ class GoogleSheetsManager:
         except Exception as e:
             logger.error(f"Ошибка синхронизации из Google Sheets: {e}")
             return False
+        
+    def get_user_name(self, user_id: int) -> str:
+        """Получает ФИО пользователя без создания дубликатов"""
+        try:
+            worksheet = self._get_or_create_users_worksheet()
+            # Используем формулу Google Sheets для поиска
+            cell = worksheet.find(str(user_id), in_column=1)
+            return worksheet.cell(cell.row, 2).value if cell else ""
+        except Exception as e:
+            logger.error(f"User lookup error: {e}")
+            return ""
+
+    def save_user_name(self, user_id: int, user_name: str) -> bool:
+        """Обновляет или создает запись пользователя без дубликатов"""
+        try:
+            worksheet = self._get_or_create_users_worksheet()
+            cell = worksheet.find(str(user_id), in_column=1)
+            
+            if cell:  # Если пользователь существует - обновляем
+                worksheet.update_cell(cell.row, 2, user_name)
+            else:    # Если нет - добавляем новую запись
+                worksheet.append_row([user_id, user_name])
+            
+            return True
+        except Exception as e:
+            logger.error(f"User save error: {e}")
+            return False
+    
+    def _get_or_create_users_worksheet(self):
+        """Создает лист пользователей с улучшенной структурой"""
+        try:
+            worksheet = self.spreadsheet.worksheet("Пользователи")
+        except gspread.WorksheetNotFound:
+            worksheet = self.spreadsheet.add_worksheet(
+                title="Пользователи", 
+                rows=100, 
+                cols=3
+            )
+            worksheet.update("A1:C1", [["user_id", "user_name", "last_used_role"]])
+        return worksheet
+    
+    def save_user_info(self, user_id: int, user_name: str, role: str = None) -> bool:
+        """Сохраняет информацию о пользователе"""
+        try:
+            worksheet = self._get_or_create_users_worksheet()
+            cell = worksheet.find(str(user_id), in_column=1)
+            
+            if cell:  # Обновляем существующую запись
+                updates = {}
+                if user_name:
+                    updates["B"] = user_name
+                if role:
+                    updates["C"] = role
+                if updates:
+                    worksheet.batch_update([{
+                        'range': f"{k}{cell.row}",
+                        'values': [[v]]
+                    } for k, v in updates.items()])
+            else:    # Создаем новую запись
+                worksheet.append_row([user_id, user_name, role])
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error saving user info: {e}")
+            return False
+
+    def get_user_data(self, user_id: int) -> dict:
+        """Получает все данные пользователя по ID"""
+        try:
+            worksheet = self._get_or_create_users_worksheet()
+            records = worksheet.get_all_records()
+            
+            for record in records:
+                if str(record.get("user_id")) == str(user_id):
+                    return record
+            return {}
+        except Exception as e:
+            logger.error(f"Ошибка при получении данных пользователя: {e}")
+            return {}
+
+    def save_user_data(self, user_data: dict) -> bool:
+        """Сохраняет или обновляет данные пользователя"""
+        try:
+            worksheet = self._get_or_create_users_worksheet()
+            records = worksheet.get_all_records()
+            user_id = str(user_data["user_id"])
+            
+            # Ищем существующую запись
+            row_num = None
+            for i, record in enumerate(records, start=2):
+                if str(record.get("user_id")) == user_id:
+                    row_num = i
+                    break
+            
+            # Подготавливаем данные для записи
+            data_to_save = [user_id, user_data.get("user_name", "")]
+            
+            if row_num:
+                # Обновляем существующую запись
+                worksheet.update(f"A{row_num}:B{row_num}", [data_to_save])
+            else:
+                # Добавляем новую запись
+                worksheet.append_row(data_to_save)
+            
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка при сохранении данных пользователя: {e}")
+            return False
