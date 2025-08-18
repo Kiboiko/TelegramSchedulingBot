@@ -32,10 +32,10 @@ BOOKINGS_FILE = "bookings.json"
 
 BOOKING_TYPES = ["Тип1"]
 SUBJECTS = {
-    "math": "Математика",
-    "inf": "Информатика",
-    "rus": "Русский язык",
-    "phys": "Физика"
+    "1": "Математика",
+    "2": "Физика",
+    "3": "Информатика",
+    "4": "Русский язык"
 }
 
 
@@ -408,7 +408,6 @@ def generate_subjects_keyboard(selected_subjects=None, is_teacher=False):
         builder.adjust(2)
 
     return builder.as_markup()
-
 
 main_menu = ReplyKeyboardMarkup(
     keyboard=[

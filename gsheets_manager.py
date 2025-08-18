@@ -13,6 +13,7 @@ class GoogleSheetsManager:
         self.spreadsheet_id = spreadsheet_id
         self.client = None
         self.spreadsheet = None
+        self.qual_map = {}
 
     def connect(self):
         """Устанавливает соединение с Google Sheets API"""
@@ -25,11 +26,25 @@ class GoogleSheetsManager:
                 self.credentials_file, scope)
             self.client = gspread.authorize(creds)
             self.spreadsheet = self.client.open_by_key(self.spreadsheet_id)
+            self._load_qualifications()
             logger.info("Успешное подключение к Google Sheets")
             return True
         except Exception as e:
             logger.error(f"Ошибка подключения: {e}")
             return False
+
+    def _load_qualifications(self):
+        """Загружает соответствия предметов из листа Квалификации"""
+        try:
+            worksheet = self.spreadsheet.worksheet("Квалификации")
+            data = worksheet.get_all_values()
+
+            self.qual_map = {}
+            for row in data:
+                if len(row) >= 2 and row[0].strip().isdigit():
+                    self.qual_map[row[1].strip().lower()] = row[0].strip()
+        except Exception as e:
+            logger.error(f"Ошибка загрузки квалификаций: {e}")
 
     def format_date(self, date_str: str) -> str:
         """Форматирует дату из YYYY-MM-DD в DD.MM.YYYY"""
@@ -58,11 +73,9 @@ class GoogleSheetsManager:
         try:
             logger.info(f"Начато обновление Google Sheets. Всего броней: {len(bookings)}")
 
-            # Разделяем данные
             teachers = [b for b in bookings if b.get('user_role') == 'teacher']
             students = [b for b in bookings if b.get('user_role') == 'student']
 
-            # Очищаем и обновляем каждый лист
             success = True
             if not self._update_sheet('Преподаватели', teachers, is_teacher=True):
                 success = False
@@ -83,22 +96,12 @@ class GoogleSheetsManager:
             if not worksheet:
                 return False
 
-            # Фиксированные даты учебного года (2025-2026)
             start_date = datetime(2025, 9, 1)
             end_date = datetime(2026, 1, 4)
-
-            # Генерируем и форматируем даты
             formatted_dates = self._generate_formatted_dates(start_date, end_date)
-
-            # Полностью очищаем и пересоздаем структуру
             self._ensure_sheet_structure(worksheet, formatted_dates)
-
-            # Формируем данные для вставки
             records = self._prepare_records(bookings, formatted_dates, is_teacher)
-
-            # Вставляем данные
             self._update_worksheet_data(worksheet, records, formatted_dates)
-
             return True
         except Exception as e:
             logger.error(f"Ошибка при обновлении листа '{sheet_name}': {e}")
@@ -142,10 +145,10 @@ class GoogleSheetsManager:
         """Подготавливает данные для вставки"""
         records = {}
         subject_mapping = {
-            'math': 'мат',
-            'inf': 'инф',
-            'rus': 'рус',
-            'phys': 'физ'
+            'math': 'математика',
+            'inf': 'информатика',
+            'rus': 'русский язык',
+            'phys': 'физика'
         }
 
         for booking in bookings:
@@ -157,13 +160,15 @@ class GoogleSheetsManager:
             date = self.format_date(booking['date'])
 
             if is_teacher:
-                subjects = [subject_mapping.get(subj, subj)
-                            for subj in booking.get('subjects', [])]
+                subjects = []
+                for subj in booking.get('subjects', []):
+                    full_name = subject_mapping.get(subj, subj)
+                    subjects.append(self.qual_map.get(full_name.lower(), subj))
                 subject_str = ', '.join(subjects)
                 key = f"{user_id}_{name}"
             else:
-                subject_str = subject_mapping.get(
-                    booking.get('subject', ''), booking.get('subject', ''))
+                full_name = subject_mapping.get(booking.get('subject', ''), booking.get('subject', ''))
+                subject_str = self.qual_map.get(full_name.lower(), booking.get('subject', ''))
                 key = f"{user_id}_{name}_{subject_str}"
 
             if key not in records:
@@ -203,10 +208,7 @@ class GoogleSheetsManager:
                     row.extend(['', ''])
             rows.append(row)
 
-        # Полностью очищаем старые данные
         worksheet.batch_clear(["A2:Z1000"])
-
-        # Вставляем новые данные
         if rows:
             worksheet.update(f"A2:{gspread.utils.rowcol_to_a1(len(rows) + 1, len(rows[0]))}", rows)
 
@@ -217,17 +219,17 @@ class GoogleSheetsManager:
             worksheet = self.spreadsheet.worksheet(sheet_name)
             data = worksheet.get_all_values()
 
-            if len(data) < 2:  # Только заголовки
+            if len(data) < 2:
                 return []
 
             headers = data[0]
             bookings = []
+            reverse_qual_map = {v: k for k, v in self.qual_map.items()}
 
             for row in data[1:]:
-                if not row or not row[0]:  # Пропускаем пустые строки
+                if not row or not row[0]:
                     continue
 
-                # Безопасное получение ID
                 try:
                     user_id = int(row[0]) if row[0].strip() else None
                 except ValueError:
@@ -236,7 +238,6 @@ class GoogleSheetsManager:
                 user_name = row[1] if len(row) > 1 else ""
                 subject = row[2] if len(row) > 2 else ""
 
-                # Обрабатываем даты и времена
                 for i in range(3, len(row), 2):
                     if i + 1 >= len(row):
                         break
@@ -249,7 +250,6 @@ class GoogleSheetsManager:
                         continue
 
                     try:
-                        # Преобразуем дату из DD.MM.YYYY в YYYY-MM-DD
                         date_obj = datetime.strptime(date_header, "%d.%m.%Y")
                         date_str = date_obj.strftime("%Y-%m-%d")
 
@@ -264,10 +264,20 @@ class GoogleSheetsManager:
                         }
 
                         if is_teacher:
-                            booking["subjects"] = [s.strip() for s in subject.split(",")] if subject else []
+                            subjects = []
+                            for subj in subject.split(","):
+                                subj = subj.strip()
+                                if subj in reverse_qual_map:
+                                    subjects.append(reverse_qual_map[subj])
+                                else:
+                                    subjects.append(subj)
+                            booking["subjects"] = subjects
                             booking["booking_type"] = "Тип1"
                         else:
-                            booking["subject"] = subject
+                            if subject in reverse_qual_map:
+                                booking["subject"] = reverse_qual_map[subject]
+                            else:
+                                booking["subject"] = subject
                             booking["booking_type"] = "Тип1"
 
                         bookings.append(booking)
@@ -283,20 +293,16 @@ class GoogleSheetsManager:
     def sync_from_gsheets_to_json(self, storage):
         """Синхронизирует данные из Google Sheets в JSON хранилище"""
         try:
-            # Получаем данные из обеих таблиц
             teacher_bookings = self.get_bookings_from_sheet("Преподаватели", is_teacher=True)
             student_bookings = self.get_bookings_from_sheet("Ученики", is_teacher=False)
 
-            # Объединяем и обновляем хранилище
             all_bookings = teacher_bookings + student_bookings
 
-            # Используем replace_all_bookings вместо save
             if hasattr(storage, 'replace_all_bookings'):
                 storage.replace_all_bookings(all_bookings)
                 logger.info(f"Успешно синхронизировано {len(all_bookings)} записей из Google Sheets в JSON")
                 return True
             else:
-                # Fallback для обратной совместимости
                 storage.save(all_bookings, sync_to_gsheets=False)
                 logger.warning("Использован fallback метод save вместо replace_all_bookings")
                 return True
