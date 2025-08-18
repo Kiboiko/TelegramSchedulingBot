@@ -344,39 +344,41 @@ def generate_confirmation():
     return builder.as_markup()
 
 
-def generate_booking_list(user_id):
-    """Генерирует список бронирований пользователя с сортировкой по дате и времени"""
+def generate_booking_list(user_id: int):
     bookings = load_bookings()
     user_bookings = [b for b in bookings if b.get("user_id") == user_id]
-
+    
     if not user_bookings:
         return None
-
-    def get_sort_key(booking):
-        booking_date = booking.get('date')
-        if isinstance(booking_date, str):
-            booking_date = datetime.strptime(booking_date, "%Y-%m-%d").date()
-        time_obj = datetime.strptime(booking.get('start_time', '00:00'), "%H:%M").time()
-        return (booking_date, time_obj)
-
-    user_bookings.sort(key=get_sort_key)
-
-    builder = InlineKeyboardBuilder()
+    
+    # Группируем по роли для удобства
+    bookings_by_role = {}
     for booking in user_bookings:
-        booking_date = booking.get('date')
-        if isinstance(booking_date, str):
-            booking_date = datetime.strptime(booking_date, "%Y-%m-%d").date()
-
-        merged_note = " (объединено)" if booking.get('merged', False) else ""
+        role = booking.get("user_role", "unknown")
+        if role not in bookings_by_role:
+            bookings_by_role[role] = []
+        bookings_by_role[role].append(booking)
+    
+    builder = InlineKeyboardBuilder()
+    
+    for role, role_bookings in bookings_by_role.items():
+        role_name = "Преподаватель" if role == "teacher" else "Ученик"
         builder.row(types.InlineKeyboardButton(
-            text=f"{booking.get('user_role', '')}{merged_note} {booking_date.strftime('%d.%m.%Y')} {booking.get('start_time', '')}-{booking.get('end_time', '')} (ID: {booking.get('id', '')})",
-            callback_data=f"booking_info_{booking.get('id', '')}"
+            text=f"--- {role_name} ---",
+            callback_data="ignore"
         ))
-
+        
+        for booking in sorted(role_bookings, key=lambda x: (x.get("date"), x.get("start_time"))):
+            builder.row(types.InlineKeyboardButton(
+                text=f"{booking.get('date')} {booking.get('start_time')}-{booking.get('end_time')}",
+                callback_data=f"booking_info_{booking.get('id')}"
+            ))
+    
     builder.row(types.InlineKeyboardButton(
         text="🔙 Назад",
         callback_data="back_to_menu"
     ))
+    
     return builder.as_markup()
 
 
@@ -421,11 +423,21 @@ main_menu = ReplyKeyboardMarkup(
 
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
-    await message.answer(
-        "Добро пожаловать в систему бронирования!\n"
-        "Используйте кнопки ниже для навигации:",
-        reply_markup=main_menu
-    )
+    # Проверяем, есть ли уже ФИО пользователя
+    user_name = storage.get_user_name(message.from_user.id)
+    
+    if user_name:
+        await message.answer(
+            f"С возвращением, {user_name}!\n"
+            "Используйте кнопки ниже для навигации:",
+            reply_markup=main_menu
+        )
+    else:
+        await message.answer(
+            "Добро пожаловать в систему бронирования!\n"
+            "Используйте кнопки ниже для навигации:",
+            reply_markup=main_menu
+        )
 
 
 @dp.message(Command("help"))
@@ -446,51 +458,102 @@ async def cmd_help(message: types.Message):
     )
 
 
+async def check_user_profile(user_id: int) -> bool:
+    """Проверяет, полностью ли заполнен профиль"""
+    name = storage.get_user_name(user_id)
+    role = storage.get_user_role(user_id)
+    return bool(name) and bool(role)
+
+# Модифицированный обработчик команды /book
+async def ensure_user_name(user_id: int) -> str:
+    """Проверяет и возвращает сохраненное ФИО"""
+    return storage.get_user_name(user_id)
+
 @dp.message(F.text == "📅 Забронировать время")
 @dp.message(Command("book"))
 async def start_booking(message: types.Message, state: FSMContext):
-    builder = InlineKeyboardBuilder()
-    builder.button(text="👨‍🎓 Я ученик", callback_data="role_student")
-    builder.button(text="👨‍🏫 Я преподаватель", callback_data="role_teacher")
-
-    await message.answer(
-        "Перед началом бронирования, пожалуйста, укажите вашу роль:",
-        reply_markup=builder.as_markup()
-    )
-    await state.set_state(BookingStates.SELECT_ROLE)
+    user_id = message.from_user.id
+    user_name = await ensure_user_name(user_id)
+    
+    if user_name:
+        await state.update_data(user_name=user_name)
+        # Всегда запрашиваем роль при новом бронировании
+        builder = InlineKeyboardBuilder()
+        builder.button(text="👨‍🎓 Как ученик", callback_data="role_student")
+        builder.button(text="👨‍🏫 Как преподаватель", callback_data="role_teacher")
+        await message.answer(
+            f"{user_name}, выберите роль для этого бронирования:",
+            reply_markup=builder.as_markup()
+        )
+        await state.set_state(BookingStates.SELECT_ROLE)
+    else:
+        # Если ФИО нет, начинаем с ввода имени
+        await message.answer("Введите ваше полное ФИО:")
+        await state.set_state(BookingStates.INPUT_NAME)
 
 
 @dp.callback_query(F.data.startswith("role_"))
 async def process_role_selection(callback: types.CallbackQuery, state: FSMContext):
     role = callback.data.split("_")[1]
     await state.update_data(user_role=role)
-
-    await callback.message.edit_text("Введите ваше полное ФИО:")
-    await state.set_state(BookingStates.INPUT_NAME)
-    await callback.answer()
-
-
-@dp.message(BookingStates.INPUT_NAME)
-async def process_name(message: types.Message, state: FSMContext):
-    if len(message.text.split()) < 2:
-        await message.answer("Пожалуйста, введите полное ФИО (минимум имя и фамилию)")
-        return
-
-    await state.update_data(user_name=message.text)
+    
+    # Сохраняем роль только для текущей сессии
     data = await state.get_data()
-
-    if data['user_role'] == 'teacher':
-        await message.answer(
+    user_id = callback.from_user.id
+    storage.save_user_info(user_id, None, role)  # Обновляем только роль
+    
+    if role == 'teacher':
+        await callback.message.edit_text(
             "Выберите предметы, которые вы преподаете:",
             reply_markup=generate_subjects_keyboard(is_teacher=True)
         )
         await state.set_state(BookingStates.TEACHER_SUBJECTS)
     else:
-        await message.answer(
+        await callback.message.edit_text(
             "Выберите предмет для занятия:",
             reply_markup=generate_subjects_keyboard()
         )
         await state.set_state(BookingStates.SELECT_SUBJECT)
+    await callback.answer()
+
+async def ensure_user_data(message: types.Message, state: FSMContext):
+    """Проверяет и запрашивает недостающие данные пользователя"""
+    user_id = message.from_user.id
+    user_data = storage.get_user_data(user_id)
+    
+    # Если ФИО уже есть, используем его
+    if user_data.get("user_name"):
+        await state.update_data(user_name=user_data["user_name"])
+        return True
+    
+    # Если ФИО нет, запрашиваем его
+    await message.answer("Введите ваше полное ФИО:")
+    await state.set_state(BookingStates.INPUT_NAME)
+    return False
+
+
+@dp.message(BookingStates.INPUT_NAME)
+async def process_name(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    user_name = message.text.strip()
+    
+    if len(user_name.split()) < 2:
+        await message.answer("Пожалуйста, введите полное ФИО (минимум имя и фамилию)")
+        return
+    
+    # Сохраняем имя без роли
+    storage.save_user_info(user_id, user_name)
+    await state.update_data(user_name=user_name)
+    
+    # Запрашиваем роль для текущего бронирования
+    builder = InlineKeyboardBuilder()
+    builder.button(text="👨‍🎓 Как ученик", callback_data="role_student")
+    builder.button(text="👨‍🏫 Как преподаватель", callback_data="role_teacher")
+    await message.answer(
+        "Выберите роль для этого бронирования:",
+        reply_markup=builder.as_markup()
+    )
+    await state.set_state(BookingStates.SELECT_ROLE)
 
 
 @dp.callback_query(BookingStates.TEACHER_SUBJECTS, F.data.startswith("subject_"))
@@ -960,11 +1023,27 @@ async def on_startup():
     # Принудительная синхронизация при старте
     if gsheets:
         try:
-            bookings = storage.load()
-            gsheets.update_all_sheets(bookings)
-            logger.info("Initial sync with Google Sheets completed")
+            worksheet = gsheets._get_or_create_users_worksheet()
+            records = worksheet.get_all_records()
+            
+            # Собираем уникальные user_id
+            unique_users = {}
+            duplicates = []
+            
+            for i, record in enumerate(records, start=2):
+                user_id = str(record.get("user_id"))
+                if user_id in unique_users:
+                    duplicates.append(i)
+                else:
+                    unique_users[user_id] = record
+            
+            # Удаляем дубликаты (с конца, чтобы не сбивались номера строк)
+            for row_num in sorted(duplicates, reverse=True):
+                worksheet.delete_rows(row_num)
+            
+            logger.info(f"Удалено {len(duplicates)} дубликатов пользователей")
         except Exception as e:
-            logger.error(f"Initial sync failed: {e}")
+            logger.error(f"Ошибка при очистке дубликатов: {e}")
 
 
 async def sync_from_gsheets_background(storage):

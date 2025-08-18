@@ -130,3 +130,61 @@ class JSONStorage:
                 json.dump(valid_bookings, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.error(f"Ошибка при сохранении данных: {e}")
+
+    def get_user_name(self, user_id: int) -> str:
+        """Получает ФИО с гарантией отсутствия дубликатов"""
+        if not hasattr(self, 'gsheets') or not self.gsheets:
+            return ""
+        
+        # Двойная проверка через API и кеширование
+        name = self.gsheets.get_user_name(user_id)
+        return name if name else ""
+
+    def save_user_name(self, user_id: int, user_name: str) -> bool:
+        """Сохраняет ФИО с защитой от дублирования"""
+        if not hasattr(self, 'gsheets') or not self.gsheets:
+            return False
+        
+        current_name = self.get_user_name(user_id)
+        if current_name and current_name == user_name:
+            return True  # Уже сохранено
+        
+        return self.gsheets.save_user_name(user_id, user_name)
+
+    def save_user_data(self, user_data: dict) -> bool:
+        """Сохраняет данные пользователя в Google Sheets"""
+        if hasattr(self, 'gsheets') and self.gsheets:
+            return self.gsheets.save_user_data(user_data)
+        return False
+    
+    def save_user_info(self, user_id: int, user_name: str = None, role: str = None) -> bool:
+        """Сохраняет информацию о пользователе в Google Sheets"""
+        if not hasattr(self, 'gsheets') or not self.gsheets:
+            return False
+        
+        try:
+            # Получаем текущие данные пользователя
+            current_data = self.gsheets.get_user_data(user_id)
+            
+            # Обновляем только переданные поля
+            if user_name is not None:
+                current_data['user_name'] = user_name
+            if role is not None:
+                current_data['role'] = role
+            
+            # Сохраняем обновленные данные
+            return self.gsheets.save_user_data(current_data)
+        except Exception as e:
+            logger.error(f"Error saving user info: {e}")
+            return False
+
+    def get_user_data(self, user_id: int) -> dict:
+        """Получает данные пользователя из Google Sheets"""
+        if not hasattr(self, 'gsheets') or not self.gsheets:
+            return {}
+        
+        try:
+            return self.gsheets.get_user_data(user_id) or {}
+        except Exception as e:
+            logger.error(f"Error getting user data: {e}")
+            return {}
