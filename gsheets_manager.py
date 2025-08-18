@@ -99,9 +99,9 @@ class GoogleSheetsManager:
             start_date = datetime(2025, 9, 1)
             end_date = datetime(2026, 1, 4)
             formatted_dates = self._generate_formatted_dates(start_date, end_date)
-            self._ensure_sheet_structure(worksheet, formatted_dates)
+            self._ensure_sheet_structure(worksheet, formatted_dates, is_teacher)
             records = self._prepare_records(bookings, formatted_dates, is_teacher)
-            self._update_worksheet_data(worksheet, records, formatted_dates)
+            self._update_worksheet_data(worksheet, records, formatted_dates, is_teacher)
             return True
         except Exception as e:
             logger.error(f"Ошибка при обновлении листа '{sheet_name}': {e}")
@@ -132,13 +132,15 @@ class GoogleSheetsManager:
             current_date += timedelta(days=1)
         return dates
 
-    def _ensure_sheet_structure(self, worksheet, formatted_dates: List[str]):
+    def _ensure_sheet_structure(self, worksheet, formatted_dates: List[str], is_teacher: bool):
         """Создает структуру листа заново"""
-        new_headers = ['ID', 'Имя', 'Предмет'] + [
-            date for date in formatted_dates for _ in (0, 1)
-        ]
+        headers = ['ID', 'Имя', 'Предмет']
+        if is_teacher:
+            headers.append('Приоритет')  # Добавляем столбец Приоритет для преподавателей
+
+        headers += [date for date in formatted_dates for _ in (0, 1)]
         worksheet.clear()
-        worksheet.append_row(new_headers)
+        worksheet.append_row(headers)
 
     def _prepare_records(self, bookings: List[Dict[str, Any]],
                          formatted_dates: List[str], is_teacher: bool) -> Dict[str, Any]:
@@ -165,7 +167,8 @@ class GoogleSheetsManager:
                     full_name = subject_mapping.get(subj, subj)
                     subjects.append(self.qual_map.get(full_name.lower(), subj))
                 subject_str = ', '.join(subjects)
-                key = f"{user_id}_{name}"
+                priority = str(booking.get('priority', ''))
+                key = f"{user_id}_{name}_{priority}"
             else:
                 full_name = subject_mapping.get(booking.get('subject', ''), booking.get('subject', ''))
                 subject_str = self.qual_map.get(full_name.lower(), booking.get('subject', ''))
@@ -178,6 +181,8 @@ class GoogleSheetsManager:
                     'subject': subject_str,
                     'bookings': {}
                 }
+                if is_teacher:
+                    records[key]['priority'] = priority
 
             if date in formatted_dates:
                 records[key]['bookings'][date] = {
@@ -188,7 +193,7 @@ class GoogleSheetsManager:
         return records
 
     def _update_worksheet_data(self, worksheet, records: Dict[str, Any],
-                               formatted_dates: List[str]):
+                               formatted_dates: List[str], is_teacher: bool):
         """Вставляет данные в лист"""
         if not records:
             worksheet.batch_clear(["A2:Z1000"])
@@ -198,6 +203,9 @@ class GoogleSheetsManager:
         rows = []
         for record in records.values():
             row = [record['id'], record['name'], record['subject']]
+            if is_teacher:
+                row.append(record.get('priority', ''))
+
             for date in formatted_dates:
                 if date in record['bookings']:
                     row.extend([
@@ -237,8 +245,11 @@ class GoogleSheetsManager:
 
                 user_name = row[1] if len(row) > 1 else ""
                 subject = row[2] if len(row) > 2 else ""
+                priority = row[3] if is_teacher and len(row) > 3 else ""
 
-                for i in range(3, len(row), 2):
+                start_col = 4 if is_teacher else 3  # Для преподавателей начинаем с колонки E
+
+                for i in range(start_col, len(row), 2):
                     if i + 1 >= len(row):
                         break
 
@@ -273,6 +284,7 @@ class GoogleSheetsManager:
                                     subjects.append(subj)
                             booking["subjects"] = subjects
                             booking["booking_type"] = "Тип1"
+                            booking["priority"] = priority
                         else:
                             if subject in reverse_qual_map:
                                 booking["subject"] = reverse_qual_map[subject]

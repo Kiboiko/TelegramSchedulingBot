@@ -121,6 +121,10 @@ class JSONStorage:
                 booking['id'] += 1
             used_ids.add(booking['id'])
 
+            # Сохраняем приоритет только для преподавателей
+            if booking.get('user_role') == 'teacher' and 'priority' not in booking:
+                booking['priority'] = ''
+
         try:
             with open(self.file_path, 'w', encoding='utf-8') as f:
                 json.dump(valid_bookings, f, ensure_ascii=False, indent=2)
