@@ -851,7 +851,43 @@ async def show_booking_info(callback: types.CallbackQuery):
             await callback.answer("Бронирование не найдено", show_alert=True)
             return
 
-        # Остальной код обработчика...
+        # Формируем текст сообщения
+        role_text = "👨🎓 Ученик" if booking.get('user_role') == 'student' else "👨🏫 Преподаватель"
+        
+        # Обрабатываем дату
+        booking_date = booking.get('date')
+        if isinstance(booking_date, str):
+            try:
+                booking_date = datetime.strptime(booking_date, "%Y-%m-%d").strftime("%d.%m.%Y")
+            except ValueError:
+                booking_date = "Неизвестно"
+
+        message_text = (
+            f"📋 Информация о бронировании:\n\n"
+            f"🔹 {role_text}\n"
+            f"📅 Дата: {booking_date}\n"
+            f"⏰ Время: {booking.get('start_time', '?')} - {booking.get('end_time', '?')}\n"
+        )
+
+        # Добавляем информацию о предметах
+        if booking.get('user_role') == 'teacher':
+            subjects = booking.get('subjects', [])
+            subjects_text = ", ".join([SUBJECTS.get(subj, subj) for subj in subjects])
+            message_text += f"📚 Предметы: {subjects_text}\n"
+        else:
+            subject = booking.get('subject', 'Неизвестно')
+            message_text += f"📚 Предмет: {SUBJECTS.get(subject, subject)}\n"
+
+        # Добавляем тип бронирования
+        message_text += f"🏷 Тип: {booking.get('booking_type', 'Тип1')}\n"
+
+        # Отправляем сообщение с кнопками действий
+        await callback.message.edit_text(
+            message_text,
+            reply_markup=generate_booking_actions(booking_id)
+        )
+        await callback.answer()
+
     except ValueError:
         await callback.answer("❌ Неверный формат ID бронирования", show_alert=True)
     except Exception as e:
