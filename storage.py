@@ -140,16 +140,23 @@ class JSONStorage:
         name = self.gsheets.get_user_name(user_id)
         return name if name else ""
 
-    def save_user_name(self, user_id: int, user_name: str) -> bool:
-        """Сохраняет ФИО с защитой от дублирования"""
+    def get_user_roles(self, user_id: int) -> List[str]:
+        """Получает роли пользователя из Google Sheets"""
+        if not hasattr(self, 'gsheets') or not self.gsheets:
+            return []
+        return self.gsheets.get_user_roles(user_id)
+
+    def has_user_roles(self, user_id: int) -> bool:
+        """Проверяет, есть ли у пользователя назначенные роли"""
         if not hasattr(self, 'gsheets') or not self.gsheets:
             return False
-        
-        current_name = self.get_user_name(user_id)
-        if current_name and current_name == user_name:
-            return True  # Уже сохранено
-        
-        return self.gsheets.save_user_name(user_id, user_name)
+        return self.gsheets.has_user_roles(user_id)
+
+    def save_user_name(self, user_id: int, user_name: str) -> bool:
+        """Сохраняет ФИО пользователя"""
+        if not hasattr(self, 'gsheets') or not self.gsheets:
+            return False
+        return self.gsheets.save_user_info(user_id, user_name)
 
     def save_user_data(self, user_data: dict) -> bool:
         """Сохраняет данные пользователя в Google Sheets"""
@@ -179,14 +186,33 @@ class JSONStorage:
             return False
 
     def get_user_data(self, user_id: int) -> dict:
-        """Получает данные пользователя из Google Sheets"""
+        """Получает все данные пользователя по ID"""
         if not hasattr(self, 'gsheets') or not self.gsheets:
             return {}
         
         try:
-            return self.gsheets.get_user_data(user_id) or {}
+            worksheet = self.gsheets._get_or_create_users_worksheet()
+            records = worksheet.get_all_records()
+
+            for record in records:
+                # Преобразуем user_id к строке для сравнения
+                record_user_id = str(record.get("user_id", ""))
+                if record_user_id == str(user_id):
+                    # Преобразуем все значения в строки и обрабатываем предметы
+                    result = {}
+                    for key, value in record.items():
+                        if value is None:
+                            result[key] = ""
+                        else:
+                            result[key] = str(value)
+                    
+                    # Обрабатываем предметы преподавателя
+                    if 'teacher_subjects' in result and result['teacher_subjects']:
+                        result['subjects'] = [subj.strip() for subj in result['teacher_subjects'].split(',') if subj.strip()]
+                    return result
+            return {}
         except Exception as e:
-            logger.error(f"Error getting user data: {e}")
+            logger.error(f"Ошибка при получении данных пользователя: {e}")
             return {}
         
     def has_booking_on_date(self, user_id: int, date: str, role: str, subject: str = None) -> bool:
@@ -209,3 +235,37 @@ class JSONStorage:
         except Exception as e:
             logger.error(f"Error checking bookings: {e}")
             return False
+        
+    def get_teacher_subjects(self, user_id: int) -> List[str]:
+        """Получает предметы преподавателя из Google Sheets"""
+        if not hasattr(self, 'gsheets') or not self.gsheets:
+            return []
+        return self.gsheets.get_teacher_subjects(user_id)
+    
+    def has_time_conflict(self, user_id: int, date: str, time_start: str, time_end: str, exclude_id: int = None) -> bool:
+        """Проверяет пересечение временных интервалов для пользователя"""
+        bookings = self.load()
+        
+        def time_to_minutes(t):
+            h, m = map(int, t.split(':'))
+            return h * 60 + m
+
+        new_start = time_to_minutes(time_start)
+        new_end = time_to_minutes(time_end)
+
+        for booking in bookings:
+            if (booking.get('user_id') == user_id and
+                booking.get('date') == date and
+                booking.get('user_role') == 'student'):
+                
+                if exclude_id and booking.get('id') == exclude_id:
+                    continue
+
+                existing_start = time_to_minutes(booking.get('start_time', '00:00'))
+                existing_end = time_to_minutes(booking.get('end_time', '00:00'))
+
+                # Проверяем пересечение временных интервалов
+                if not (new_end <= existing_start or new_start >= existing_end):
+                    return True
+                    
+        return False
