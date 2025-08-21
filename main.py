@@ -37,6 +37,17 @@ SUBJECTS = {
     "3": "Информатика",
     "4": "Русский язык"
 }
+ADMIN_IDS = [973231400, 1180878673]
+USER_COMMANDS = [
+    types.BotCommand(command="book", description="📅 Забронировать время"),
+    types.BotCommand(command="my_bookings", description="📋 Мои бронирования"),
+    types.BotCommand(command="my_role", description="👤 Моя роль"),
+    types.BotCommand(command="help", description="❓ Помощь")
+]
+
+ADMIN_COMMANDS = USER_COMMANDS + [
+    types.BotCommand(command="schedule", description="📊 Составить расписание")
+]
 
 
 class BookingStates(StatesGroup):
@@ -457,34 +468,80 @@ def generate_subjects_keyboard(selected_subjects=None, is_teacher=False):
 
     return builder.as_markup()
 
-main_menu = ReplyKeyboardMarkup(
-    keyboard=[
+# main_menu = ReplyKeyboardMarkup(
+#     keyboard=[
+#         [KeyboardButton(text="📅 Забронировать время")],
+#         [KeyboardButton(text="📋 Мои бронирования"), KeyboardButton(text="❌ Отменить бронь")]
+#     ],
+#     resize_keyboard=True
+# )
+
+
+async def set_user_commands(user_id: int):
+    """Устанавливает меню команд для пользователя"""
+    if user_id in ADMIN_IDS:
+        await bot.set_my_commands(ADMIN_COMMANDS, scope=types.BotCommandScopeChat(chat_id=user_id))
+    else:
+        await bot.set_my_commands(USER_COMMANDS, scope=types.BotCommandScopeChat(chat_id=user_id))
+
+
+def generate_main_menu(user_id: int) -> ReplyKeyboardMarkup:
+    """Генерирует главное меню с учетом прав пользователя"""
+    keyboard = [
         [KeyboardButton(text="📅 Забронировать время")],
         [KeyboardButton(text="📋 Мои бронирования"), KeyboardButton(text="❌ Отменить бронь")]
-    ],
-    resize_keyboard=True
-)
+    ]
+
+    # Добавляем кнопку админа только для указанных ID
+    if user_id in ADMIN_IDS:
+        keyboard.append([KeyboardButton(text="📊 Составить расписание")])
+
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
+
+@dp.message.middleware()
+async def update_menu_middleware(handler, event, data):
+    user_id = event.from_user.id
+    await set_user_commands(user_id)
+    return await handler(event, data)
 
 
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
-    # Проверяем, есть ли уже ФИО пользователя
-    user_name = storage.get_user_name(message.from_user.id)
-    
+    user_id = message.from_user.id
+    user_name = storage.get_user_name(user_id)
+
+    # Устанавливаем правильное меню
+    await set_user_commands(user_id)
+
     if user_name:
         await message.answer(
             f"С возвращением, {user_name}!\n"
             "Используйте кнопки ниже для навигации:",
-            reply_markup=main_menu
+            reply_markup=generate_main_menu(user_id)
         )
     else:
         await message.answer(
             "Добро пожаловать в систему бронирования!\n"
             "Используйте кнопки ниже для навигации:",
-            reply_markup=main_menu
+            reply_markup=generate_main_menu(user_id)
         )
 
 
+@dp.message(Command("schedule"))
+@dp.message(F.text == "📊 Составить расписание")
+async def handle_schedule_button(message: types.Message):
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        await message.answer("У вас нет доступа к этой функции")
+        return
+
+    # Заглушка - кнопка есть, но функционала пока нет
+    await message.answer(
+        "Функция составления расписания в разработке 🛠️\n"
+        "Скоро здесь будет возможность автоматического распределения времени занятий.",
+        reply_markup=generate_main_menu(user_id)
+    )
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
     await message.answer(
@@ -721,7 +778,7 @@ async def cancel_time_selection_handler(callback: types.CallbackQuery, state: FS
     # Возвращаем пользователя в главное меню
     await callback.message.answer(
         "Выберите действие:",
-        reply_markup=main_menu
+        reply_markup=generate_main_menu(callback.from_user.id)
     )
     await callback.answer()
 
@@ -905,6 +962,10 @@ async def process_confirmation(callback: types.CallbackQuery, state: FSMContext)
         logger.error(f"Ошибка сохранения: {e}")
     
     await state.clear()
+    await callback.message.answer(
+        "Выберите действие:",
+        reply_markup=generate_main_menu(callback.from_user.id)
+    )
 
 
 @dp.message(F.text == "📋 Мои бронирования")
@@ -1016,7 +1077,7 @@ async def back_handler(callback: types.CallbackQuery):
         )
         await callback.message.answer(
             "Выберите действие:",
-            reply_markup=main_menu
+            reply_markup=generate_main_menu(callback.from_user.id)
         )
     else:
         keyboard = generate_booking_list(callback.from_user.id)
@@ -1104,7 +1165,7 @@ async def sync_from_gsheets_background(storage):
 async def main():
     # Инициализация при старте
     await on_startup()
-
+    await bot.set_my_commands(USER_COMMANDS)
     # Запуск фоновых задач
     asyncio.create_task(cleanup_old_bookings())
     asyncio.create_task(sync_with_gsheets())
