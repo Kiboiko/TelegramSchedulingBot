@@ -3,7 +3,7 @@ import json
 import os
 import logging
 from datetime import datetime, timedelta, date
-from aiogram import Bot, Dispatcher, types, F
+from aiogram import Bot, Dispatcher, types, F, BaseMiddleware
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
     Message,
@@ -11,7 +11,8 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     ReplyKeyboardMarkup,
-    KeyboardButton
+    KeyboardButton,
+    ReplyKeyboardRemove
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
@@ -20,6 +21,7 @@ import threading
 from gsheets_manager import GoogleSheetsManager
 from storage import JSONStorage
 from dotenv import load_dotenv
+from aiogram.types import Update
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -42,10 +44,9 @@ SUBJECTS = {
 class BookingStates(StatesGroup):
     SELECT_ROLE = State()
     INPUT_NAME = State()
-    TEACHER_SUBJECTS = State()
-    SELECT_SUBJECT = State()
+    SELECT_SUBJECT = State()  # Только для учеников
     SELECT_DATE = State()
-    SELECT_TIME_RANGE = State()  # Объединенное состояние для выбора времени
+    SELECT_TIME_RANGE = State()
     CONFIRMATION = State()
 
 
@@ -66,6 +67,74 @@ try:
 except Exception as e:
     logger.error(f"Google Sheets initialization error: {e}")
     gsheets = None
+
+
+class RoleCheckMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        # Пропускаем команду /start, /help и ввод имени
+        if isinstance(event, Message) and event.text == '/start':
+            return await handler(event, data)
+            
+            current_state = await data['state'].get_state() if data.get('state') else None
+            if current_state == BookingStates.INPUT_NAME:
+                return await handler(event, data)
+        
+        # Получаем user_id в зависимости от типа события
+        if isinstance(event, Message):
+            user_id = event.from_user.id
+        elif isinstance(event, CallbackQuery):
+            user_id = event.from_user.id
+        else:
+            # Для других типов событий пропускаем проверку
+            return await handler(event, data)
+        
+        # Проверяем роли для всех остальных сообщений
+        if not storage.has_user_roles(user_id):
+            if isinstance(event, Message):
+                await event.answer(
+                    "⏳ Ваш аккаунт находится на проверке.\n"
+                    "Обратитесь к администратору для получения доступа.",
+                    reply_markup=ReplyKeyboardRemove()
+                )
+            elif isinstance(event, CallbackQuery):
+                await event.answer(
+                    "⏳ Обратитесь к администратору для получения доступа",
+                    show_alert=True
+                )
+            return
+        
+        return await handler(event, data)
+
+# Добавление middleware
+dp.update.middleware(RoleCheckMiddleware())
+
+def has_teacher_booking_conflict(user_id, date, time_start, time_end, exclude_id=None):
+    """Проверяет конфликты бронирований только для преподавателей"""
+    bookings = storage.load()
+    
+    def time_to_minutes(t):
+        h, m = map(int, t.split(':'))
+        return h * 60 + m
+
+    new_start = time_to_minutes(time_start)
+    new_end = time_to_minutes(time_end)
+
+    for booking in bookings:
+        if (booking.get('user_id') == user_id and
+            booking.get('date') == date and
+            booking.get('user_role') == 'teacher'):  # Проверяем только для преподавателей
+            
+            if exclude_id and booking.get('id') == exclude_id:
+                continue
+
+            existing_start = time_to_minutes(booking.get('start_time', '00:00'))
+            existing_end = time_to_minutes(booking.get('end_time', '00:00'))
+
+            # Проверяем пересечение временных интервалов
+            if not (new_end <= existing_start or new_start >= existing_end):
+                return True
+                
+    return False
 
 
 def generate_booking_types():
@@ -145,33 +214,33 @@ def load_bookings():
     return valid_bookings
 
 
-def has_booking_conflict(user_id, date, time_start, time_end, subject=None, exclude_id=None):
-    """Проверяет конфликты бронирований с учетом предмета для учеников"""
-    bookings = load_bookings()
-    for booking in bookings:
-        if (booking.get('user_id') == user_id and
-            booking.get('date') == date):
+# def has_booking_conflict(user_id, date, time_start, time_end, subject=None, exclude_id=None):
+#     """Проверяет конфликты бронирований для учеников (любые предметы в одно время)"""
+#     bookings = load_bookings()
+    
+#     def time_to_minutes(t):
+#         h, m = map(int, t.split(':'))
+#         return h * 60 + m
+
+#     new_start = time_to_minutes(time_start)
+#     new_end = time_to_minutes(time_end)
+
+#     for booking in bookings:
+#         if (booking.get('user_id') == user_id and
+#             booking.get('date') == date and
+#             booking.get('user_role') == 'student'):  # Проверяем только для учеников
             
-            # Для учеников проверяем совпадение предмета - конфликт только если предмет одинаковый
-            if booking.get('user_role') == 'student' and subject:
-                if booking.get('subject') != subject:
-                    continue  # Разные предметы - не конфликтуют
-                    
-            if exclude_id and booking.get('id') == exclude_id:
-                continue
+#             if exclude_id and booking.get('id') == exclude_id:
+#                 continue
 
-            def time_to_minutes(t):
-                h, m = map(int, t.split(':'))
-                return h * 60 + m
+#             existing_start = time_to_minutes(booking.get('start_time', '00:00'))
+#             existing_end = time_to_minutes(booking.get('end_time', '00:00'))
 
-            new_start = time_to_minutes(time_start)
-            new_end = time_to_minutes(time_end)
-            existing_start = time_to_minutes(booking.get('start_time', '00:00'))
-            existing_end = time_to_minutes(booking.get('end_time', '00:00'))
-
-            if not (new_end <= existing_start or new_start >= existing_end):
-                return True
-    return False
+#             # Проверяем пересечение временных интервалов
+#             if not (new_end <= existing_start or new_start >= existing_end):
+#                 return True
+                
+#     return False
 
 
 def generate_calendar(year=None, month=None):
@@ -457,125 +526,145 @@ def generate_subjects_keyboard(selected_subjects=None, is_teacher=False):
 
     return builder.as_markup()
 
+# Основное меню (всегда видимое)
 main_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📅 Забронировать время")],
-        [KeyboardButton(text="📋 Мои бронирования"), KeyboardButton(text="❌ Отменить бронь")]
+        [KeyboardButton(text="📋 Мои бронирования")],
+        [KeyboardButton(text="👤 Моя роль")]
+    ],
+    resize_keyboard=True
+)
+
+# Меню с дополнительными опциями (в развертываемом меню)
+additional_menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="❓ Обратиться к администратору")],
+        [KeyboardButton(text="👤 Моя роль")]
+    ],
+    resize_keyboard=True
+)
+
+# Комбинированное меню для пользователей без ролей
+no_roles_menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="❓ Обратиться к администратору")]
     ],
     resize_keyboard=True
 )
 
 
+async def generate_main_menu(user_id: int) -> ReplyKeyboardMarkup:
+    """Генерирует главное меню в зависимости от наличия ролей"""
+    if not storage.has_user_roles(user_id):
+        return no_roles_menu
+    
+    return main_menu
+
+
 @dp.message(CommandStart())
-async def cmd_start(message: types.Message):
-    # Проверяем, есть ли уже ФИО пользователя
-    user_name = storage.get_user_name(message.from_user.id)
+async def cmd_start(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    user_name = storage.get_user_name(user_id)
+    
+    menu = await generate_main_menu(user_id)
     
     if user_name:
         await message.answer(
             f"С возвращением, {user_name}!\n"
             "Используйте кнопки ниже для навигации:",
-            reply_markup=main_menu
+            reply_markup=menu
         )
     else:
         await message.answer(
             "Добро пожаловать в систему бронирования!\n"
-            "Используйте кнопки ниже для навигации:",
-            reply_markup=main_menu
+            "Введите ваше полное ФИО для регистрации:",
+            reply_markup=ReplyKeyboardRemove()
         )
+        await state.set_state(BookingStates.INPUT_NAME)
+
+@dp.message(F.text == "👤 Моя роль")
+async def show_my_role(message: types.Message):
+    roles = storage.get_user_roles(message.from_user.id)
+    if roles:
+        role_text = ", ".join(["преподаватель" if role == "teacher" else "ученик" for role in roles])
+        await message.answer(f"Ваши роли: {role_text}")
+    else:
+        await message.answer("Ваши роли еще не назначены. Обратитесь к администратору.")
+
+# @dp.message(F.text == "ℹ️ Помощь")
+# async def show_help(message: types.Message):
+#     await cmd_help(message)
 
 
-@dp.message(Command("help"))
-async def cmd_help(message: types.Message):
+# @dp.message(Command("help"))
+# async def cmd_help(message: types.Message):
+#     await message.answer(
+#         "📋 Справка по боту:\n\n"
+#         "/book - начать процесс бронирования\n"
+#         " 1. Выбрать роль (ученик/преподаватель)\n"
+#         " 2. Ввести ваше ФИО\n"
+#         " 3. Выбрать предмет(ы)\n"
+#         " 4. Выбрать тип бронирования\n"
+#         " 5. Выбрать дату из календаря\n"
+#         " 6. Выбрать время начала и окончания\n"
+#         " 7. Подтвердить бронирование\n\n"
+#         "/my_bookings - показать ваши бронирования\n"
+#         "/my_role - показать вашу роль\n"
+#         "/help - показать эту справку"
+#     )
+
+
+@dp.message(F.text == "❓ Обратиться к администратору")
+async def contact_admin(message: types.Message):
     await message.answer(
-        "📋 Справка по боту:\n\n"
-        "/book - начать процесс бронирования\n"
-        " 1. Выбрать роль (ученик/преподаватель)\n"
-        " 2. Ввести ваше ФИО\n"
-        " 3. Выбрать предмет(ы)\n"
-        " 4. Выбрать тип бронирования\n"
-        " 5. Выбрать дату из календаря\n"
-        " 6. Выбрать время начала и окончания\n"
-        " 7. Подтвердить бронирование\n\n"
-        "/my_bookings - показать ваши бронирования\n"
-        "/my_role - показать вашу роль\n"
-        "/help - показать эту справку"
+        "📞 Для получения доступа к системе бронирования\n"
+        "обратитесь к администратору.\n\n"
+        "После назначения ролей вы сможете пользоваться всеми функциями бота."
     )
 
-
-async def check_user_profile(user_id: int) -> bool:
-    """Проверяет, полностью ли заполнен профиль"""
-    name = storage.get_user_name(user_id)
-    role = storage.get_user_role(user_id)
-    return bool(name) and bool(role)
-
-# Модифицированный обработчик команды /book
-async def ensure_user_name(user_id: int) -> str:
-    """Проверяет и возвращает сохраненное ФИО"""
-    return storage.get_user_name(user_id)
 
 @dp.message(F.text == "📅 Забронировать время")
 @dp.message(Command("book"))
 async def start_booking(message: types.Message, state: FSMContext):
-    # Устанавливаем тип бронирования по умолчанию
-    await state.update_data(booking_type="Тип1")
-    
     user_id = message.from_user.id
-    user_name = storage.get_user_name(user_id)
     
-    if user_name:
-        await state.update_data(user_name=user_name)
-        builder = InlineKeyboardBuilder()
-        builder.button(text="👨‍🎓 Я ученик", callback_data="role_student")
+    # Проверяем, есть ли ФИО
+    user_name = storage.get_user_name(user_id)
+    if not user_name:
+        await message.answer("Введите ваше полное ФИО:")
+        await state.set_state(BookingStates.INPUT_NAME)
+        return
+    
+    # Получаем доступные роли пользователя
+    user_roles = storage.get_user_roles(user_id)
+    if not user_roles:
+        await message.answer(
+            "⏳ Обратитесь к администратору для получения ролей",
+            reply_markup=await generate_main_menu(user_id)
+        )
+        return
+    
+    await state.update_data(user_name=user_name)
+    
+    # Показываем доступные роли
+    builder = InlineKeyboardBuilder()
+    if 'teacher' in user_roles:
         builder.button(text="👨‍🏫 Я преподаватель", callback_data="role_teacher")
+    if 'student' in user_roles:
+        builder.button(text="👨‍🎓 Я ученик", callback_data="role_student")
+    
+    if builder.buttons:
         await message.answer(
             "Выберите роль для бронирования:",
             reply_markup=builder.as_markup()
         )
         await state.set_state(BookingStates.SELECT_ROLE)
     else:
-        await message.answer("Введите ваше полное ФИО:")
-        await state.set_state(BookingStates.INPUT_NAME)
-
-
-@dp.callback_query(F.data.startswith("role_"))
-async def process_role_selection(callback: types.CallbackQuery, state: FSMContext):
-    role = callback.data.split("_")[1]
-    user_id = callback.from_user.id
-    
-    await state.update_data(user_role=role)
-    
-    if role == 'teacher':
-        await callback.message.edit_text(
-            "Вы выбрали роль преподавателя\n"
-            "Выберите предметы, которые вы преподаете:",
-            reply_markup=generate_subjects_keyboard(is_teacher=True)
+        await message.answer(
+            "❌ У вас нет доступных ролей. Обратитесь к администратору.",
+            reply_markup=await generate_main_menu(user_id)
         )
-        await state.set_state(BookingStates.TEACHER_SUBJECTS)
-    else:
-        # Для ученика сразу запрашиваем предмет
-        await callback.message.edit_text(
-            "Вы выбрали роль ученика\n"
-            "Выберите предмет для занятия:",
-            reply_markup=generate_subjects_keyboard()
-        )
-        await state.set_state(BookingStates.SELECT_SUBJECT)
-    await callback.answer()
-
-async def ensure_user_data(message: types.Message, state: FSMContext):
-    """Проверяет и запрашивает недостающие данные пользователя"""
-    user_id = message.from_user.id
-    user_data = storage.get_user_data(user_id)
-    
-    # Если ФИО уже есть, используем его
-    if user_data.get("user_name"):
-        await state.update_data(user_name=user_data["user_name"])
-        return True
-    
-    # Если ФИО нет, запрашиваем его
-    await message.answer("Введите ваше полное ФИО:")
-    await state.set_state(BookingStates.INPUT_NAME)
-    return False
 
 
 @dp.message(BookingStates.INPUT_NAME)
@@ -587,51 +676,106 @@ async def process_name(message: types.Message, state: FSMContext):
         await message.answer("Пожалуйста, введите полное ФИО (минимум имя и фамилию)")
         return
     
-    # Сохраняем имя без роли
-    storage.save_user_info(user_id, user_name)
+    # Сохраняем имя
+    storage.save_user_name(user_id, user_name)
     await state.update_data(user_name=user_name)
     
-    # Запрашиваем роль для текущего бронирования
-    builder = InlineKeyboardBuilder()
-    builder.button(text="👨‍🎓 Как ученик", callback_data="role_student")
-    builder.button(text="👨‍🏫 Как преподаватель", callback_data="role_teacher")
-    await message.answer(
-        "Выберите роль для этого бронирования:",
-        reply_markup=builder.as_markup()
-    )
-    await state.set_state(BookingStates.SELECT_ROLE)
-
-
-@dp.callback_query(BookingStates.TEACHER_SUBJECTS, F.data.startswith("subject_"))
-async def process_teacher_subjects(callback: types.CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    selected_subjects = data.get("subjects", [])
-
-    subject_id = callback.data.split("_")[1]
-    if subject_id in selected_subjects:
-        selected_subjects.remove(subject_id)
+    # Проверяем, есть ли роли
+    if storage.has_user_roles(user_id):
+        user_roles = storage.get_user_roles(user_id)
+        builder = InlineKeyboardBuilder()
+        if 'teacher' in user_roles:
+            builder.button(text="👨‍🏫 Как преподаватель", callback_data="role_teacher")
+        if 'student' in user_roles:
+            builder.button(text="👨‍🎓 Как ученик", callback_data="role_student")
+        
+        await message.answer(
+            "Выберите роль для этого бронирования:",
+            reply_markup=builder.as_markup()
+        )
+        await state.set_state(BookingStates.SELECT_ROLE)  # Исправлено здесь
     else:
-        selected_subjects.append(subject_id)
+        await message.answer(
+            "✅ Ваше ФИО сохранено!\n"
+            "⏳ Обратитесь к администратору для получения ролей.",
+            reply_markup=await generate_main_menu(user_id)
+        )
+        await state.clear()
 
-    await state.update_data(subjects=selected_subjects)
-    await callback.message.edit_reply_markup(
-        reply_markup=generate_subjects_keyboard(selected_subjects, is_teacher=True)
-    )
+
+@dp.callback_query(F.data.startswith("role_"))
+async def process_role_selection(callback: types.CallbackQuery, state: FSMContext):
+    role = callback.data.split("_")[1]
+    user_id = callback.from_user.id
+    
+    await state.update_data(user_role=role)
+    
+    if role == 'teacher':
+        # Для преподавателя получаем предметы из Google Sheets
+        teacher_subjects = storage.get_teacher_subjects(user_id)
+        
+        if not teacher_subjects:
+            await callback.answer(
+                "У вас нет назначенных предметов. Обратитесь к администратору.",
+                show_alert=True
+            )
+            return
+        
+        await state.update_data(subjects=teacher_subjects)
+        
+        # Безопасное форматирование названий предметов
+        subject_names = []
+        for subj_id in teacher_subjects:
+            subject_names.append(SUBJECTS.get(subj_id, f"Предмет {subj_id}"))
+        
+        await callback.message.edit_text(
+            f"Вы выбрали роль преподавателя\n"
+            f"Ваши предметы: {', '.join(subject_names)}\n"
+            "Теперь выберите дату:",
+            reply_markup=generate_calendar()
+        )
+        await state.set_state(BookingStates.SELECT_DATE)
+    else:
+        # Для ученика сразу запрашиваем предмет
+        await callback.message.edit_text(
+            "Вы выбрали роль ученика\n"
+            "Выберите предмет для занятия:",
+            reply_markup=generate_subjects_keyboard()
+        )
+        await state.set_state(BookingStates.SELECT_SUBJECT)
     await callback.answer()
 
 
-@dp.callback_query(BookingStates.TEACHER_SUBJECTS, F.data == "subjects_done")
-async def process_subjects_done(callback: types.CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    if not data.get("subjects"):
-        await callback.answer("Выберите хотя бы один предмет!", show_alert=True)
-        return
+# @dp.callback_query(BookingStates.TEACHER_SUBJECTS, F.data.startswith("subject_"))
+# async def process_teacher_subjects(callback: types.CallbackQuery, state: FSMContext):
+#     data = await state.get_data()
+#     selected_subjects = data.get("subjects", [])
 
-    storage.update_user_subjects(callback.from_user.id, data["subjects"])
-    await state.update_data(booking_type="Тип1")  # Устанавливаем тип по умолчанию
-    await callback.message.edit_text("Выберите дату:", reply_markup=generate_calendar())  # Пропускаем выбор типа
-    await state.set_state(BookingStates.SELECT_DATE)
-    await callback.answer()
+#     subject_id = callback.data.split("_")[1]
+#     if subject_id in selected_subjects:
+#         selected_subjects.remove(subject_id)
+#     else:
+#         selected_subjects.append(subject_id)
+
+#     await state.update_data(subjects=selected_subjects)
+#     await callback.message.edit_reply_markup(
+#         reply_markup=generate_subjects_keyboard(selected_subjects, is_teacher=True)
+#     )
+#     await callback.answer()
+
+
+# @dp.callback_query(BookingStates.TEACHER_SUBJECTS, F.data == "subjects_done")
+# async def process_subjects_done(callback: types.CallbackQuery, state: FSMContext):
+#     data = await state.get_data()
+#     if not data.get("subjects"):
+#         await callback.answer("Выберите хотя бы один предмет!", show_alert=True)
+#         return
+
+#     storage.update_user_subjects(callback.from_user.id, data["subjects"])
+#     await state.update_data(booking_type="Тип1")  # Устанавливаем тип по умолчанию
+#     await callback.message.edit_text("Выберите дату:", reply_markup=generate_calendar())  # Пропускаем выбор типа
+#     await state.set_state(BookingStates.SELECT_DATE)
+#     await callback.answer()
 
 
 @dp.callback_query(BookingStates.SELECT_SUBJECT, F.data.startswith("subject_"))
@@ -658,17 +802,6 @@ async def process_student_subject(callback: types.CallbackQuery, state: FSMConte
     await state.set_state(BookingStates.SELECT_DATE)
     await callback.answer()
 
-
-# @dp.callback_query(BookingStates.SELECT_BOOKING_TYPE, F.data.startswith("booking_type_"))
-# async def process_booking_type(callback: types.CallbackQuery, state: FSMContext):
-#     booking_type = callback.data.replace("booking_type_", "")
-#     await state.update_data(booking_type=booking_type)
-#     await callback.message.edit_text(
-#         f"Выбран тип: {booking_type}\nТеперь выберите дату:",
-#         reply_markup=generate_calendar()
-#     )
-#     await state.set_state(BookingStates.SELECT_DATE)
-#     await callback.answer()
 
 @dp.callback_query(BookingStates.SELECT_DATE, F.data.startswith("calendar_day_"))
 async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
@@ -705,7 +838,14 @@ async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
                 return
         elif role == 'teacher':
             # Для преподавателя проверяем все брони
-            if storage.has_booking_on_date(user_id, formatted_date, role):
+            bookings = storage.load()
+            has_teacher_booking = any(
+                b for b in bookings 
+                if (b.get('user_id') == user_id and 
+                    b.get('date') == formatted_date and 
+                    b.get('user_role') == 'teacher')
+            )
+            if has_teacher_booking:
                 await callback.answer(
                     f"У вас уже есть бронь на {day}.{month}.{year} в роли преподавателя",
                     show_alert=True
@@ -738,9 +878,10 @@ async def cancel_time_selection_handler(callback: types.CallbackQuery, state: FS
     await state.clear()
 
     # Возвращаем пользователя в главное меню
+    user_id = callback.from_user.id
     await callback.message.answer(
         "Выберите действие:",
-        reply_markup=main_menu
+        reply_markup=await generate_main_menu(user_id)
     )
     await callback.answer()
 
@@ -756,8 +897,7 @@ async def process_time_point(callback: types.CallbackQuery, state: FSMContext):
         await state.update_data(time_start=time_str)
 
         # Проверяем, если уже есть конец и он раньше начала
-        if data.get('time_end') and datetime.strptime(time_str, "%H:%M") >= datetime.strptime(data['time_end'],
-                                                                                              "%H:%M"):
+        if data.get('time_end') and datetime.strptime(time_str, "%H:%M") >= datetime.strptime(data['time_end'], "%H:%M"):
             await state.update_data(time_end=None)
 
         await callback.message.edit_text(
@@ -844,31 +984,44 @@ async def confirm_time_range(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(booking_type="Тип1")
 
     subject = data.get('subject') if data.get('user_role') == 'student' else None
-
+    user_id = callback.from_user.id
+    date_str = data['selected_date'].strftime("%Y-%m-%d")
+    
+    # Проверка для учеников - нет ли уже брони на этот предмет в этот день
     if data.get('user_role') == 'student' and subject:
-        user_id = callback.from_user.id
-        date_str = data['selected_date'].strftime("%Y-%m-%d")
-        
         if storage.has_booking_on_date(user_id, date_str, 'student', subject):
             await callback.answer(
-                f"У вас уже есть бронь на этот день по предмету {SUBJECTS[subject]}!",
+                f"У вас уже есть бронь на этот день по предмету {SUBJECTS.get(subject, subject)}!",
                 show_alert=True
             )
             return
     
-    # Проверка конфликтов с учетом предмета
-    if has_booking_conflict(
-        user_id=callback.from_user.id,
-        date=data['selected_date'].strftime("%Y-%m-%d"),
-        time_start=data['time_start'],
-        time_end=data['time_end'],
-        subject=subject
-    ):
-        await callback.answer(
-            "У вас уже есть бронь на это время!",
-            show_alert=True
-        )
-        return
+    # Проверка пересечений времени для учеников
+    if data.get('user_role') == 'student':
+        if storage.has_time_conflict(
+            user_id=user_id,
+            date=date_str,
+            time_start=data['time_start'],
+            time_end=data['time_end']
+        ):
+            await callback.answer(
+                "У вас уже есть бронь на это время! Временные интервалы не должны пересекаться.",
+                show_alert=True
+            )
+            return
+    else:
+        # Для преподавателей проверяем конфликты только для тех же предметов
+        if has_teacher_booking_conflict(
+            user_id=user_id,
+            date=date_str,
+            time_start=data['time_start'],
+            time_end=data['time_end']
+        ):
+            await callback.answer(
+                "У вас уже есть бронь на это время!",
+                show_alert=True
+            )
+            return
     
     # Проверка наличия всех необходимых данных
     required_fields = ['user_name', 'user_role', 'selected_date', 'time_start', 'time_end']
@@ -880,7 +1033,11 @@ async def confirm_time_range(callback: types.CallbackQuery, state: FSMContext):
     role_text = "ученик" if data['user_role'] == 'student' else "преподаватель"
     
     if data['user_role'] == 'teacher':
-        subjects_text = ", ".join(SUBJECTS[subj] for subj in data.get('subjects', []))
+        # Безопасное получение названий предметов
+        subject_names = []
+        for subj in data.get('subjects', []):
+            subject_names.append(SUBJECTS.get(subj, f"Предмет {subj}"))
+        subjects_text = ", ".join(subject_names)
     else:
         subjects_text = SUBJECTS.get(data.get('subject', ''), "Не указан")
 
@@ -909,7 +1066,7 @@ async def process_confirmation(callback: types.CallbackQuery, state: FSMContext)
         "user_id": callback.from_user.id,
         "user_name": data['user_name'],
         "user_role": data['user_role'],
-        "booking_type": "Тип1",  # Всегда Тип1
+        "booking_type": "Тип1",
         "date": data['selected_date'].strftime("%Y-%m-%d"),
         "start_time": data['time_start'],
         "end_time": data['time_end'],
@@ -917,6 +1074,7 @@ async def process_confirmation(callback: types.CallbackQuery, state: FSMContext)
     }
     
     if data['user_role'] == 'teacher':
+        # Для преподавателя берем предметы из состояния
         booking_data["subjects"] = data.get('subjects', [])
     else:
         booking_data["subject"] = data.get('subject', '')
@@ -924,11 +1082,22 @@ async def process_confirmation(callback: types.CallbackQuery, state: FSMContext)
     # Сохраняем бронь
     try:
         booking = storage.add_booking(booking_data)
+        role_text = "преподавателя" if data['user_role'] == 'teacher' else "ученика"
+        
+        # Безопасное формирование текста предметов для сообщения
+        if data['user_role'] == 'teacher':
+            subject_names = []
+            for subj in data.get('subjects', []):
+                subject_names.append(SUBJECTS.get(subj, f"Предмет {subj}"))
+            subjects_text = f"Предметы: {', '.join(subject_names)}"
+        else:
+            subjects_text = f"Предмет: {SUBJECTS.get(data.get('subject', ''), 'Не указан')}"
+        
         await callback.message.edit_text(
-            "✅ Бронирование подтверждено!\n"
+            f"✅ Бронирование {role_text} подтверждено!\n"
             f"📅 Дата: {data['selected_date'].strftime('%d.%m.%Y')}\n"
             f"⏰ Время: {data['time_start']}-{data['time_end']}\n"
-            f"📌 Тип: ТИП1"
+            f"{subjects_text}\n"
         )
     except Exception as e:
         await callback.message.edit_text("❌ Ошибка при сохранении брони!")
@@ -950,11 +1119,12 @@ async def show_bookings(message: types.Message):
 
 @dp.message(Command("my_role"))
 async def show_role(message: types.Message):
-    role = storage.get_user_role(message.from_user.id)
-    if role:
-        await message.answer(f"Ваша роль: {'ученик' if role == 'student' else 'преподаватель'}")
+    roles = storage.get_user_roles(message.from_user.id)
+    if roles:
+        role_text = ", ".join(["преподаватель" if role == "teacher" else "ученик" for role in roles])
+        await message.answer(f"Ваши роли: {role_text}")
     else:
-        await message.answer("Ваша роль еще не определена. Используйте /book чтобы установить роль.")
+        await message.answer("Ваши роли еще не назначены. Обратитесь к администратору.")
 
 
 @dp.message(F.text == "❌ Отменить бронь")
@@ -964,7 +1134,7 @@ async def start_cancel_booking(message: types.Message):
         await message.answer("У вас нет активных бронирований для отмены")
         return
 
-    await message.answer("Выберите бронирование для отмены:", reply_markup=keyboard)
+    await message.answer("Выберите бронирование для отмена:", reply_markup=keyboard)
 
 
 @dp.callback_query(F.data.startswith("booking_info_"))
@@ -995,7 +1165,7 @@ async def show_booking_info(callback: types.CallbackQuery):
                 booking_date = "Неизвестно"
 
         message_text = (
-            f"📋 Информация о бронировании:\n\n"
+            f"📋 Информация о бронирование:\n\n"
             f"🔹 {role_text}\n"
             f"📅 Дата: {booking_date}\n"
             f"⏰ Время: {booking.get('start_time', '?')} - {booking.get('end_time', '?')}\n"
@@ -1039,6 +1209,9 @@ async def cancel_booking(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.in_(["back_to_menu", "back_to_bookings"]))
 async def back_handler(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    menu = await generate_main_menu(user_id)
+    
     if callback.data == "back_to_menu":
         await callback.message.edit_text(
             "Главное меню:",
@@ -1046,10 +1219,10 @@ async def back_handler(callback: types.CallbackQuery):
         )
         await callback.message.answer(
             "Выберите действие:",
-            reply_markup=main_menu
+            reply_markup=menu
         )
     else:
-        keyboard = generate_booking_list(callback.from_user.id)
+        keyboard = generate_booking_list(user_id)
         await callback.message.edit_text(
             "Ваши бронирования:",
             reply_markup=keyboard
