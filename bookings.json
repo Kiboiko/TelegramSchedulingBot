@@ -6,7 +6,7 @@
     "start_time": "09:00",
     "end_time": "12:30",
     "user_role": "teacher",
-    "created_at": "2025-08-21 15:25:23",
+    "created_at": "2025-08-21 13:42:31",
     "subjects": [
       "1",
       "2",
@@ -17,18 +17,14 @@
     "id": 1
   },
   {
-    "user_id": 1180878673,
-    "user_name": "Гарри озборн",
-    "date": "2025-09-03",
-    "start_time": "10:00",
-    "end_time": "14:30",
-    "user_role": "teacher",
-    "created_at": "2025-08-21 15:25:23",
-    "subjects": [
-      "4",
-      "2",
-      "1"
-    ],
+    "user_id": 973231400,
+    "user_name": "Бойко Кирилл",
+    "date": "2025-09-02",
+    "start_time": "16:00",
+    "end_time": "17:00",
+    "user_role": "student",
+    "created_at": "2025-08-21 13:42:32",
+    "subject": "2",
     "booking_type": "Тип1",
     "attention_need": "",
     "id": 2
@@ -40,8 +36,8 @@
     "start_time": "09:00",
     "end_time": "11:30",
     "user_role": "student",
-    "created_at": "2025-08-21 15:25:24",
-    "subject": "1",
+    "created_at": "2025-08-21 13:42:32",
+    "subject": "4",
     "booking_type": "Тип1",
     "attention_need": "",
     "id": 3
@@ -53,8 +49,8 @@
     "start_time": "16:00",
     "end_time": "17:00",
     "user_role": "student",
-    "created_at": "2025-08-21 15:25:24",
-    "subject": "2",
+    "created_at": "2025-08-21 13:42:32",
+    "subject": "3",
     "booking_type": "Тип1",
     "attention_need": "",
     "id": 4
