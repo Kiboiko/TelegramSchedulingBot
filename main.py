@@ -152,10 +152,10 @@ def has_booking_conflict(user_id, date, time_start, time_end, subject=None, excl
         if (booking.get('user_id') == user_id and
             booking.get('date') == date):
             
-            # Для учеников проверяем еще и совпадение предмета
+            # Для учеников проверяем совпадение предмета - конфликт только если предмет одинаковый
             if booking.get('user_role') == 'student' and subject:
                 if booking.get('subject') != subject:
-                    continue
+                    continue  # Разные предметы - не конфликтуют
                     
             if exclude_id and booking.get('id') == exclude_id:
                 continue
@@ -684,14 +684,33 @@ async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
         # Получаем данные из состояния
         state_data = await state.get_data()
         role = state_data.get('user_role')
+        subject = state_data.get('subject') if role == 'student' else None
 
-        # Проверяем существующие брони
-        if storage.has_booking_on_date(user_id, formatted_date, role):
-            await callback.answer(
-                f"У вас уже есть бронь на {day}.{month}.{year} в роли {'преподавателя' if role == 'teacher' else 'ученика'}",
-                show_alert=True
+        # Проверяем существующие брони (только для того же предмета)
+        if role == 'student' and subject:
+            # Для ученика проверяем только брони на тот же предмет
+            bookings = storage.load()
+            has_same_subject_booking = any(
+                b for b in bookings 
+                if (b.get('user_id') == user_id and 
+                    b.get('date') == formatted_date and 
+                    b.get('user_role') == 'student' and
+                    b.get('subject') == subject)
             )
-            return
+            if has_same_subject_booking:
+                await callback.answer(
+                    f"У вас уже есть бронь на {day}.{month}.{year} по предмету {SUBJECTS[subject]}",
+                    show_alert=True
+                )
+                return
+        elif role == 'teacher':
+            # Для преподавателя проверяем все брони
+            if storage.has_booking_on_date(user_id, formatted_date, role):
+                await callback.answer(
+                    f"У вас уже есть бронь на {day}.{month}.{year} в роли преподавателя",
+                    show_alert=True
+                )
+                return
 
         # Продолжаем процесс бронирования
         await state.update_data(
@@ -825,6 +844,17 @@ async def confirm_time_range(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(booking_type="Тип1")
 
     subject = data.get('subject') if data.get('user_role') == 'student' else None
+
+    if data.get('user_role') == 'student' and subject:
+        user_id = callback.from_user.id
+        date_str = data['selected_date'].strftime("%Y-%m-%d")
+        
+        if storage.has_booking_on_date(user_id, date_str, 'student', subject):
+            await callback.answer(
+                f"У вас уже есть бронь на этот день по предмету {SUBJECTS[subject]}!",
+                show_alert=True
+            )
+            return
     
     # Проверка конфликтов с учетом предмета
     if has_booking_conflict(

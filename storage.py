@@ -189,15 +189,22 @@ class JSONStorage:
             logger.error(f"Error getting user data: {e}")
             return {}
         
-    def has_booking_on_date(self, user_id: int, date: str, role: str) -> bool:
-        """Проверяет, есть ли у пользователя бронь на указанную дату в указанной роли"""
+    def has_booking_on_date(self, user_id: int, date: str, role: str, subject: str = None) -> bool:
+        """Проверяет, есть ли у пользователя бронь на указанную дату в указанной роли и предмете"""
         try:
             bookings = self.load()
             for booking in bookings:
                 if (booking.get('user_id') == user_id and 
                     booking.get('date') == date and 
                     booking.get('user_role') == role):
-                    return True
+                    
+                    # Для учеников проверяем еще и предмет
+                    if role == 'student' and subject:
+                        if booking.get('subject') == subject:
+                            return True
+                    else:
+                        # Для преподавателей или без указания предмета
+                        return True
             return False
         except Exception as e:
             logger.error(f"Error checking bookings: {e}")
