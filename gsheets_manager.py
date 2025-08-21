@@ -508,61 +508,38 @@ class GoogleSheetsManager:
             return False
 
     def _get_or_create_users_worksheet(self):
-        """Создает лист пользователей с колонками: user_id, user_name, roles, teacher_subjects"""
+        """Создает лист пользователей с улучшенной структурой"""
         try:
             worksheet = self.spreadsheet.worksheet("Пользователи")
-            # Проверяем структуру
-            headers = worksheet.row_values(1)
-            expected_headers = ["user_id", "user_name", "roles", "teacher_subjects"]
-            
-            if len(headers) < len(expected_headers):
-                # Добавляем недостающие заголовки
-                for i in range(len(headers), len(expected_headers)):
-                    worksheet.update_cell(1, i+1, expected_headers[i])
-                    
         except gspread.WorksheetNotFound:
             worksheet = self.spreadsheet.add_worksheet(
                 title="Пользователи",
                 rows=100,
-                cols=4
+                cols=3
             )
-            worksheet.update("A1:D1", [["user_id", "user_name", "roles", "teacher_subjects"]])
+            worksheet.update("A1:C1", [["user_id", "user_name", "last_used_role"]])
         return worksheet
-    
-    def get_user_roles(self, user_id: int) -> List[str]:
-        """Получает роли пользователя из листа Пользователи"""
-        try:
-            worksheet = self._get_or_create_users_worksheet()
-            cell = worksheet.find(str(user_id), in_column=1)
-            
-            if cell:
-                # Колонка C - роли (разделенные запятыми)
-                roles_cell = worksheet.cell(cell.row, 3).value
-                if roles_cell:
-                    return [role.strip().lower() for role in roles_cell.split(',')]
-            return []
-        except Exception as e:
-            logger.error(f"Error getting user roles: {e}")
-            return []
-        
-    def has_user_roles(self, user_id: int) -> bool:
-        """Проверяет, есть ли у пользователя назначенные роли"""
-        roles = self.get_user_roles(user_id)
-        return len(roles) > 0
 
-    def save_user_info(self, user_id: int, user_name: str) -> bool:
-        """Сохраняет ФИО пользователя (без ролей - роли только через админку)"""
+    def save_user_info(self, user_id: int, user_name: str, role: str = None) -> bool:
+        """Сохраняет информацию о пользователе"""
         try:
             worksheet = self._get_or_create_users_worksheet()
             cell = worksheet.find(str(user_id), in_column=1)
-            
+
             if cell:
-                # Обновляем только имя, не трогаем роли
-                worksheet.update_cell(cell.row, 2, user_name)
+                updates = {}
+                if user_name:
+                    updates["B"] = user_name
+                if role:
+                    updates["C"] = role
+                if updates:
+                    worksheet.batch_update([{
+                        'range': f"{k}{cell.row}",
+                        'values': [[v]]
+                    } for k, v in updates.items()])
             else:
-                # Создаем новую запись только с ФИО, роли пустые
-                worksheet.append_row([user_id, user_name, ""])
-            
+                worksheet.append_row([user_id, user_name, role])
+
             return True
         except Exception as e:
             logger.error(f"Error saving user info: {e}")
@@ -629,23 +606,3 @@ class GoogleSheetsManager:
         except Exception as e:
             logger.error(f"Ошибка сохранения предмета ученика: {e}")
             return False
-        
-    def get_teacher_subjects(self, user_id: int) -> List[str]:
-        """Получает предметы преподавателя из листа Пользователи"""
-        try:
-            worksheet = self._get_or_create_users_worksheet()
-            records = worksheet.get_all_records()
-            
-            for record in records:
-                # Преобразуем user_id к строке для сравнения
-                record_user_id = str(record.get("user_id", ""))
-                if record_user_id == str(user_id):
-                    subjects = record.get("teacher_subjects", "")
-                    if subjects:
-                        # Преобразуем в строку и разделяем
-                        subjects_str = str(subjects)
-                        return [subj.strip() for subj in subjects_str.split(',') if subj.strip()]
-            return []
-        except Exception as e:
-            logger.error(f"Error getting teacher subjects: {e}")
-            return []

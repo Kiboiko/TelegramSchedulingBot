@@ -1,43 +1,62 @@
 [
   {
-    "user_id": 973231400,
-    "user_name": "Бойко Кирилл Алексеевич",
-    "date": "2025-09-01",
-    "start_time": "11:30",
-    "end_time": "12:00",
+    "user_id": 1180878673,
+    "user_name": "Белых Степан",
+    "date": "2025-09-02",
+    "start_time": "09:00",
+    "end_time": "12:30",
     "user_role": "teacher",
-    "created_at": "2025-08-21 18:10:10",
+    "created_at": "2025-08-21 15:25:23",
     "subjects": [
-      "1234"
+      "1",
+      "2",
+      "4"
     ],
     "booking_type": "Тип1",
-    "priority": "1",
+    "priority": "",
     "id": 1
   },
   {
-    "user_id": 973231400,
-    "user_name": "Бойко Кирилл Алексеевич",
-    "date": "2025-09-02",
-    "start_time": "13:30",
-    "end_time": "16:00",
-    "user_role": "student",
-    "created_at": "2025-08-21 18:10:10",
-    "subject": "1",
+    "user_id": 1180878673,
+    "user_name": "Гарри озборн",
+    "date": "2025-09-03",
+    "start_time": "10:00",
+    "end_time": "14:30",
+    "user_role": "teacher",
+    "created_at": "2025-08-21 15:25:23",
+    "subjects": [
+      "4",
+      "2",
+      "1"
+    ],
     "booking_type": "Тип1",
     "attention_need": "",
     "id": 2
   },
   {
     "user_id": 973231400,
-    "user_name": "Бойко Кирилл Алексеевич",
+    "user_name": "Бойко Кирилл",
     "date": "2025-09-03",
-    "start_time": "14:30",
-    "end_time": "16:00",
+    "start_time": "09:00",
+    "end_time": "11:30",
     "user_role": "student",
-    "created_at": "2025-08-21 18:10:10",
+    "created_at": "2025-08-21 15:25:24",
     "subject": "1",
     "booking_type": "Тип1",
     "attention_need": "",
     "id": 3
+  },
+  {
+    "user_id": 973231400,
+    "user_name": "Бойко Кирилл",
+    "date": "2025-09-02",
+    "start_time": "16:00",
+    "end_time": "17:00",
+    "user_role": "student",
+    "created_at": "2025-08-21 15:25:24",
+    "subject": "2",
+    "booking_type": "Тип1",
+    "attention_need": "",
+    "id": 4
   }
 ]
