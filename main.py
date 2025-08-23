@@ -484,8 +484,18 @@ def generate_booking_list(user_id: int):
         ))
         
         for booking in sorted(role_bookings, key=lambda x: (x.get("date"), x.get("start_time"))):
+            # Форматируем текст кнопки
+            if role == "student":
+                # Для учеников добавляем сокращенное название предмета
+                subject = booking.get('subject', '')
+                subject_short = get_subject_short_name(subject)
+                button_text = f"{booking.get('date')} {booking.get('start_time')}-{booking.get('end_time')} ({subject_short})"
+            else:
+                # Для преподавателей оставляем без изменений
+                button_text = f"{booking.get('date')} {booking.get('start_time')}-{booking.get('end_time')}"
+            
             builder.row(types.InlineKeyboardButton(
-                text=f"{booking.get('date')} {booking.get('start_time')}-{booking.get('end_time')}",
+                text=button_text,
                 callback_data=f"booking_info_{booking.get('id')}"
             ))
     
@@ -495,6 +505,17 @@ def generate_booking_list(user_id: int):
     ))
     
     return builder.as_markup()
+
+
+def get_subject_short_name(subject_id: str) -> str:
+    """Возвращает сокращенное название предмета (первые 3 буквы)"""
+    subject_names = {
+        "1": "мат",
+        "2": "физ",
+        "3": "инф",
+        "4": "рус"
+    }
+    return subject_names.get(subject_id, subject_id[:3] if subject_id else "???")
 
 
 def generate_booking_actions(booking_id):
