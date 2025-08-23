@@ -149,41 +149,41 @@ def generate_booking_types():
     return builder.as_markup()
 
 
-def merge_adjacent_bookings(bookings):
-    """Объединяет смежные бронирования одного типа"""
-    if not bookings:
-        return bookings
+# def merge_adjacent_bookings(bookings):
+#     """Объединяет смежные бронирования одного типа"""
+#     if not bookings:
+#         return bookings
 
-    sorted_bookings = sorted(bookings, key=lambda x: (
-        x.get('booking_type', ''),
-        x.get('date', ''),
-        x.get('start_time', '')
-    ))
+#     sorted_bookings = sorted(bookings, key=lambda x: (
+#         x.get('booking_type', ''),
+#         x.get('date', ''),
+#         x.get('start_time', '')
+#     ))
 
-    merged = []
-    current = sorted_bookings[0]
+#     merged = []
+#     current = sorted_bookings[0]
 
-    for next_booking in sorted_bookings[1:]:
-        if (current.get('booking_type') == next_booking.get('booking_type') and
-                current.get('date') == next_booking.get('date') and
-                current.get('end_time') == next_booking.get('start_time')):
+#     for next_booking in sorted_bookings[1:]:
+#         if (current.get('booking_type') == next_booking.get('booking_type') and
+#                 current.get('date') == next_booking.get('date') and
+#                 current.get('end_time') == next_booking.get('start_time')):
 
-            current = {
-                **current,
-                'end_time': next_booking.get('end_time'),
-                'id': min(current.get('id', 0), next_booking.get('id', 0)),
-                'merged': True
-            }
-        else:
-            merged.append(current)
-            current = next_booking
+#             current = {
+#                 **current,
+#                 'end_time': next_booking.get('end_time'),
+#                 'id': min(current.get('id', 0), next_booking.get('id', 0)),
+#                 'merged': True
+#             }
+#         else:
+#             merged.append(current)
+#             current = next_booking
 
-    merged.append(current)
-    return merged
+#     merged.append(current)
+#     return merged
 
 
 def load_bookings():
-    """Загружает бронирования из файла, объединяет смежные и удаляет прошедшие"""
+    """Загружает бронирования из файла и удаляет прошедшие"""
     data = storage.load()
     valid_bookings = []
     current_time = datetime.now()
@@ -210,7 +210,6 @@ def load_bookings():
         except ValueError:
             continue
 
-    valid_bookings = merge_adjacent_bookings(valid_bookings)
     return valid_bookings
 
 
