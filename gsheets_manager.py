@@ -629,22 +629,42 @@ class GoogleSheetsManager:
         except Exception as e:
             logger.error(f"Ошибка сохранения предмета ученика: {e}")
             return False
-        
+
     def get_teacher_subjects(self, user_id: int) -> List[str]:
         """Получает предметы преподавателя из листа Пользователи"""
         try:
             worksheet = self._get_or_create_users_worksheet()
             records = worksheet.get_all_records()
-            
+
             for record in records:
                 # Преобразуем user_id к строке для сравнения
                 record_user_id = str(record.get("user_id", ""))
                 if record_user_id == str(user_id):
                     subjects = record.get("teacher_subjects", "")
                     if subjects:
-                        # Преобразуем в строку и разделяем
+                        # ДЕБАГ: Логируем что получаем
+                        logger.info(f"Raw subjects for user {user_id}: {subjects} (type: {type(subjects)})")
+
+                        # ОСНОВНОЕ ИСПРАВЛЕНИЕ: Преобразуем число в строку и разбиваем на отдельные цифры
                         subjects_str = str(subjects)
-                        return [subj.strip() for subj in subjects_str.split(',') if subj.strip()]
+
+                        # Если это число без запятых (например 1234), разбиваем на отдельные цифры
+                        if subjects_str.isdigit() and len(subjects_str) > 1:
+                            subject_list = [digit for digit in subjects_str]
+                            logger.info(f"Converted number {subjects_str} to subjects: {subject_list}")
+                            return subject_list
+                        # Если это строка с запятыми (например "1,2,3,4")
+                        elif ',' in subjects_str:
+                            subject_list = [subj.strip() for subj in subjects_str.split(',') if subj.strip()]
+                            logger.info(f"Split comma-separated subjects: {subject_list}")
+                            return subject_list
+                        # Если это одиночный предмет (например "1")
+                        else:
+                            subject_list = [subjects_str.strip()]
+                            logger.info(f"Single subject: {subject_list}")
+                            return subject_list
+
+            logger.warning(f"No subjects found for user {user_id}")
             return []
         except Exception as e:
             logger.error(f"Error getting teacher subjects: {e}")

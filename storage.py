@@ -40,6 +40,10 @@ class JSONStorage:
         bookings = self.load()
         booking_id = max([b.get('id', 0) for b in bookings] or [0]) + 1
         booking_data['id'] = booking_id
+
+        # ДЕБАГ: Логируем данные перед сохранением
+        logger.info(f"Adding booking: {json.dumps(booking_data, ensure_ascii=False)}")
+
         bookings.append(booking_data)
         self.save(bookings)
         return booking_data
@@ -85,6 +89,12 @@ class JSONStorage:
         if self.gsheets:
             try:
                 bookings = self.load()
+                # ДЕБАГ: Логируем что отправляем в Google Sheets
+                logger.info(f"Syncing {len(bookings)} bookings to Google Sheets")
+                for booking in bookings:
+                    if booking.get('user_role') == 'teacher':
+                        logger.info(f"Teacher booking subjects: {booking.get('subjects')}")
+
                 self.gsheets.update_all_sheets(bookings)
             except Exception as e:
                 logger.error(f"Ошибка синхронизации с Google Sheets: {e}")

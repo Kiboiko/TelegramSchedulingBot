@@ -727,27 +727,41 @@ async def process_name(message: types.Message, state: FSMContext):
 async def process_role_selection(callback: types.CallbackQuery, state: FSMContext):
     role = callback.data.split("_")[1]
     user_id = callback.from_user.id
-    
+
     await state.update_data(user_role=role)
-    
+
     if role == 'teacher':
         # Для преподавателя получаем предметы из Google Sheets
         teacher_subjects = storage.get_teacher_subjects(user_id)
-        
+
+        # ДЕБАГ: Логируем полученные предметы
+        logger.info(f"Teacher {user_id} subjects: {teacher_subjects} (type: {type(teacher_subjects)})")
+
+        # ВРЕМЕННОЕ ИСПРАВЛЕНИЕ: Если пришел список с одним элементом '1234'
+        if (teacher_subjects and
+                isinstance(teacher_subjects, list) and
+                len(teacher_subjects) == 1 and
+                teacher_subjects[0].isdigit() and
+                len(teacher_subjects[0]) > 1):
+            # Разбиваем '1234' на ['1', '2', '3', '4']
+            combined_subject = teacher_subjects[0]
+            teacher_subjects = [digit for digit in combined_subject]
+            logger.info(f"Fixed combined subjects: {teacher_subjects}")
+
         if not teacher_subjects:
             await callback.answer(
                 "У вас нет назначенных предметов. Обратитесь к администратору.",
                 show_alert=True
             )
             return
-        
+
         await state.update_data(subjects=teacher_subjects)
-        
+
         # Безопасное форматирование названий предметов
         subject_names = []
         for subj_id in teacher_subjects:
             subject_names.append(SUBJECTS.get(subj_id, f"Предмет {subj_id}"))
-        
+
         await callback.message.edit_text(
             f"Вы выбрали роль преподавателя\n"
             f"Ваши предметы: {', '.join(subject_names)}\n"
@@ -764,7 +778,6 @@ async def process_role_selection(callback: types.CallbackQuery, state: FSMContex
         )
         await state.set_state(BookingStates.SELECT_SUBJECT)
     await callback.answer()
-
 
 # @dp.callback_query(BookingStates.TEACHER_SUBJECTS, F.data.startswith("subject_"))
 # async def process_teacher_subjects(callback: types.CallbackQuery, state: FSMContext):
