@@ -746,7 +746,7 @@ async def process_role_selection(callback: types.CallbackQuery, state: FSMContex
         # Безопасное форматирование названий предметов
         subject_names = []
         for subj_id in teacher_subjects:
-            subject_names.append(SUBJECTS.get(subj_id, f"{subj_id}"))
+            subject_names.append(SUBJECTS.get(subj_id, f"Предмет {subj_id}"))
         
         await callback.message.edit_text(
             f"Вы выбрали роль преподавателя\n"
@@ -1056,7 +1056,7 @@ async def confirm_time_range(callback: types.CallbackQuery, state: FSMContext):
         # Безопасное получение названий предметов
         subject_names = []
         for subj in data.get('subjects', []):
-            subject_names.append(SUBJECTS.get(subj, f"{subj}"))
+            subject_names.append(SUBJECTS.get(subj, f"Предмет {subj}"))
         subjects_text = ", ".join(subject_names)
     else:
         subjects_text = SUBJECTS.get(data.get('subject', ''), "Не указан")
@@ -1108,7 +1108,7 @@ async def process_confirmation(callback: types.CallbackQuery, state: FSMContext)
         if data['user_role'] == 'teacher':
             subject_names = []
             for subj in data.get('subjects', []):
-                subject_names.append(SUBJECTS.get(subj, f"{subj}"))
+                subject_names.append(SUBJECTS.get(subj, f"Предмет {subj}"))
             subjects_text = f"Предметы: {', '.join(subject_names)}"
         else:
             subjects_text = f"Предмет: {SUBJECTS.get(data.get('subject', ''), 'Не указан')}"
