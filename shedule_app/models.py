@@ -45,6 +45,8 @@ class Teacher(Person):
         self.subjects_id = subjects_id
         self.priority = priority
         self.maximum_attention = maximum_attention
+        self.start_of_study_time = start_of_study_time
+        self.end_of_study_time = end_of_study_time
     
     def __str__(self):
         return f"Имя: {self.name}\nКласс: Преподаватель\n" \

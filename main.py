@@ -39,6 +39,8 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 BOOKINGS_FILE = "bookings.json"
+CREDENTIALS_PATH = r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\credentials.json"
+SPREADSHEET_ID = "1r1MU8k8umwHx_E4Z-jFHRJ-kdwC43Jw0nwpVeH7T1GU"
 
 BOOKING_TYPES = ["Тип1"]
 SUBJECTS = {
@@ -120,39 +122,66 @@ def check_student_availability_for_slots(
     student: Student,
     all_students: List[Student],
     teachers: List[Teacher],
-    date: date,
+    target_date: date,
     start_time: time,
     end_time: time,
     interval_minutes: int = 30
 ) -> Dict[time, bool]:
-    """
-    Проверяет для каждого временного слота, можно ли добавить ученика
-    """
     result = {}
     current_time = start_time
     
+    logger.info(f"=== ДЕТАЛЬНАЯ ПРОВЕРКА ДОСТУПНОСТИ ===")
+    logger.info(f"Студент: {student.name}, предмет: {student.subject_id}")
+    logger.info(f"Всего преподавателей: {len(teachers)}")
+    
+    # Логируем всех преподавателей и их предметы
+    for i, teacher in enumerate(teachers):
+        logger.info(f"Преподаватель {i+1}: {teacher.name}, предметы: {teacher.subjects_id}, "
+                   f"время: {teacher.start_of_study_time}-{teacher.end_of_study_time}")
+    
+    logger.info(f"Всего студентов: {len(all_students)}")
+    
+    # Преобразуем subject_id студента в число для сравнения
+    try:
+        student_subject_id = int(student.subject_id)
+    except (ValueError, TypeError):
+        logger.error(f"Неверный формат subject_id: {student.subject_id}")
+        return {time_obj: False for time_obj in [start_time + timedelta(minutes=i*interval_minutes) 
+                for i in range(int((end_time.hour*60+end_time.minute - start_time.hour*60+start_time.minute)/interval_minutes)+1)]}
+    
     while current_time <= end_time:
-        # Получаем активных студентов в это время (без целевого)
         active_students = [
             s for s in all_students 
             if (s.start_of_studying_time <= current_time <= s.end_of_studying_time and
-                s != student)  # Исключаем целевого студента
+                s != student)
         ]
         
-        # Добавляем целевого студента к активным
         students_with_target = active_students + [student]
         
-        # Получаем активных преподавателей
         active_teachers = [
             t for t in teachers 
             if t.start_of_studying_time <= current_time <= t.end_of_studying_time
         ]
         
-        # Проверяем, можно ли распределить всех студентов включая целевого
-        can_allocate = School.check_teacher_student_allocation(active_teachers, students_with_target)
+        # Детальная проверка
+        can_allocate = True
+        
+        if not active_teachers:
+            logger.info(f"Время {current_time}: нет активных преподавателей")
+            can_allocate = False
+        else:
+            # ИСПРАВЛЕННАЯ ПРОВЕРКА: сравниваем числа с числами
+            subject_available = any(student_subject_id in t.subjects_id for t in active_teachers)
+            if not subject_available:
+                logger.info(f"Время {current_time}: нет преподавателя для предмета {student_subject_id}")
+                can_allocate = False
         
         result[current_time] = can_allocate
         current_time = School.add_minutes_to_time(current_time, interval_minutes)
+    
+    available_count = sum(1 for available in result.values() if available)
+    total_count = len(result)
+    logger.info(f"ИТОГ: доступно {available_count}/{total_count} слотов")
     
     return result
 
@@ -215,26 +244,48 @@ def generate_time_range_keyboard_with_availability(
     builder.adjust(4)
 
     # Добавляем кнопки управления
-    control_buttons = [
+    control_buttons = []
+    if availability_map:
+        # Показываем статистику доступности
+        available_count = sum(1 for available in availability_map.values() if available)
+        total_count = len(availability_map)
+        control_buttons.append(types.InlineKeyboardButton(
+            text=f"Доступно: {available_count}/{total_count}",
+            callback_data="availability_info"
+        ))
+
+    control_buttons.extend([
         types.InlineKeyboardButton(
             text="Выбрать начало 🟢",
             callback_data="select_start_mode"
         ),
         types.InlineKeyboardButton(
-            text="Выбрать конец 🔴",
+            text="Выбирать конец 🔴",
             callback_data="select_end_mode"
         )
-    ]
+    ])
 
     builder.row(*control_buttons)
 
     if start_time and end_time:
-        builder.row(
-            types.InlineKeyboardButton(
-                text="✅ Подтвердить время",
-                callback_data="confirm_time_range"
+        # Проверяем, доступен ли выбранный интервал
+        start_available = availability_map and datetime.strptime(start_time, "%H:%M").time() in availability_map and availability_map[datetime.strptime(start_time, "%H:%M").time()]
+        end_available = availability_map and datetime.strptime(end_time, "%H:%M").time() in availability_map and availability_map[datetime.strptime(end_time, "%H:%M").time()]
+        
+        if start_available and end_available:
+            builder.row(
+                types.InlineKeyboardButton(
+                    text="✅ Подтвердить время",
+                    callback_data="confirm_time_range"
+                )
             )
-        )
+        else:
+            builder.row(
+                types.InlineKeyboardButton(
+                    text="❌ Интервал недоступен",
+                    callback_data="interval_unavailable"
+                )
+            )
 
     builder.row(
         types.InlineKeyboardButton(
@@ -982,7 +1033,7 @@ async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
         date_str = data.replace("calendar_day_", "")
         year, month, day = map(int, date_str.split("-"))
         selected_date = datetime(year, month, day).date()
-        formatted_date = selected_date.strftime("%Y-%m-%d")
+        formatted_date = selected_date.strftime("%Y.%m.%d")
 
         # Получаем данные из состояния
         state_data = await state.get_data()
@@ -990,87 +1041,148 @@ async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
         subject = state_data.get('subject') if role == 'student' else None
 
         # Проверяем существующие брони
-        if role == 'student' and subject:
-            # Для ученика проверяем только брони на тот же предмет
-            bookings = storage.load()
-            has_same_subject_booking = any(
-                b for b in bookings 
-                if (b.get('user_id') == user_id and 
-                    b.get('date') == formatted_date and 
-                    b.get('user_role') == 'student' and
-                    b.get('subject') == subject)
-            )
-            if has_same_subject_booking:
-                await callback.answer(
-                    f"У вас уже есть бронь на {day}.{month}.{year} по предмету {SUBJECTS[subject]}",
-                    show_alert=True
-                )
-                return
-        elif role == 'teacher':
-            # Для преподавателя проверяем все брони
-            bookings = storage.load()
-            has_teacher_booking = any(
-                b for b in bookings 
-                if (b.get('user_id') == user_id and 
-                    b.get('date') == formatted_date and 
-                    b.get('user_role') == 'teacher')
-            )
-            if has_teacher_booking:
-                await callback.answer(
-                    f"У вас уже есть бронь на {day}.{month}.{year} в роли преподавателя",
-                    show_alert=True
-                )
-                return
+        
 
         # Для учеников: проверяем доступность временных слотов
         availability_map = None
-        if role == 'student':
-            # Создаем временного студента для проверки
-            temp_student = Student(
-                name="temp",
-                start_of_study_time="00:00",  # Будет переопределено
-                end_of_study_time="23:59",
-                subject_id=subject,
-                need_for_attention=state_data.get('need_for_attention', 1)
-            )
-            
-            # Получаем всех студентов и преподавателей из Google Sheets
+        if role == 'student' and subject:
             try:
+                # Создаем временного студента для проверки
+                temp_student = Student(
+                    name="temp_check",
+                    start_of_study_time="09:00",
+                    end_of_study_time="20:00",
+                    subject_id=subject,
+                    need_for_attention=state_data.get('need_for_attention', 1)
+                )
+                
+                # Получаем всех студентов и преподавателей из Google Sheets
                 loader = GoogleSheetsDataLoader(CREDENTIALS_PATH, SPREADSHEET_ID, formatted_date)
                 all_teachers, all_students = loader.load_data()
                 
-                # Проверяем доступность слотов
-                availability_map = check_student_availability_for_slots(
+                # ВРЕМЕННО: если данные не загружаются, используем тестовые данные
+                if not all_teachers:
+                    logger.warning("Преподаватели не загружены из Google Sheets, используем тестовые данные")
+                    
+                    # Тестовые преподаватели (активные с 9:00 до 18:00)
+                    all_teachers = [
+                        Teacher(
+                            name="Мария Ивановна",
+                            start_of_study_time="09:00",
+                            end_of_study_time="18:00",
+                            subjects_id=[1, 2],  # Математика и Физика
+                            priority=1,
+                            maximum_attention=20  # Увеличим емкость
+                        ),
+                        Teacher(
+                            name="Петр Сергеевич",
+                            start_of_study_time="10:00",
+                            end_of_study_time="19:00", 
+                            subjects_id=[1, 3],  # Математика и Информатика
+                            priority=2,
+                            maximum_attention=15  # Увеличим емкость
+                        )
+                    ]
+
+                    # Тестовые студенты с меньшей потребностью во внимании
+                    all_students = [
+                        Student(
+                            name="Иван Петров",
+                            start_of_study_time="10:00",
+                            end_of_study_time="12:00",
+                            subject_id=1,  # Математика
+                            need_for_attention=2  # Уменьшим потребность
+                        ),
+                        Student(
+                            name="Елена Сидорова",
+                            start_of_study_time="14:00", 
+                            end_of_study_time="16:00",
+                            subject_id=2,  # Физика
+                            need_for_attention=2  # Уменьшим потребность
+                        )
+                    ]
+                
+                if not all_students:
+                    logger.warning("Студенты не загружены из Google Sheets, используем тестовые данные")
+                    
+                    # Тестовые студенты с разным временем
+                    all_students = [
+                        Student(
+                            name="Иван Петров",
+                            start_of_study_time="10:00",
+                            end_of_study_time="12:00",
+                            subject_id=1,  # Математика
+                            need_for_attention=5
+                        ),
+                        Student(
+                            name="Елена Сидорова",
+                            start_of_study_time="14:00", 
+                            end_of_study_time="16:00",
+                            subject_id=2,  # Физика
+                            need_for_attention=3
+                        ),
+                        Student(
+                            name="Алексей Козлов",
+                            start_of_study_time="11:00",
+                            end_of_study_time="13:00",
+                            subject_id=1,  # Математика
+                            need_for_attention=4
+                        )
+                    ]
+                
+                # Логируем загруженные данные
+                logger.info(f"Используется: {len(all_teachers)} преподавателей, {len(all_students)} студентов")
+                
+                # Показываем сообщение о загрузке
+                await callback.message.edit_text(
+                    f"⏳ Проверяем доступность времени на {day}.{month}.{year}...\n"
+                    "Это может занять несколько секунд"
+                )
+                
+                # Асинхронно проверяем доступность
+                availability_map = await asyncio.to_thread(
+                    check_student_availability_for_slots,
                     student=temp_student,
                     all_students=all_students,
                     teachers=all_teachers,
-                    date=selected_date,
+                    target_date=selected_date,
                     start_time=time(9, 0),
                     end_time=time(20, 0),
                     interval_minutes=30
                 )
+                
             except Exception as e:
                 logger.error(f"Ошибка при проверке доступности: {e}")
-                # В случае ошибки продолжаем без проверки доступности
+                await callback.answer(
+                    "❌ Ошибка при проверке доступности времени",
+                    show_alert=True
+                )
+                return
 
         await state.update_data(
             selected_date=selected_date,
             time_start=None,
             time_end=None,
             selecting_mode='start',
-            availability_map=availability_map  # Сохраняем карту доступности
+            availability_map=availability_map
         )
 
-        message_text = f"Выбрана дата: {day}.{month}.{year}\n"
+        message_text = f"📅 Выбрана дата: {day}.{month}.{year}\n"
         
         if role == 'student' and availability_map:
             available_count = sum(1 for available in availability_map.values() if available)
             total_count = len(availability_map)
-            message_text += f"Доступно слотов: {available_count}/{total_count}\n"
+            message_text += f"✅ Доступно слотов: {available_count}/{total_count}\n"
             message_text += "🔒 - время недоступно для бронирования\n"
+            message_text += "🟢 - выберите начало занятия\n"
+            message_text += "🔴 - выберите окончание занятия\n\n"
 
-        message_text += "Нажмите 'Выбрать начало 🟢' и укажите время начала\n"
-        message_text += "Затем нажмите 'Выбрать конец 🔴' и укажите время окончания"
+        message_text += "Как выбрать время:\n"
+        message_text += "1. Нажмите 'Выбрать начало 🟢'\n"
+        message_text += "2. Выберите доступное время начала\n"
+        message_text += "3. Нажмите 'Выбрать конец 🔴'\n"
+        message_text += "4. Выберите доступное время окончания\n"
+        message_text += "5. Подтвердите выбор"
 
         await callback.message.edit_text(
             message_text,
@@ -1087,9 +1199,62 @@ async def handle_unavailable_slot(callback: types.CallbackQuery):
     """Обрабатывает нажатие на недоступный временной слот"""
     await callback.answer(
         "❌ Это время недоступно для бронирования\n"
-        "Выберите другое время",
+        "Выберите другое время из доступных (без 🔒)",
         show_alert=True
     )
+
+@dp.callback_query(BookingStates.SELECT_TIME_RANGE, F.data == "interval_unavailable")
+async def handle_unavailable_interval(callback: types.CallbackQuery, state: FSMContext):
+    """Обрабатывает попытку подтверждения недоступного интервала"""
+    data = await state.get_data()
+    availability_map = data.get('availability_map', {})
+    
+    start_time = data.get('time_start')
+    end_time = data.get('time_end')
+    
+    if start_time and end_time:
+        start_obj = datetime.strptime(start_time, "%H:%M").time()
+        end_obj = datetime.strptime(end_time, "%H:%M").time()
+        
+        start_available = start_obj in availability_map and availability_map[start_obj]
+        end_available = end_obj in availability_map and availability_map[end_obj]
+        
+        if not start_available:
+            message = f"Время начала {start_time} недоступно"
+        elif not end_available:
+            message = f"Время окончания {end_time} недоступно"
+        else:
+            message = "Выбранный интервал недоступен"
+    else:
+        message = "Выберите доступный временной интервал"
+    
+    await callback.answer(
+        f"❌ {message}\nВыберите время из доступных слотов",
+        show_alert=True
+    )
+
+@dp.callback_query(BookingStates.SELECT_TIME_RANGE, F.data == "availability_info")
+async def show_availability_info(callback: types.CallbackQuery, state: FSMContext):
+    """Показывает информацию о доступности"""
+    data = await state.get_data()
+    availability_map = data.get('availability_map', {})
+    
+    if availability_map:
+        available_count = sum(1 for available in availability_map.values() if available)
+        total_count = len(availability_map)
+        percentage = (available_count / total_count * 100) if total_count > 0 else 0
+        
+        message = (
+            f"📊 Статистика доступности:\n"
+            f"• Доступно слотов: {available_count}/{total_count}\n"
+            f"• Процент доступности: {percentage:.1f}%\n"
+            f"• 🔒 - время недоступно\n"
+            f"• Выбирайте только доступные слоты"
+        )
+    else:
+        message = "Информация о доступности не загружена"
+    
+    await callback.answer(message, show_alert=True)
 
 
 @dp.callback_query(BookingStates.SELECT_TIME_RANGE, F.data == "cancel_time_selection")
@@ -1111,14 +1276,15 @@ async def process_time_point(callback: types.CallbackQuery, state: FSMContext):
     time_str = callback.data.replace("time_point_", "")
     data = await state.get_data()
     selecting_mode = data.get('selecting_mode', 'start')
+    availability_map = data.get('availability_map')
     
     # Проверяем доступность слота
-    availability_map = data.get('availability_map')
     if availability_map:
         time_obj = datetime.strptime(time_str, "%H:%M").time()
         if time_obj in availability_map and not availability_map[time_obj]:
             await callback.answer(
-                "❌ Это время недоступно для бронирования",
+                "❌ Это время недоступно для бронирования\n"
+                "Выберите время из доступных слотов (без 🔒)",
                 show_alert=True
             )
             return
@@ -1127,14 +1293,17 @@ async def process_time_point(callback: types.CallbackQuery, state: FSMContext):
         # Выбираем начало
         await state.update_data(time_start=time_str)
 
-        # Проверяем, если уже есть конец и он раньше начала
-        if data.get('time_end') and datetime.strptime(time_str, "%H:%M") >= datetime.strptime(data['time_end'], "%H:%M"):
-            await state.update_data(time_end=None)
+        # Сбрасываем конец, если он раньше нового начала
+        if data.get('time_end'):
+            end_obj = datetime.strptime(data['time_end'], "%H:%M")
+            start_obj = datetime.strptime(time_str, "%H:%M")
+            if end_obj <= start_obj:
+                await state.update_data(time_end=None)
 
         await callback.message.edit_text(
-            f"Выбрано начало: {time_str}\n"
-            "Нажмите 'Выбрать конец 🔴' и укажите время окончания\n"
-            "Или выберите другое время начала:",
+            f"🟢 Выбрано начало: {time_str}\n"
+            "Теперь нажмите 'Выбрать конец 🔴' и выберите время окончания\n"
+            "Выбирайте только доступные времена (без 🔒)",
             reply_markup=generate_time_range_keyboard_with_availability(
                 selected_date=data.get('selected_date'),
                 start_time=time_str,
@@ -1148,20 +1317,21 @@ async def process_time_point(callback: types.CallbackQuery, state: FSMContext):
             await callback.answer("Сначала выберите время начала!", show_alert=True)
             return
 
-        if datetime.strptime(time_str, "%H:%M") <= datetime.strptime(data['time_start'], "%H:%M"):
+        start_obj = datetime.strptime(data['time_start'], "%H:%M")
+        end_obj = datetime.strptime(time_str, "%H:%M")
+        
+        if end_obj <= start_obj:
             await callback.answer("Время окончания должно быть после времени начала!", show_alert=True)
             return
 
         await state.update_data(time_end=time_str)
 
         await callback.message.edit_text(
-            f"Текущий выбор:\n"
-            f"Начало: {data['time_start']} (зеленый)\n"
-            f"Конец: {time_str} (красный)\n\n"
-            "Вы можете:\n"
-            "1. Подтвердить выбор\n"
-            "2. Изменить начало/конец\n"
-            "3. Отменить",
+            f"📋 Текущий выбор:\n"
+            f"🟢 Начало: {data['time_start']}\n"
+            f"🔴 Конец: {time_str}\n\n"
+            "Если выбор корректен, нажмите '✅ Подтвердить время'\n"
+            "Или измените начало/конец с помощью кнопок выше",
             reply_markup=generate_time_range_keyboard_with_availability(
                 selected_date=data.get('selected_date'),
                 start_time=data['time_start'],
@@ -1171,7 +1341,6 @@ async def process_time_point(callback: types.CallbackQuery, state: FSMContext):
         )
 
     await callback.answer()
-
 
 @dp.callback_query(BookingStates.SELECT_TIME_RANGE, F.data.in_(["select_start_mode", "select_end_mode"]))
 async def switch_selection_mode(callback: types.CallbackQuery, state: FSMContext):

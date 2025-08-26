@@ -4,10 +4,12 @@ from typing import List, Tuple, Dict, Any, Optional
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-
+import logging
+import re
 # Импортируем ваши модели
 from models import Teacher, Student
-
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class GoogleSheetsDataLoader:
     SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
@@ -62,42 +64,53 @@ class GoogleSheetsDataLoader:
         try:
             # Загрузка справочника предметов
             subject_map = self._load_subject_map()
+            logger.info(f"Загружено предметов: {len(subject_map)}")
 
             # Загрузка плана обучения
             self._load_study_plan_cache()
+            logger.info(f"Загружено планов обучения: {len(self._study_plan_cache)}")
 
             # Лист преподавателей
             teacher_sheet = self._get_sheet_data("Преподаватели")
+            logger.info(f"Данные листа преподавателей: {len(teacher_sheet) if teacher_sheet else 0} строк")
+            
             if not teacher_sheet:
                 raise Exception("Лист 'Преподаватели' не найден")
 
             # Находим индексы колонок для выбранной даты
             date_columns = self._find_date_columns(teacher_sheet, self.target_date)
+            logger.info(f"Колонки даты для преподавателей: {date_columns}")
 
-            for row in teacher_sheet[1:]:
+            for i, row in enumerate(teacher_sheet[1:]):
                 if not row:
                     continue
                 teacher = self._parse_teacher_row(row, subject_map, date_columns)
                 if teacher:
                     teachers.append(teacher)
+                    logger.info(f"Добавлен преподаватель {i+1}: {teacher.name}")
 
             # Лист студентов
             student_sheet = self._get_sheet_data("Ученики")
+            logger.info(f"Данные листа учеников: {len(student_sheet) if student_sheet else 0} строк")
+            
             if not student_sheet:
                 raise Exception("Лист 'Ученики' не найден")
 
             student_date_columns = self._find_date_columns(student_sheet, self.target_date)
+            logger.info(f"Колонки даты для учеников: {student_date_columns}")
 
-            for row in student_sheet[1:]:
+            for i, row in enumerate(student_sheet[1:]):
                 if not row:
                     continue
                 student = self._parse_student_row(row, subject_map, student_date_columns)
                 if student:
                     students.append(student)
+                    logger.info(f"Добавлен студент {i+1}: {student.name}")
 
         except Exception as ex:
-            print(f"Ошибка при загрузке данных: {ex}")
+            logger.error(f"Ошибка при загрузке данных: {ex}", exc_info=True)
 
+        logger.info(f"Итог: {len(teachers)} преподавателей, {len(students)} студентов")
         return teachers, students
 
     def _find_date_columns(self, sheet: List[List[Any]], date: str) -> Tuple[int, int]:
@@ -108,13 +121,31 @@ class GoogleSheetsDataLoader:
         start_col = -1
         end_col = -1
 
-        for i, cell in enumerate(header_row):
-            if str(cell).strip() == date:
-                if start_col == -1:
-                    start_col = i
-                else:
-                    end_col = i
+        # Преобразуем целевую дату в разные форматы для поиска
+        target_date_formats = [
+            date,  # исходный формат "2025.09.01"
+            date.replace(".", "/"),  # "2025/09/01"
+            date.replace(".", "-"),  # "2025-09-01"
+            datetime.strptime(date, "%Y.%m.%d").strftime("%d.%m.%Y"),  # "01.09.2025"
+            datetime.strptime(date, "%Y.%m.%d").strftime("%d/%m/%Y"),  # "01/09/2025"
+            datetime.strptime(date, "%Y.%m.%d").strftime("%d-%m-%Y"),  # "01-09-2025"
+        ]
 
+        logger.info(f"Поиск даты '{date}' в форматах: {target_date_formats}")
+
+        for i, cell in enumerate(header_row):
+            cell_str = str(cell).strip()
+            for date_format in target_date_formats:
+                if cell_str == date_format:
+                    if start_col == -1:
+                        start_col = i
+                        logger.info(f"Найдено начало: колонка {i} - '{cell_str}'")
+                    else:
+                        end_col = i
+                        logger.info(f"Найдено окончание: колонка {i} - '{cell_str}'")
+                    break
+
+        logger.info(f"Результат поиска: start_col={start_col}, end_col={end_col}")
         return (start_col, end_col)
 
     def _load_subject_map(self) -> Dict[str, int]:
@@ -197,6 +228,10 @@ class GoogleSheetsDataLoader:
 
     def _parse_teacher_row(self, row: List[Any], subject_map: Dict[str, int],
                            date_columns: Tuple[int, int]) -> Optional[Teacher]:
+        
+        
+
+
         try:
             name = str(row[1]).strip() if len(row) > 1 else ""
             subjects_input = str(row[2]).strip() if len(row) > 2 else ""
@@ -226,10 +261,25 @@ class GoogleSheetsDataLoader:
 
             # Парсим предметы
             subject_ids = []
-            for subject in subjects_input.split(','):
-                subject = subject.strip('.; ')
-                if subject.isdigit():
-                    subject_ids.append(int(subject))
+            if subjects_input:
+                # Разбиваем по разным разделителям
+                for subject in re.split(r'[,.;\s]+', subjects_input):
+                    subject = subject.strip()
+                    if subject and subject.isdigit():
+                        subject_ids.append(int(subject))
+                    elif subject and subject in subject_map:
+                        subject_ids.append(subject_map[subject])
+
+            # Если не нашли предметы, попробуем найти в других колонках
+            if not subject_ids and len(row) > 6:
+                for i in range(6, min(10, len(row))):
+                    cell_value = str(row[i]).strip()
+                    if cell_value and cell_value.isdigit():
+                        subject_ids.append(int(cell_value))
+                        break
+
+            # Логируем для отладки
+            logger.info(f"Преподаватель {name}: предметы {subject_ids} из входных данных '{subjects_input}'")
 
             return Teacher(
                 name=name,
