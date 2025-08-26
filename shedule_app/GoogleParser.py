@@ -25,6 +25,36 @@ class GoogleSheetsDataLoader:
 
         self.service = build('sheets', 'v4', credentials=credentials)
 
+    def export_schedule_to_google_sheets(self, matrix: List[List[Any]], combinations: List[List[Any]]):
+        try:
+            sheet_name = "Расписание_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+            self._create_new_sheet(sheet_name)
+
+            # Преобразуем матрицу в формат для Google Sheets
+            values = []
+            for row in matrix:
+                values_row = [str(cell) if cell is not None else "" for cell in row]
+                values.append(values_row)
+
+            # Записываем данные
+            body = {
+                'values': values
+            }
+
+            request = self.service.spreadsheets().values().update(
+                spreadsheetId=self.spreadsheet_id,
+                range=f"{sheet_name}!A1",
+                valueInputOption='RAW',
+                body=body
+            )
+            response = request.execute()
+
+            print(f"Данные сохранены в лист: {sheet_name}")
+
+        except Exception as ex:
+            print(f"Ошибка экспорта: {ex}")
+            raise
+
     def load_data(self) -> Tuple[List[Teacher], List[Student]]:
         teachers = []
         students = []
