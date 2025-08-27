@@ -205,34 +205,26 @@ def generate_time_range_keyboard_with_availability(
         time_str = current.strftime("%H:%M")
         time_obj = current.time()
 
-        # Определяем стиль кнопки на основе доступности
-        if availability_map and time_obj in availability_map:
-            is_available = availability_map[time_obj]
-            if start_time and time_str == start_time:
-                button_text = "🟢 " + time_str if is_available else "🔴 " + time_str
-            elif end_time and time_str == end_time:
-                button_text = "🔴 " + time_str if is_available else "🔴🔒 " + time_str
-            elif (start_time and end_time and
-                  datetime.strptime(start_time, "%H:%M").time() < time_obj <
-                  datetime.strptime(end_time, "%H:%M").time()):
-                button_text = "🔵 " + time_str if is_available else "🔵🔒 " + time_str
-            else:
-                button_text = time_str if is_available else "🔒 " + time_str
-        else:
-            # Если данные о доступности отсутствуют, используем обычный вид
-            if start_time and time_str == start_time:
-                button_text = "🟢 " + time_str
-            elif end_time and time_str == end_time:
-                button_text = "🔴 " + time_str
-            elif (start_time and end_time and
-                  datetime.strptime(start_time, "%H:%M").time() < time_obj <
-                  datetime.strptime(end_time, "%H:%M").time()):
-                button_text = "🔵 " + time_str
-            else:
-                button_text = time_str
+        # Если availability_map = None (для преподавателей), все слоты доступны
+        is_available = True
+        if availability_map is not None:  # Только если есть карта доступности
+            is_available = availability_map.get(time_obj, True)
 
-        # Делаем недоступные слоты неактивными
-        if availability_map and time_obj in availability_map and not availability_map[time_obj]:
+        # Определяем стиль кнопки на основе доступности
+        if start_time and time_str == start_time:
+            button_text = "🟢 " + time_str
+        elif end_time and time_str == end_time:
+            button_text = "🔴 " + time_str
+        elif (start_time and end_time and
+              datetime.strptime(start_time, "%H:%M").time() < time_obj <
+              datetime.strptime(end_time, "%H:%M").time()):
+            button_text = "🔵 " + time_str
+        else:
+            button_text = time_str
+
+        # Для учеников показываем заблокированные слоты
+        if availability_map is not None and not is_available:
+            button_text = "🔒 " + time_str
             callback_data = "time_slot_unavailable"
         else:
             callback_data = f"time_point_{time_str}"
@@ -247,8 +239,7 @@ def generate_time_range_keyboard_with_availability(
 
     # Добавляем кнопки управления
     control_buttons = []
-    if availability_map:
-        # Показываем статистику доступности
+    if availability_map is not None:  # Статистика только для учеников
         available_count = sum(1 for available in availability_map.values() if available)
         total_count = len(availability_map)
         control_buttons.append(types.InlineKeyboardButton(
@@ -270,11 +261,8 @@ def generate_time_range_keyboard_with_availability(
     builder.row(*control_buttons)
 
     if start_time and end_time:
-        # Проверяем, доступен ли выбранный интервал
-        start_available = availability_map and datetime.strptime(start_time, "%H:%M").time() in availability_map and availability_map[datetime.strptime(start_time, "%H:%M").time()]
-        end_available = availability_map and datetime.strptime(end_time, "%H:%M").time() in availability_map and availability_map[datetime.strptime(end_time, "%H:%M").time()]
-        
-        if start_available and end_available:
+        # Для преподавателей всегда доступно подтверждение
+        if availability_map is None:
             builder.row(
                 types.InlineKeyboardButton(
                     text="✅ Подтвердить время",
@@ -282,12 +270,24 @@ def generate_time_range_keyboard_with_availability(
                 )
             )
         else:
-            builder.row(
-                types.InlineKeyboardButton(
-                    text="❌ Интервал недоступен",
-                    callback_data="interval_unavailable"
+            # Для учеников проверяем доступность
+            start_available = datetime.strptime(start_time, "%H:%M").time() in availability_map and availability_map[datetime.strptime(start_time, "%H:%M").time()]
+            end_available = datetime.strptime(end_time, "%H:%M").time() in availability_map and availability_map[datetime.strptime(end_time, "%H:%M").time()]
+            
+            if start_available and end_available:
+                builder.row(
+                    types.InlineKeyboardButton(
+                        text="✅ Подтвердить время",
+                        callback_data="confirm_time_range"
+                    )
                 )
-            )
+            else:
+                builder.row(
+                    types.InlineKeyboardButton(
+                        text="❌ Интервал недоступен",
+                        callback_data="interval_unavailable"
+                    )
+                )
 
     builder.row(
         types.InlineKeyboardButton(
@@ -1445,15 +1445,19 @@ async def handle_unavailable_interval(callback: types.CallbackQuery, state: FSMC
         start_obj = datetime.strptime(start_time, "%H:%M").time()
         end_obj = datetime.strptime(end_time, "%H:%M").time()
         
-        start_available = start_obj in availability_map and availability_map[start_obj]
-        end_available = end_obj in availability_map and availability_map[end_obj]
-        
-        if not start_available:
-            message = f"Время начала {start_time} недоступно"
-        elif not end_available:
-            message = f"Время окончания {end_time} недоступно"
+        # Добавляем проверку на None
+        if availability_map is None:
+            message = "Информация о доступности не загружена"
         else:
-            message = "Выбранный интервал недоступен"
+            start_available = start_obj in availability_map and availability_map[start_obj]
+            end_available = end_obj in availability_map and availability_map[end_obj]
+            
+            if not start_available:
+                message = f"Время начала {start_time} недоступно"
+            elif not end_available:
+                message = f"Время окончания {end_time} недоступно"
+            else:
+                message = "Выбранный интервал недоступен"
     else:
         message = "Выберите доступный временной интервал"
     
@@ -1508,7 +1512,7 @@ async def process_time_point(callback: types.CallbackQuery, state: FSMContext):
     availability_map = data.get('availability_map')
     
     # Проверяем доступность слота
-    if availability_map:
+    if availability_map is not None:  # Только для учеников проверяем доступность
         time_obj = datetime.strptime(time_str, "%H:%M").time()
         if time_obj in availability_map and not availability_map[time_obj]:
             await callback.answer(
@@ -1591,7 +1595,7 @@ async def switch_selection_mode(callback: types.CallbackQuery, state: FSMContext
     if time_end:
         message_text += f"Текущий конец: {time_end}\n"
 
-    if availability_map:
+    if availability_map is not None:
         available_count = sum(1 for available in availability_map.values() if available)
         total_count = len(availability_map)
         message_text += f"Доступно слотов: {available_count}/{total_count}\n"
