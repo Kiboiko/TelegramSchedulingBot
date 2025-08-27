@@ -6,7 +6,7 @@
     "start_time": "11:00",
     "end_time": "14:30",
     "user_role": "teacher",
-    "created_at": "2025-08-26 19:17:17",
+    "created_at": "2025-08-27 13:00:43",
     "subjects": [
       "1",
       "2",
@@ -24,23 +24,36 @@
     "start_time": "17:00",
     "end_time": "19:00",
     "user_role": "student",
-    "created_at": "2025-08-26 19:17:18",
+    "created_at": "2025-08-27 13:00:44",
     "subject": "2",
     "booking_type": "Тип1",
     "attention_need": "",
     "id": 2
   },
   {
-    "user_id": 973231400,
-    "user_name": "Бойко Кирилл Алексеевич",
+    "user_id": 111111111,
+    "user_name": "Пирка пипиркин",
     "date": "2025-09-01",
-    "start_time": "11:00",
+    "start_time": "11:30",
     "end_time": "14:00",
     "user_role": "student",
-    "created_at": "2025-08-26 19:17:18",
+    "created_at": "2025-08-27 13:00:44",
     "subject": "1",
     "booking_type": "Тип1",
     "attention_need": "",
     "id": 3
+  },
+  {
+    "user_id": 973231400,
+    "user_name": "Бойко Кирилл Алексеевич",
+    "date": "2025-09-01",
+    "start_time": "13:00",
+    "end_time": "14:30",
+    "user_role": "student",
+    "created_at": "2025-08-27 13:00:44",
+    "subject": "4",
+    "booking_type": "Тип1",
+    "attention_need": "",
+    "id": 4
   }
 ]

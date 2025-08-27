@@ -279,3 +279,21 @@ class JSONStorage:
                     return True
                     
         return False
+    
+    def get_parent_children(self, parent_id: int) -> List[int]:
+        """Получает список ID детей родителя"""
+        if not hasattr(self, 'gsheets') or not self.gsheets:
+            return []
+        return self.gsheets.get_parent_children(parent_id)
+
+    def get_child_info(self, child_id: int) -> dict:
+        """Получает информацию о ребенке (ученике)"""
+        if not hasattr(self, 'gsheets') or not self.gsheets:
+            return {}
+        return self.gsheets.get_child_info(child_id)
+
+    def save_parent_info(self, parent_id: int, parent_name: str, children_ids: List[int] = None) -> bool:
+        """Сохраняет информацию о родителе"""
+        if not hasattr(self, 'gsheets') or not self.gsheets:
+            return False
+        return self.gsheets.save_parent_info(parent_id, parent_name, children_ids)

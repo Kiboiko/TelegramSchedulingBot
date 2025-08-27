@@ -539,7 +539,9 @@ class GoogleSheetsManager:
                 # Колонка C - роли (разделенные запятыми)
                 roles_cell = worksheet.cell(cell.row, 3).value
                 if roles_cell:
-                    return [role.strip().lower() for role in roles_cell.split(',')]
+                    # Убираем дубликаты и возвращаем уникальные роли
+                    roles = [role.strip().lower() for role in roles_cell.split(',')]
+                    return list(set(roles))  # Убираем дубликаты
             return []
         except Exception as e:
             logger.error(f"Error getting user roles: {e}")
@@ -669,3 +671,80 @@ class GoogleSheetsManager:
         except Exception as e:
             logger.error(f"Error getting teacher subjects: {e}")
             return []
+        
+    def _get_or_create_parents_worksheet(self):
+        """Создает лист Родители с колонками: user_id, user_name, children_ids"""
+        try:
+            worksheet = self.spreadsheet.worksheet("Родители")
+            # Проверяем структуру
+            headers = worksheet.row_values(1)
+            expected_headers = ["user_id", "user_name", "children_ids"]
+            
+            if len(headers) < len(expected_headers):
+                # Добавляем недостающие заголовки
+                for i in range(len(headers), len(expected_headers)):
+                    worksheet.update_cell(1, i+1, expected_headers[i])
+                    
+        except gspread.WorksheetNotFound:
+            worksheet = self.spreadsheet.add_worksheet(
+                title="Родители",
+                rows=100,
+                cols=3
+            )
+            worksheet.update("A1:C1", [["user_id", "user_name", "children_ids"]])
+        return worksheet
+
+    def get_parent_children(self, parent_id: int) -> List[int]:
+        """Получает список ID детей родителя"""
+        try:
+            worksheet = self._get_or_create_parents_worksheet()
+            records = worksheet.get_all_records()
+            
+            for record in records:
+                # Преобразуем parent_id к строке для сравнения
+                if str(record.get("user_id")) == str(parent_id):
+                    children_str = record.get("children_ids", "")
+                    if children_str:
+                        # Убеждаемся, что это строка перед split
+                        children_str = str(children_str)
+                        return [int(child_id.strip()) for child_id in children_str.split(',') if child_id.strip()]
+            return []
+        except Exception as e:
+            logger.error(f"Error getting parent children: {e}")
+            return []
+
+    def get_child_info(self, child_id: int) -> dict:
+        """Получает информацию о ребенке (ученике)"""
+        try:
+            # Получаем данные ученика из листа Пользователи
+            user_data = self.get_user_data(child_id)
+            if user_data and 'student' in user_data.get('roles', '').split(','):
+                return user_data
+            return {}
+        except Exception as e:
+            logger.error(f"Error getting child info: {e}")
+            return {}
+
+    def save_parent_info(self, parent_id: int, parent_name: str, children_ids: List[int] = None) -> bool:
+        """Сохраняет информацию о родителе"""
+        try:
+            worksheet = self._get_or_create_parents_worksheet()
+            records = worksheet.get_all_records()
+            
+            row_num = None
+            for i, record in enumerate(records, start=2):
+                if str(record.get("user_id")) == str(parent_id):
+                    row_num = i
+                    break
+            
+            children_str = ','.join(map(str, children_ids)) if children_ids else ''
+            
+            if row_num:
+                worksheet.update(f"A{row_num}:C{row_num}", [[parent_id, parent_name, children_str]])
+            else:
+                worksheet.append_row([parent_id, parent_name, children_str])
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error saving parent info: {e}")
+            return False
