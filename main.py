@@ -1,6 +1,6 @@
 import sys
 
-sys.path.append(r'C:\Users\user\Documents\GitHub\TelegramSchedulingBot\shedule_app')
+sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
 
 import asyncio
 import json
@@ -39,7 +39,7 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 BOOKINGS_FILE = "bookings.json"
-CREDENTIALS_PATH = r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\credentials.json"
+CREDENTIALS_PATH = r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\credentials.json"
 SPREADSHEET_ID = "1r1MU8k8umwHx_E4Z-jFHRJ-kdwC43Jw0nwpVeH7T1GU"
 
 BOOKING_TYPES = ["Тип1"]
@@ -1289,75 +1289,75 @@ async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
                 loader = GoogleSheetsDataLoader(CREDENTIALS_PATH, SPREADSHEET_ID, formatted_date)
                 all_teachers, all_students = loader.load_data()
                 
-                # ВРЕМЕННО: если данные не загружаются, используем тестовые данные
-                if not all_teachers:
-                    logger.warning("Преподаватели не загружены из Google Sheets, используем тестовые данные")
-                    
-                    # Тестовые преподаватели (активные с 9:00 до 18:00)
-                    all_teachers = [
-                        Teacher(
-                            name="Мария Ивановна",
-                            start_of_study_time="09:00",
-                            end_of_study_time="18:00",
-                            subjects_id=[1, 2],  # Математика и Физика
-                            priority=1,
-                            maximum_attention=20  # Увеличим емкость
-                        ),
-                        Teacher(
-                            name="Петр Сергеевич",
-                            start_of_study_time="10:00",
-                            end_of_study_time="19:00", 
-                            subjects_id=[1, 3],  # Математика и Информатика
-                            priority=2,
-                            maximum_attention=15  # Увеличим емкость
-                        )
-                    ]
-
-                    # Тестовые студенты с меньшей потребностью во внимании
-                    all_students = [
-                        Student(
-                            name="Иван Петров",
-                            start_of_study_time="10:00",
-                            end_of_study_time="12:00",
-                            subject_id=1,  # Математика
-                            need_for_attention=2  # Уменьшим потребность
-                        ),
-                        Student(
-                            name="Елена Сидорова",
-                            start_of_study_time="14:00", 
-                            end_of_study_time="16:00",
-                            subject_id=2,  # Физика
-                            need_for_attention=2  # Уменьшим потребность
-                        )
-                    ]
-                
-                if not all_students:
-                    logger.warning("Студенты не загружены из Google Sheets, используем тестовые данные")
-                    
-                    # Тестовые студенты с разным временем
-                    all_students = [
-                        Student(
-                            name="Иван Петров",
-                            start_of_study_time="10:00",
-                            end_of_study_time="12:00",
-                            subject_id=1,  # Математика
-                            need_for_attention=5
-                        ),
-                        Student(
-                            name="Елена Сидорова",
-                            start_of_study_time="14:00", 
-                            end_of_study_time="16:00",
-                            subject_id=2,  # Физика
-                            need_for_attention=3
-                        ),
-                        Student(
-                            name="Алексей Козлов",
-                            start_of_study_time="11:00",
-                            end_of_study_time="13:00",
-                            subject_id=1,  # Математика
-                            need_for_attention=4
-                        )
-                    ]
+                # # ВРЕМЕННО: если данные не загружаются, используем тестовые данные
+                # if not all_teachers:
+                #     logger.warning("Преподаватели не загружены из Google Sheets, используем тестовые данные")
+                #
+                #     # Тестовые преподаватели (активные с 9:00 до 18:00)
+                #     all_teachers = [
+                #         Teacher(
+                #             name="Мария Ивановна",
+                #             start_of_study_time="09:00",
+                #             end_of_study_time="18:00",
+                #             subjects_id=[1, 2],  # Математика и Физика
+                #             priority=1,
+                #             maximum_attention=20  # Увеличим емкость
+                #         ),
+                #         Teacher(
+                #             name="Петр Сергеевич",
+                #             start_of_study_time="10:00",
+                #             end_of_study_time="19:00",
+                #             subjects_id=[1, 3],  # Математика и Информатика
+                #             priority=2,
+                #             maximum_attention=15  # Увеличим емкость
+                #         )
+                #     ]
+                #
+                #     # Тестовые студенты с меньшей потребностью во внимании
+                #     all_students = [
+                #         Student(
+                #             name="Иван Петров",
+                #             start_of_study_time="10:00",
+                #             end_of_study_time="12:00",
+                #             subject_id=1,  # Математика
+                #             need_for_attention=2  # Уменьшим потребность
+                #         ),
+                #         Student(
+                #             name="Елена Сидорова",
+                #             start_of_study_time="14:00",
+                #             end_of_study_time="16:00",
+                #             subject_id=2,  # Физика
+                #             need_for_attention=2  # Уменьшим потребность
+                #         )
+                #     ]
+                #
+                # if not all_students:
+                #     logger.warning("Студенты не загружены из Google Sheets, используем тестовые данные")
+                #
+                #     # Тестовые студенты с разным временем
+                #     all_students = [
+                #         Student(
+                #             name="Иван Петров",
+                #             start_of_study_time="10:00",
+                #             end_of_study_time="12:00",
+                #             subject_id=1,  # Математика
+                #             need_for_attention=5
+                #         ),
+                #         Student(
+                #             name="Елена Сидорова",
+                #             start_of_study_time="14:00",
+                #             end_of_study_time="16:00",
+                #             subject_id=2,  # Физика
+                #             need_for_attention=3
+                #         ),
+                #         Student(
+                #             name="Алексей Козлов",
+                #             start_of_study_time="11:00",
+                #             end_of_study_time="13:00",
+                #             subject_id=1,  # Математика
+                #             need_for_attention=4
+                #         )
+                #     ]
                 
                 # Логируем загруженные данные
                 logger.info(f"Используется: {len(all_teachers)} преподавателей, {len(all_students)} студентов")
