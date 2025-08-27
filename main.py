@@ -1002,6 +1002,7 @@ async def start_booking(message: types.Message, state: FSMContext):
     if len(available_booking_roles) == 1:
         # Если только одна роль, автоматически выбираем ее
         role = available_booking_roles[0]
+
         await state.update_data(user_role=role)
         
         if role == 'teacher':
