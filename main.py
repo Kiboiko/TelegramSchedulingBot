@@ -1165,8 +1165,20 @@ async def process_role_selection(callback: types.CallbackQuery, state: FSMContex
         await state.set_state(BookingStates.SELECT_SUBJECT)
         
     elif role == 'parent':
-        # Для родителя получаем детей
+        # Для родителя автоматически сохраняем информацию
+        user_name = storage.get_user_name(user_id)
+        if user_name:
+            # Сохраняем родителя с пустым списком детей
+            storage.save_parent_info(user_id, user_name, [])
+        
         children_ids = storage.get_parent_children(user_id)
+        
+        if children_ids is None:  # Если родитель еще не был сохранен
+            await callback.answer(
+                "Информация о родителе обрабатывается. Попробуйте снова через несколько секунд.",
+                show_alert=True
+            )
+            return
         
         if not children_ids:
             await callback.answer(
@@ -1996,7 +2008,7 @@ async def sync_with_gsheets():
                     logger.info("Фоновая синхронизация с Google Sheets выполнена")
                 else:
                     logger.warning("Не удалось выполнить синхронизацию с Google Sheets")
-            await asyncio.sleep(3600)  # Каждый час
+            await asyncio.sleep(60)  # Каждую минуту
         except Exception as e:
             logger.error(f"Ошибка в фоновой синхронизации: {e}")
             await asyncio.sleep(600)  # Ждем 10 минут при ошибке

@@ -121,9 +121,35 @@ class JSONStorage:
                         if 'student' in roles:
                             empty_booking['subject'] = ''
                             empty_booking['attention_need'] = ''
+                        if 'parent' in roles:
+                            # Для родителей тоже добавляем запись
+                            empty_booking['user_role'] = 'parent'
                         
                         bookings.append(empty_booking)
                         logger.info(f"Added empty booking for user {user_name} (ID: {user_id})")
+
+                # ДОБАВЛЕНО: Добавляем родителей без детей в лист Родители
+                all_parents = self.get_all_parents()
+                existing_parents_in_sheet = []
+                
+                try:
+                    parents_worksheet = self.gsheets._get_or_create_parents_worksheet()
+                    parents_data = parents_worksheet.get_all_records()
+                    existing_parents_in_sheet = [str(record.get('user_id')) for record in parents_data]
+                except Exception as e:
+                    logger.error(f"Error reading parents sheet: {e}")
+                
+                # Добавляем родителей, которых нет в листе
+                for parent in all_parents:
+                    parent_id_str = str(parent['user_id'])
+                    if parent_id_str not in existing_parents_in_sheet:
+                        success = self.gsheets.save_parent_info(
+                            parent['user_id'], 
+                            parent['user_name'], 
+                            []
+                        )
+                        if success:
+                            logger.info(f"Added parent {parent['user_name']} (ID: {parent['user_id']}) with empty children list")
 
                 self.gsheets.update_all_sheets(bookings)
             except Exception as e:
@@ -355,4 +381,14 @@ class JSONStorage:
         """Сохраняет информацию о родителе"""
         if not hasattr(self, 'gsheets') or not self.gsheets:
             return False
+        
+        # Убеждаемся, что children_ids не None
+        children_ids = children_ids or []
+        
         return self.gsheets.save_parent_info(parent_id, parent_name, children_ids)
+    
+    def get_all_parents(self) -> List[Dict[str, Any]]:
+        """Получает всех пользователей с ролью родителя"""
+        if not hasattr(self, 'gsheets') or not self.gsheets:
+            return []
+        return self.gsheets.get_all_parents()

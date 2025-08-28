@@ -804,3 +804,22 @@ class GoogleSheetsManager:
         except Exception as e:
             logger.error(f"Error saving parent info: {e}")
             return False
+        
+    def get_all_parents(self) -> List[Dict[str, Any]]:
+        """Получает всех пользователей с ролью родителя"""
+        try:
+            worksheet = self._get_or_create_users_worksheet()
+            records = worksheet.get_all_records()
+            
+            parents = []
+            for record in records:
+                user_roles = record.get('roles', '').lower().split(',')
+                if 'parent' in user_roles:
+                    parents.append({
+                        'user_id': record.get('user_id'),
+                        'user_name': record.get('user_name', '')
+                    })
+            return parents
+        except Exception as e:
+            logger.error(f"Error getting all parents: {e}")
+            return []
