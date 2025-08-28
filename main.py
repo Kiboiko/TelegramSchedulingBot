@@ -39,7 +39,7 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 BOOKINGS_FILE = "bookings.json"
-CREDENTIALS_PATH = r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\credentials.json"
+CREDENTIALS_PATH = r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\credentials.json"
 SPREADSHEET_ID = "1r1MU8k8umwHx_E4Z-jFHRJ-kdwC43Jw0nwpVeH7T1GU"
 
 BOOKING_TYPES = ["Тип1"]
@@ -870,8 +870,11 @@ async def generate_main_menu(user_id: int) -> ReplyKeyboardMarkup:
     
     keyboard_buttons = []
     
-    # Проверяем, есть ли роли, которые могут бронировать
-    can_book = any(role in roles for role in ['teacher', 'student', 'parent'])
+    # Проверяем, может ли пользователь бронировать
+    # Обычные студенты (только student) не могут бронировать
+    can_book = any(role in roles for role in ['teacher', 'parent']) or (
+        'student' in roles and 'parent' in roles
+    )
     
     if can_book:
         keyboard_buttons.append([KeyboardButton(text="📅 Забронировать время")])
@@ -948,6 +951,22 @@ async def contact_admin(message: types.Message):
         "После назначения ролей вы сможете пользоваться всеми функциями бота."
     )
 
+@dp.message(Command("book"))
+async def cmd_book(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    user_roles = storage.get_user_roles(user_id)
+    
+    # Проверка: если только student, запрещаем
+    if user_roles == ['student']:
+        await message.answer(
+            "❌ Ученики не могут самостоятельно записываться на занятия.\n"
+            "Для записи обратитесь к родителю или администратору."
+        )
+        return
+    
+    # Если проверка пройдена, продолжаем обычный процесс
+    await start_booking(message, state)
+
 
 @dp.message(F.text == "📅 Забронировать время")
 @dp.message(Command("book"))
@@ -970,7 +989,17 @@ async def start_booking(message: types.Message, state: FSMContext):
         )
         return
     
+    if user_roles == ['student']:
+        await message.answer(
+            "❌ Ученики не могут самостоятельно записываться на занятия.\n"
+            "Для записи обратитесь к родителю или администратору.",
+            reply_markup=await generate_main_menu(user_id)
+        )
+        return
+    
     await state.update_data(user_name=user_name)
+
+    
     
     # Показываем доступные роли для бронирования
     builder = InlineKeyboardBuilder()
@@ -982,7 +1011,7 @@ async def start_booking(message: types.Message, state: FSMContext):
         available_booking_roles.append('teacher')
         builder.button(text="👨‍🏫 Я преподаватель", callback_data="role_teacher")
     
-    if 'student' in user_roles:
+    if 'student' in user_roles and 'parent' in user_roles:
         available_booking_roles.append('student') 
         builder.button(text="👨‍🎓 Я ученик", callback_data="role_student")
     
