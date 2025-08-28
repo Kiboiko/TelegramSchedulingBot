@@ -89,15 +89,74 @@ class JSONStorage:
         if self.gsheets:
             try:
                 bookings = self.load()
-                # ДЕБАГ: Логируем что отправляем в Google Sheets
                 logger.info(f"Syncing {len(bookings)} bookings to Google Sheets")
-                for booking in bookings:
-                    if booking.get('user_role') == 'teacher':
-                        logger.info(f"Teacher booking subjects: {booking.get('subjects')}")
+                
+                # Добавляем пользователей с ролями, но без записей
+                all_users_with_roles = self._get_all_users_with_roles()
+                
+                # Добавляем пустые записи для пользователей с ролями, но без бронирований
+                for user_data in all_users_with_roles:
+                    user_id = user_data['user_id']
+                    user_name = user_data['user_name']
+                    roles = user_data['roles']
+                    
+                    # Проверяем, есть ли уже записи для этого пользователя
+                    has_booking = any(b.get('user_id') == user_id for b in bookings)
+                    
+                    if not has_booking:
+                        # Добавляем пустую запись
+                        empty_booking = {
+                            'user_id': user_id,
+                            'user_name': user_name,
+                            'user_role': roles[0],  # берем первую роль
+                            'date': None,
+                            'start_time': '',
+                            'end_time': '',
+                            'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        }
+                        
+                        if 'teacher' in roles:
+                            empty_booking['subjects'] = []
+                            empty_booking['priority'] = ''
+                        if 'student' in roles:
+                            empty_booking['subject'] = ''
+                            empty_booking['attention_need'] = ''
+                        
+                        bookings.append(empty_booking)
+                        logger.info(f"Added empty booking for user {user_name} (ID: {user_id})")
 
                 self.gsheets.update_all_sheets(bookings)
             except Exception as e:
                 logger.error(f"Ошибка синхронизации с Google Sheets: {e}")
+
+    def _get_all_users_with_roles(self) -> List[Dict[str, Any]]:
+        """Получает всех пользователей с назначенными ролями"""
+        if not hasattr(self, 'gsheets') or not self.gsheets:
+            return []
+        
+        try:
+            worksheet = self.gsheets._get_or_create_users_worksheet()
+            records = worksheet.get_all_records()
+            
+            users_with_roles = []
+            for record in records:
+                user_id = record.get('user_id')
+                user_name = record.get('user_name', '')
+                roles_str = record.get('roles', '')
+                
+                if roles_str and user_id and user_name:
+                    roles = [role.strip().lower() for role in roles_str.split(',') if role.strip()]
+                    if roles:
+                        users_with_roles.append({
+                            'user_id': user_id,
+                            'user_name': user_name,
+                            'roles': roles
+                        })
+            
+            return users_with_roles
+        except Exception as e:
+            logger.error(f"Error getting users with roles: {e}")
+            return []
 
     def get_user_role(self, user_id: int) -> str:
         """Возвращает роль пользователя"""

@@ -83,6 +83,10 @@ class GoogleSheetsManager:
             teachers = [b for b in bookings if b.get('user_role') == 'teacher']
             students = [b for b in bookings if b.get('user_role') == 'student']
 
+            # Добавляем пользователей с ролями, но без записей
+            teachers = self._add_users_without_bookings(teachers, 'teacher')
+            students = self._add_users_without_bookings(students, 'student')
+
             success = True
             if not self._update_sheet('Преподаватели', teachers, is_teacher=True):
                 success = False
@@ -95,6 +99,51 @@ class GoogleSheetsManager:
         except Exception as e:
             logger.error(f"Критическая ошибка при обновлении: {e}")
             return False
+        
+    def _add_users_without_bookings(self, bookings: List[Dict[str, Any]], role: str) -> List[Dict[str, Any]]:
+        """Добавляет пользователей с ролями, но без записей"""
+        try:
+            # Получаем всех пользователей с соответствующей ролью
+            users_worksheet = self._get_or_create_users_worksheet()
+            users_data = users_worksheet.get_all_records()
+            
+            users_with_role = []
+            for user in users_data:
+                user_roles = user.get('roles', '').lower().split(',')
+                if role in user_roles:
+                    users_with_role.append({
+                        'user_id': user.get('user_id'),
+                        'user_name': user.get('user_name', ''),
+                        'user_role': role
+                    })
+            
+            # Находим пользователей с ролью, но без записей
+            existing_user_ids = {str(booking.get('user_id')) for booking in bookings}
+            
+            for user in users_with_role:
+                user_id_str = str(user.get('user_id'))
+                if user_id_str not in existing_user_ids:
+                    # Создаем пустую запись для пользователя
+                    empty_booking = {
+                        'user_id': user.get('user_id'),
+                        'user_name': user.get('user_name'),
+                        'user_role': role,
+                        'date': None,
+                        'start_time': '',
+                        'end_time': '',
+                        'subjects': [] if role == 'teacher' else None,
+                        'subject': '' if role == 'student' else None,
+                        'priority': '' if role == 'teacher' else None,
+                        'attention_need': '' if role == 'student' else None
+                    }
+                    bookings.append(empty_booking)
+                    logger.info(f"Добавлен {role} без записей: {user.get('user_name')} (ID: {user.get('user_id')})")
+            
+            return bookings
+            
+        except Exception as e:
+            logger.error(f"Ошибка при добавлении пользователей без записей: {e}")
+            return bookings
 
     def _update_sheet(self, sheet_name: str, bookings: List[Dict[str, Any]], is_teacher: bool):
         """Полностью перезаписывает данные в листе"""
@@ -193,7 +242,7 @@ class GoogleSheetsManager:
     #
     #     return records
     def _prepare_records(self, bookings: List[Dict[str, Any]],
-                         formatted_dates: List[str], is_teacher: bool) -> Dict[str, Any]:
+                     formatted_dates: List[str], is_teacher: bool) -> Dict[str, Any]:
         """Подготавливает данные для вставки с учетом предметов учеников"""
         # Сначала загружаем текущие данные из таблицы
         try:
@@ -215,12 +264,18 @@ class GoogleSheetsManager:
                 existing_values[key] = row.get('Потребность во внимании (мин)', '')
 
         for booking in bookings:
-            if 'user_name' not in booking or 'date' not in booking:
+            if 'user_name' not in booking:
                 continue
 
             name = booking['user_name']
             user_id = str(booking.get('user_id', ''))
-            date = self.format_date(booking['date'])
+            
+            # Для записей без даты создаем специальную обработку
+            date = booking.get('date')
+            if date:
+                date = self.format_date(date) if isinstance(date, str) else ''
+            else:
+                date = ''  # Пустая дата для пользователей без записей
 
             if is_teacher:
                 subjects = booking.get('subjects', [])
@@ -253,7 +308,7 @@ class GoogleSheetsManager:
         return records
 
     def _update_worksheet_data(self, worksheet, records: Dict[str, Any],
-                               formatted_dates: List[str], is_teacher: bool):
+                           formatted_dates: List[str], is_teacher: bool):
         """Вставляет данные в лист"""
         if not records:
             worksheet.batch_clear(["A2:Z1000"])
@@ -269,6 +324,7 @@ class GoogleSheetsManager:
             else:
                 row.append(record.get('attention_need', ''))
 
+            # Для пользователей без записей оставляем пустые ячейки
             for date in formatted_dates:
                 if date in record['bookings']:
                     row.extend([
