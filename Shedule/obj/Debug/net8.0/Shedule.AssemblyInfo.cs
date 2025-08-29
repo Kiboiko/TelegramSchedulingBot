@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("Shedule")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+7ed826ffd86047af4d18fbe6f14db76988d8dc66")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+3ff8670136288b688a2611534262eef662dcbd6b")]
 [assembly: System.Reflection.AssemblyProductAttribute("Shedule")]
 [assembly: System.Reflection.AssemblyTitleAttribute("Shedule")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

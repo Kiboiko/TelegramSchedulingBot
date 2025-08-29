@@ -1,6 +1,6 @@
 import sys
 
-sys.path.append(r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
 
 import asyncio
 import json
