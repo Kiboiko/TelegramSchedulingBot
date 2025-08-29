@@ -120,6 +120,186 @@ class RoleCheckMiddleware(BaseMiddleware):
 # Добавление middleware
 dp.update.middleware(RoleCheckMiddleware())
 
+def _add_minutes_to_time(self, time_obj: time, minutes: int) -> time:
+    """
+    Добавляет минуты к объекту time
+    """
+    from datetime import datetime, timedelta
+    dummy_date = datetime(2023, 1, 1)
+    combined_datetime = datetime.combine(dummy_date, time_obj)
+    new_datetime = combined_datetime + timedelta(minutes=minutes)
+    return new_datetime.time()
+
+# Добавляем метод в класс
+GoogleSheetsDataLoader._add_minutes_to_time = _add_minutes_to_time
+
+def get_subject_distribution_by_time(loader, target_date: str, condition_check: bool = True) -> Dict[time, Dict]:
+    """
+    Получает распределение тем занятий по получасовым интервалам для указанной даты
+    
+    Args:
+        loader: экземпляр GoogleSheetsDataLoader
+        target_date: дата в формаite "YYYY.MM.DD"
+        condition_check: если True, проверяет дополнительное условие
+    
+    Returns:
+        Словарь с временем как ключом и словарем {
+            'distribution': {тема: количество учеников},
+            'condition_result': bool (результат условия)
+        }
+        Всегда содержит все интервалы с 9:00 до 20:00
+    """
+    from datetime import time
+    from typing import Dict
+    
+    # Загружаем данные студентов
+    student_sheet = loader._get_sheet_data("Ученики")
+    if not student_sheet:
+        logger.error("Лист 'Ученики' не найден")
+        return _create_empty_time_slots()
+    
+    # Находим колонки для указанной даты
+    date_columns = loader._find_date_columns(student_sheet, target_date)
+    if date_columns == (-1, -1):
+        logger.error(f"Дата {target_date} не найдена в листе учеников")
+        return _create_empty_time_slots()
+    
+    start_col, end_col = date_columns
+    
+    # Загружаем план обучения
+    loader._load_study_plan_cache()
+    
+    # Создаем все временные интервалы с 9:00 до 20:00 с шагом 30 минут
+    time_slots = _create_empty_time_slots()
+    
+    # Обрабатываем каждого студента
+    for row in student_sheet[1:]:  # Пропускаем заголовок
+        if not row or len(row) <= max(start_col, end_col):
+            continue
+        
+        name = str(row[1]).strip() if len(row) > 1 else ""
+        if not name:
+            continue
+        
+        # Проверяем, есть ли запись на указанную дату
+        start_time_str = str(row[start_col]).strip() if len(row) > start_col and row[start_col] else ""
+        end_time_str = str(row[end_col]).strip() if len(row) > end_col and row[end_col] else ""
+        
+        if not start_time_str or not end_time_str:
+            continue  # Нет записи на эту дату
+        
+        # Получаем тему занятия для этого студента
+        lesson_number = loader._calculate_lesson_number_for_student(row, start_col)
+        topic = None
+        
+        if name in loader._study_plan_cache:
+            student_plan = loader._study_plan_cache[name]
+            topic = student_plan.get(lesson_number, "Неизвестная тема")
+        else:
+            # Пытаемся получить тему из предмета (колонка C)
+            if len(row) > 2 and row[2]:
+                subject_id = str(row[2]).strip()
+                topic = f"P{subject_id}"
+            else:
+                topic = "Тема не определена"
+        
+        # Парсим время начала и окончания
+        try:
+            start_time_parts = start_time_str.split(':')
+            end_time_parts = end_time_str.split(':')
+            
+            if len(start_time_parts) >= 2 and len(end_time_parts) >= 2:
+                start_hour = int(start_time_parts[0])
+                start_minute = int(start_time_parts[1])
+                end_hour = int(end_time_parts[0])
+                end_minute = int(end_time_parts[1])
+                
+                lesson_start = time(start_hour, start_minute)
+                lesson_end = time(end_hour, end_minute)
+                
+                # Находим все получасовые интервалы, попадающие в занятие
+                current_interval = time(9, 0)
+                while current_interval <= time(20, 0):
+                    interval_end = loader._add_minutes_to_time(current_interval, 30)
+                    if (current_interval >= lesson_start and interval_end <= lesson_end):
+                        # Этот интервал полностью внутри занятия
+                        if topic not in time_slots[current_interval]['distribution']:
+                            time_slots[current_interval]['distribution'][topic] = 0
+                        time_slots[current_interval]['distribution'][topic] += 1
+                    
+                    current_interval = interval_end
+                    
+        except (ValueError, IndexError) as e:
+            logger.warning(f"Ошибка парсинга времени для студента {name}: {e}")
+            continue
+    
+    # Вычисляем результат условия для каждого слота
+    for time_slot, data in time_slots.items():
+        topics_dict = data['distribution']
+        p1_count = topics_dict.get("P1", 0)
+        p2_count = topics_dict.get("P2", 0)
+        
+        data['condition_result'] = (p1_count < 2 and 
+                                  p2_count < 5 and 
+                                  p1_count + p2_count < 20)
+    
+    # Выводим результат в терминал
+    print(f"\n📊 РАСПРЕДЕЛЕНИЕ ТЕМ ПО ВРЕМЕНИ НА {target_date}")
+    print("=" * 60)
+    
+    # Выводим все интервалы, даже пустые
+    for time_slot, data in sorted(time_slots.items()):
+        topics_dict = data['distribution']
+        condition_result = data['condition_result']
+        
+        next_slot = loader._add_minutes_to_time(time_slot, 30)
+        print(f"\n🕒 {time_slot.strftime('%H:%M')} - {next_slot.strftime('%H:%M')}:")
+        print("-" * 30)
+        
+        if not topics_dict:
+            print("   Нет занятий")
+        else:
+            for topic, count in sorted(topics_dict.items(), key=lambda x: x[1], reverse=True):
+                print(f"   📚 {topic}: {count} ученик(ов)")
+        
+        # Выводим результат условия (даже для пустых интервалов)
+        if condition_check:
+            p1_count = topics_dict.get("P1", 0)
+            p2_count = topics_dict.get("P2", 0)
+            
+            print(f"   ⚡ Условие (P1<10 & P2<5 & P1+P2<20):")
+            print(f"      P1={p1_count}, P2={p2_count}, P1+P2={p1_count + p2_count}")
+            print(f"      Результат: {'✅ ВЫПОЛНЕНО' if condition_result else '❌ НЕ ВЫПОЛНЕНО'}")
+    
+    print("=" * 60)
+    total_students = sum(sum(topics_dict.values()) for data in time_slots.values() for topics_dict in [data['distribution']])
+    print(f"📈 Всего учеников на день: {total_students}")
+    
+    return time_slots
+
+
+def _create_empty_time_slots() -> Dict[time, Dict]:
+    """Создает словарь со всеми временными интервалами с 9:00 до 20:00"""
+    from datetime import time
+    
+    time_slots = {}
+    current_time = time(9, 0)
+    end_time = time(20, 0)
+    
+    while current_time <= end_time:
+        time_slots[current_time] = {
+            'distribution': {},
+            'condition_result': True  # Для пустых интервалов условие всегда выполняется
+        }
+        # Добавляем 30 минут для следующего интервала
+        next_time = (current_time.hour * 60 + current_time.minute + 30) // 60
+        next_minute = (current_time.hour * 60 + current_time.minute + 30) % 60
+        current_time = time(next_time, next_minute)
+    
+    return time_slots
+    
+
+
 def check_student_availability_for_slots(
     student: Student,
     all_students: List[Student],
@@ -143,6 +323,11 @@ def check_student_availability_for_slots(
     
     logger.info(f"Всего студентов: {len(all_students)}")
     
+    # Получаем распределение тем по времени для целевой даты
+    formatted_date = target_date.strftime("%Y.%m.%d")
+    loader = GoogleSheetsDataLoader(CREDENTIALS_PATH, SPREADSHEET_ID, formatted_date)
+    time_distribution = get_subject_distribution_by_time(loader, formatted_date)
+    
     # Преобразуем subject_id студента в число для сравнения
     try:
         student_subject_id = int(student.subject_id)
@@ -152,6 +337,18 @@ def check_student_availability_for_slots(
                 for i in range(int((end_time.hour*60+end_time.minute - start_time.hour*60+start_time.minute)/interval_minutes)+1)]}
     
     while current_time <= end_time:
+        # Проверяем условие распределения для текущего времени
+        distribution_condition = True
+        if current_time in time_distribution:
+            distribution_condition = time_distribution[current_time]['condition_result']
+        
+        # Если условие распределения не выполняется, блокируем слот
+        if not distribution_condition:
+            result[current_time] = False
+            current_time = School.add_minutes_to_time(current_time, interval_minutes)
+            continue
+        
+        # Остальная логика проверки доступности
         active_students = [
             s for s in all_students 
             if (s.start_of_studying_time <= current_time <= s.end_of_studying_time and
@@ -1237,37 +1434,6 @@ async def process_role_selection(callback: types.CallbackQuery, state: FSMContex
 
     await callback.answer()
 
-# @dp.callback_query(BookingStates.TEACHER_SUBJECTS, F.data.startswith("subject_"))
-# async def process_teacher_subjects(callback: types.CallbackQuery, state: FSMContext):
-#     data = await state.get_data()
-#     selected_subjects = data.get("subjects", [])
-
-#     subject_id = callback.data.split("_")[1]
-#     if subject_id in selected_subjects:
-#         selected_subjects.remove(subject_id)
-#     else:
-#         selected_subjects.append(subject_id)
-
-#     await state.update_data(subjects=selected_subjects)
-#     await callback.message.edit_reply_markup(
-#         reply_markup=generate_subjects_keyboard(selected_subjects, is_teacher=True)
-#     )
-#     await callback.answer()
-
-
-# @dp.callback_query(BookingStates.TEACHER_SUBJECTS, F.data == "subjects_done")
-# async def process_subjects_done(callback: types.CallbackQuery, state: FSMContext):
-#     data = await state.get_data()
-#     if not data.get("subjects"):
-#         await callback.answer("Выберите хотя бы один предмет!", show_alert=True)
-#         return
-
-#     storage.update_user_subjects(callback.from_user.id, data["subjects"])
-#     await state.update_data(booking_type="Тип1")  # Устанавливаем тип по умолчанию
-#     await callback.message.edit_text("Выберите дату:", reply_markup=generate_calendar())  # Пропускаем выбор типа
-#     await state.set_state(BookingStates.SELECT_DATE)
-#     await callback.answer()
-
 
 @dp.callback_query(BookingStates.SELECT_SUBJECT, F.data.startswith("subject_"))
 async def process_student_subject(callback: types.CallbackQuery, state: FSMContext):
@@ -1329,76 +1495,12 @@ async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
                 # Получаем всех студентов и преподавателей из Google Sheets
                 loader = GoogleSheetsDataLoader(CREDENTIALS_PATH, SPREADSHEET_ID, formatted_date)
                 all_teachers, all_students = loader.load_data()
+
+                distribution = get_subject_distribution_by_time(loader, formatted_date)
+                for time_slot, data in distribution.items():
+                    print(f"Время: {time_slot}")
+                    print(f"Условие выполнено: {data['condition_result']}")
                 
-                # # ВРЕМЕННО: если данные не загружаются, используем тестовые данные
-                # if not all_teachers:
-                #     logger.warning("Преподаватели не загружены из Google Sheets, используем тестовые данные")
-                #
-                #     # Тестовые преподаватели (активные с 9:00 до 18:00)
-                #     all_teachers = [
-                #         Teacher(
-                #             name="Мария Ивановна",
-                #             start_of_study_time="09:00",
-                #             end_of_study_time="18:00",
-                #             subjects_id=[1, 2],  # Математика и Физика
-                #             priority=1,
-                #             maximum_attention=20  # Увеличим емкость
-                #         ),
-                #         Teacher(
-                #             name="Петр Сергеевич",
-                #             start_of_study_time="10:00",
-                #             end_of_study_time="19:00",
-                #             subjects_id=[1, 3],  # Математика и Информатика
-                #             priority=2,
-                #             maximum_attention=15  # Увеличим емкость
-                #         )
-                #     ]
-                #
-                #     # Тестовые студенты с меньшей потребностью во внимании
-                #     all_students = [
-                #         Student(
-                #             name="Иван Петров",
-                #             start_of_study_time="10:00",
-                #             end_of_study_time="12:00",
-                #             subject_id=1,  # Математика
-                #             need_for_attention=2  # Уменьшим потребность
-                #         ),
-                #         Student(
-                #             name="Елена Сидорова",
-                #             start_of_study_time="14:00",
-                #             end_of_study_time="16:00",
-                #             subject_id=2,  # Физика
-                #             need_for_attention=2  # Уменьшим потребность
-                #         )
-                #     ]
-                #
-                # if not all_students:
-                #     logger.warning("Студенты не загружены из Google Sheets, используем тестовые данные")
-                #
-                #     # Тестовые студенты с разным временем
-                #     all_students = [
-                #         Student(
-                #             name="Иван Петров",
-                #             start_of_study_time="10:00",
-                #             end_of_study_time="12:00",
-                #             subject_id=1,  # Математика
-                #             need_for_attention=5
-                #         ),
-                #         Student(
-                #             name="Елена Сидорова",
-                #             start_of_study_time="14:00",
-                #             end_of_study_time="16:00",
-                #             subject_id=2,  # Физика
-                #             need_for_attention=3
-                #         ),
-                #         Student(
-                #             name="Алексей Козлов",
-                #             start_of_study_time="11:00",
-                #             end_of_study_time="13:00",
-                #             subject_id=1,  # Математика
-                #             need_for_attention=4
-                #         )
-                #     ]
                 
                 # Логируем загруженные данные
                 logger.info(f"Используется: {len(all_teachers)} преподавателей, {len(all_students)} студентов")
