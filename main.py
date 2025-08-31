@@ -1,6 +1,6 @@
 import sys
 
-sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\shedule_app")
 
 import asyncio
 import json
@@ -42,7 +42,7 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 BOOKINGS_FILE = "bookings.json"
-CREDENTIALS_PATH = r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\credentials.json"
+CREDENTIALS_PATH = r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\config.json"
 SPREADSHEET_ID = "1r1MU8k8umwHx_E4Z-jFHRJ-kdwC43Jw0nwpVeH7T1GU"
 
 BOOKING_TYPES = ["Тип1"]
@@ -67,7 +67,7 @@ class BookingStates(StatesGroup):
     CONFIRM_SCHEDULE = State()  # Подтверждение составления расписания
     # В начале файла main.py, после других констант
 
-ADMIN_IDS = [1180878673]  # Замените на реальные ID администраторов
+ADMIN_IDS = [1180878673,973231400]  # Замените на реальные ID администраторов
 
 # Инициализация бота
 bot = Bot(token=BOT_TOKEN)
@@ -2166,6 +2166,9 @@ async def process_role_parent_selection(callback: types.CallbackQuery, state: FS
         return
     
     await state.update_data(user_role='parent')
+    
+    # НЕ сохраняем родителя снова - используем существующие данные
+    # Просто переходим к выбору ребенка
     
     # Создаем клавиатуру для выбора ребенка
     builder = InlineKeyboardBuilder()

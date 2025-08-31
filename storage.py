@@ -382,8 +382,10 @@ class JSONStorage:
         if not hasattr(self, 'gsheets') or not self.gsheets:
             return False
         
-        # Убеждаемся, что children_ids не None
-        children_ids = children_ids or []
+        # Если children_ids не переданы, получаем текущий список детей
+        if children_ids is None:
+            current_children = self.get_parent_children(parent_id)
+            children_ids = current_children
         
         return self.gsheets.save_parent_info(parent_id, parent_name, children_ids)
     

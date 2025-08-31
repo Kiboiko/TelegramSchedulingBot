@@ -793,6 +793,10 @@ class GoogleSheetsManager:
                     row_num = i
                     break
             
+            # Если children_ids не переданы, сохраняем текущий список
+            if children_ids is None:
+                children_ids = self.get_parent_children(parent_id)
+            
             children_str = ','.join(map(str, children_ids)) if children_ids else ''
             
             if row_num:
