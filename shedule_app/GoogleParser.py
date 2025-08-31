@@ -106,7 +106,30 @@ class GoogleSheetsDataLoader:
                 if student:
                     students.append(student)
                     logger.info(f"Добавлен студент {i+1}: {student.name}")
+            logger.info("\n=== ДЕТАЛЬНАЯ ИНФОРМАЦИЯ О ДАННЫХ ===")
+            logger.info("ПРЕПОДАВАТЕЛИ:")
+            for teacher in teachers:
+                logger.info(
+                    f"  {teacher.name}: предметы {teacher.subjects_id}, время {teacher.start_of_study_time}-{teacher.end_of_study_time}")
 
+            logger.info("\nСТУДЕНТЫ:")
+            for student in students:
+                logger.info(
+                    f"  {student.name}: предмет {student.subject_id}, потребность {student.need_for_attention}, время {student.start_of_study_time}-{student.end_of_study_time}")
+
+            logger.info(f"\nСУММАРНАЯ ПОТРЕБНОСТЬ: {sum(s.need_for_attention for s in students)}")
+            logger.info(f"СУММАРНАЯ ЕМКОСТЬ: {sum(t.maximum_attention for t in teachers)}")
+
+            logger.info("\n=== ДЕТАЛЬНАЯ ИНФОРМАЦИЯ О ДАННЫХ ===")
+            logger.info("ПРЕПОДАВАТЕЛИ:")
+            for teacher in teachers:
+                logger.info(
+                    f"  {teacher.name}: предметы {teacher.subjects_id}, время {teacher.start_of_studying_time}-{teacher.end_of_studying_time}")  # Исправлено имя
+
+            logger.info("\nСТУДЕНТЫ:")
+            for student in students:
+                logger.info(
+                    f"  {student.name}: предмет {student.subject_id}, потребность {student.need_for_attention}, время {student.start_of_studying_time}-{student.end_of_studying_time}")  # Исправлено имя
         except Exception as ex:
             logger.error(f"Ошибка при загрузке данных: {ex}", exc_info=True)
 
@@ -121,15 +144,38 @@ class GoogleSheetsDataLoader:
         start_col = -1
         end_col = -1
 
-        # Преобразуем целевую дату в разные форматы для поиска
-        target_date_formats = [
-            date,  # исходный формат "2025.09.01"
-            date.replace(".", "/"),  # "2025/09/01"
-            date.replace(".", "-"),  # "2025-09-01"
-            datetime.strptime(date, "%Y.%m.%d").strftime("%d.%m.%Y"),  # "01.09.2025"
-            datetime.strptime(date, "%Y.%m.%d").strftime("%d/%m/%Y"),  # "01/09/2025"
-            datetime.strptime(date, "%Y.%m.%d").strftime("%d-%m-%Y"),  # "01-09-2025"
-        ]
+        # Пробуем разные форматы даты
+        target_date_formats = []
+
+        # Пробуем распарсить входящую дату в разных форматах
+        try:
+            # Пробуем формат DD.MM.YYYY
+            date_obj = datetime.strptime(date, "%d.%m.%Y")
+            target_date_formats.extend([
+                date_obj.strftime("%Y.%m.%d"),  # 2025.09.01
+                date_obj.strftime("%Y/%m/%d"),  # 2025/09/01
+                date_obj.strftime("%Y-%m-%d"),  # 2025-09-01
+                date_obj.strftime("%d.%m.%Y"),  # 01.09.2025 (оригинальный)
+                date_obj.strftime("%d/%m/%Y"),  # 01/09/2025
+                date_obj.strftime("%d-%m-%Y"),  # 01-09-2025
+                date,  # оригинальный формат
+            ])
+        except ValueError:
+            try:
+                # Пробуем формат YYYY.MM.DD
+                date_obj = datetime.strptime(date, "%Y.%m.%d")
+                target_date_formats.extend([
+                    date_obj.strftime("%Y.%m.%d"),  # 2025.09.01
+                    date_obj.strftime("%Y/%m/%d"),  # 2025/09/01
+                    date_obj.strftime("%Y-%m-%d"),  # 2025-09-01
+                    date_obj.strftime("%d.%m.%Y"),  # 01.09.2025
+                    date_obj.strftime("%d/%m/%Y"),  # 01/09/2025
+                    date_obj.strftime("%d-%m-%Y"),  # 01-09-2025
+                    date,  # оригинальный формат
+                ])
+            except ValueError:
+                # Если оба формата не подходят, используем оригинальный
+                target_date_formats = [date]
 
         logger.info(f"Поиск даты '{date}' в форматах: {target_date_formats}")
 
@@ -228,10 +274,6 @@ class GoogleSheetsDataLoader:
 
     def _parse_teacher_row(self, row: List[Any], subject_map: Dict[str, int],
                            date_columns: Tuple[int, int]) -> Optional[Teacher]:
-        
-        
-
-
         try:
             name = str(row[1]).strip() if len(row) > 1 else ""
             subjects_input = str(row[2]).strip() if len(row) > 2 else ""
@@ -259,26 +301,26 @@ class GoogleSheetsDataLoader:
             if not start_time_str or not end_time_str:
                 return None
 
-            # Парсим предметы
+            # Парсим предметы - исправленная логика
             subject_ids = []
             if subjects_input:
-                # Разбиваем по разным разделителям
-                for subject in re.split(r'[,.;\s]+', subjects_input):
+                # Убираем все пробелы и разбиваем по разделителям
+                cleaned_input = re.sub(r'\s+', '', subjects_input)
+                for subject in re.split(r'[,.;]+', cleaned_input):
                     subject = subject.strip()
                     if subject and subject.isdigit():
                         subject_ids.append(int(subject))
                     elif subject and subject in subject_map:
                         subject_ids.append(subject_map[subject])
 
-            # Если не нашли предметы, попробуем найти в других колонках
-            if not subject_ids and len(row) > 6:
-                for i in range(6, min(10, len(row))):
+            # Дополнительная проверка: если предметы не найдены, пробуем другие колонки
+            if not subject_ids and len(row) > 4:
+                for i in range(4, min(8, len(row))):  # Проверяем колонки 5-8
                     cell_value = str(row[i]).strip()
                     if cell_value and cell_value.isdigit():
                         subject_ids.append(int(cell_value))
                         break
 
-            # Логируем для отладки
             logger.info(f"Преподаватель {name}: предметы {subject_ids} из входных данных '{subjects_input}'")
 
             return Teacher(
@@ -291,7 +333,7 @@ class GoogleSheetsDataLoader:
             )
 
         except Exception as ex:
-            print(f"Ошибка парсинга преподавателя: {ex}")
+            logger.error(f"Ошибка парсинга преподавателя: {ex}")
             return None
 
     def _parse_student_row(self, row: List[Any], subject_map: Dict[str, int],
@@ -322,29 +364,35 @@ class GoogleSheetsDataLoader:
                 topic = student_plan.get(lesson_number)
 
             subject_id_int = -1
-            if topic and topic.isdigit():
-                subject_id_int = int(topic)
-            else:
-                # Fallback: используем предмет из колонки C
-                if len(row) > 2 and row[2]:
-                    try:
-                        subject_id_int = int(row[2])
-                        print(f"Внимание: для ученика {name} не найдена тема для занятия №{lesson_number}. "
-                              f"Использован предмет из столбца C: {subject_id_int}")
-                    except ValueError:
-                        print(f"Ошибка: не удалось преобразовать предмет из столбца C для ученика {name}")
-                        return None
-                else:
-                    print(f"Ошибка: отсутствует предмет для ученика {name}")
-                    return None
-
-            # Потребность во внимании
             need_for_attention = 1
+
+            # Сначала пробуем получить subject_id из колонки C (индекс 2)
+            if len(row) > 2 and row[2]:
+                try:
+                    subject_id_int = int(row[2])
+                except ValueError:
+                    # Если колонка C не число, используем тему из плана обучения
+                    if topic and topic.isdigit():
+                        subject_id_int = int(topic)
+                    else:
+                        print(f"Ошибка: не удалось определить предмет для ученика {name}")
+                        return None
+
+            # Потребность во внимании - исправленная логика
             if len(row) > 3 and row[3]:
                 try:
                     need_for_attention = int(row[3])
                 except ValueError:
                     need_for_attention = 1
+                    print(f"Внимание: некорректное значение потребности для ученика {name}, установлено значение 1")
+
+            # Дополнительная проверка: если subject_id все еще -1, используем тему
+            if subject_id_int == -1 and topic and topic.isdigit():
+                subject_id_int = int(topic)
+
+            if subject_id_int == -1:
+                print(f"Ошибка: не удалось определить предмет для ученика {name}")
+                return None
 
             return Student(
                 name=name,
@@ -355,14 +403,101 @@ class GoogleSheetsDataLoader:
             )
 
         except Exception as ex:
-            print(f"Ошибка парсинга студента: {ex}")
+            print(f"Ошибка парсинга студента {name if 'name' in locals() else 'unknown'}: {ex}")
+            return None
+
+    def _parse_student_row(self, row: List[Any], subject_map: Dict[str, int],
+                           date_columns: Tuple[int, int]) -> Optional[Student]:
+        try:
+            name = str(row[1]).strip() if len(row) > 1 else ""
+
+            # Проверяем запись на выбранную дату
+            start_col, end_col = date_columns
+            start_time_str = ""
+            end_time_str = ""
+
+            if start_col != -1 and len(row) > start_col and row[start_col]:
+                start_time_str = str(row[start_col])
+            if end_col != -1 and len(row) > end_col and row[end_col]:
+                end_time_str = str(row[end_col])
+
+            if not start_time_str or not end_time_str:
+                return None
+
+            # Определяем номер занятия
+            lesson_number = self._calculate_lesson_number_for_student(row, start_col)
+
+            # Ищем тему в плане обучения
+            topic = None
+            if name in self._study_plan_cache:
+                student_plan = self._study_plan_cache[name]
+                topic = student_plan.get(lesson_number)
+
+            # Парсим предмет и потребность во внимании
+            subject_id_int = -1
+            need_for_attention = 1
+
+            # Предмет из колонки C (индекс 2)
+            if len(row) > 2 and row[2]:
+                try:
+                    subject_id_int = int(row[2])
+                except ValueError:
+                    # Если колонка C не число, пробуем тему из плана обучения
+                    if topic and topic.isdigit():
+                        subject_id_int = int(topic)
+                    else:
+                        logger.warning(f"Не удалось определить предмет для ученика {name}")
+                        return None
+
+            # Потребность во внимании из колонки D (индекс 3)
+            if len(row) > 3 and row[3]:
+                try:
+                    need_for_attention = int(row[3])
+                except ValueError:
+                    need_for_attention = 1
+                    logger.warning(f"Некорректное значение потребности для ученика {name}, установлено значение 1")
+
+            # Дополнительная проверка: если subject_id все еще -1, используем тему
+            if subject_id_int == -1 and topic and topic.isdigit():
+                subject_id_int = int(topic)
+
+            if subject_id_int == -1:
+                logger.warning(f"Не удалось определить предмет для ученика {name}")
+                return None
+
+            return Student(
+                name=name,
+                start_of_study_time=self._normalize_time(start_time_str),
+                end_of_study_time=self._normalize_time(end_time_str),
+                subject_id=subject_id_int,
+                need_for_attention=need_for_attention
+            )
+
+        except Exception as ex:
+            logger.error(f"Ошибка парсинга студента {name if 'name' in locals() else 'unknown'}: {ex}")
             return None
 
     def _normalize_time(self, time_str: str) -> str:
+        # Убираем лишние пробелы
+        time_str = time_str.strip()
+
+        # Если время содержит точку вместо двоеточия
+        if '.' in time_str and ':' not in time_str:
+            time_str = time_str.replace('.', ':')
+
+        # Разбиваем на части
         if ':' in time_str:
             parts = time_str.split(':')
             if len(parts) >= 2:
-                return f"{parts[0]}:{parts[1]}"
+                # Убеждаемся, что часы и минуты состоят из двух цифр
+                hours = parts[0].zfill(2)
+                minutes = parts[1].zfill(2)
+                return f"{hours}:{minutes}"
+
+        # Если время в формате "HHMM"
+        elif len(time_str) == 4 and time_str.isdigit():
+            return f"{time_str[:2]}:{time_str[2:]}"
+
         return time_str
 
     def export_schedule_to_google_sheets(self, matrix: List[List[Any]], combinations: List[List[Teacher]]):
