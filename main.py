@@ -42,7 +42,7 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 BOOKINGS_FILE = "bookings.json"
-CREDENTIALS_PATH = r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\config.json"
+CREDENTIALS_PATH = r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\credentials.json"
 SPREADSHEET_ID = "1r1MU8k8umwHx_E4Z-jFHRJ-kdwC43Jw0nwpVeH7T1GU"
 
 BOOKING_TYPES = ["Тип1"]
@@ -1627,12 +1627,7 @@ async def process_role_selection(callback: types.CallbackQuery, state: FSMContex
         await state.set_state(BookingStates.SELECT_SUBJECT)
         
     elif role == 'parent':
-        # Для родителя автоматически сохраняем информацию
-        user_name = storage.get_user_name(user_id)
-        if user_name:
-            # Сохраняем родителя с пустым списком детей
-            storage.save_parent_info(user_id, user_name, [])
-        
+        # ДЛЯ РОДИТЕЛЯ: не сохраняем с пустым списком, используем существующие данные
         children_ids = storage.get_parent_children(user_id)
         
         if children_ids is None:  # Если родитель еще не был сохранен
@@ -2259,7 +2254,7 @@ async def process_role_parent_selection(callback: types.CallbackQuery, state: FS
     
     # Получаем детей родителя
     children_ids = storage.get_parent_children(user_id)
-    
+    logger.info(f"Parent {user_id} children before processing: {children_ids}")
     if not children_ids:
         await callback.answer(
             "У вас нет привязанных детей. Обратитесь к администратору.",

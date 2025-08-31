@@ -385,7 +385,7 @@ class JSONStorage:
         # Если children_ids не переданы, получаем текущий список детей
         if children_ids is None:
             current_children = self.get_parent_children(parent_id)
-            children_ids = current_children
+            children_ids = current_children  # ← Сохраняем текущих детей, а не пустой список
         
         return self.gsheets.save_parent_info(parent_id, parent_name, children_ids)
     
