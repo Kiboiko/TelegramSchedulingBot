@@ -194,17 +194,14 @@ class School:
         bool, Dict[Teacher, List[Student]]]:
         """
         Генерирует конкретное распределение студентов по преподавателям
-
-        Args:
-            teachers: список преподавателей
-            students: список студентов
-
-        Returns:
-            Tuple[bool, Dict[Teacher, List[Student]]]:
-            - Флаг успешности распределения
-            - Словарь с распределением: преподаватель -> список его студентов
         """
         logger.info(f"Генерация распределения: {len(teachers)} преподавателей, {len(students)} студентов")
+        
+        # ОТЛАДОЧНАЯ ИНФОРМАЦИЯ о типах данных
+        if students:
+            logger.info(f"Тип subject_id студента: {type(students[0].subject_id)}")
+        if teachers:
+            logger.info(f"Тип subjects_id преподавателя: {type(teachers[0].subjects_id[0])}")
 
         teacher_assignments = {teacher: [] for teacher in teachers}
         unassigned_students = []
@@ -220,23 +217,24 @@ class School:
         # Вычисляем редкость предметов (сколько преподавателей могут вести каждый предмет)
         subject_rarity = {}
         for student in students:
-            if student.subject_id not in subject_rarity:
-                subject_rarity[student.subject_id] = sum(1 for t in teachers
-                                                         if student.subject_id in t.subjects_id)
+            # ПРЕОБРАЗУЕМ К СТРОКЕ для гарантии сравнения
+            student_subject = str(student.subject_id)
+            if student_subject not in subject_rarity:
+                subject_rarity[student_subject] = sum(1 for t in teachers
+                                                    if any(str(subj) == student_subject for subj in t.subjects_id))
 
         # Сортируем студентов:
-        # 1. Сначала студенты с редкими предметами (меньше преподавателей могут вести)
-        # 2. Затем студенты с большей потребностью во внимании
         sorted_students = sorted(students,
-                                 key=lambda s: (subject_rarity[s.subject_id], -s.need_for_attention))
+                                key=lambda s: (subject_rarity[str(s.subject_id)], -s.need_for_attention))
+
+        logger.info(f"Отсортированные студенты: {[s.name for s in sorted_students]}")
 
         for student in sorted_students:
-            # Доступные преподаватели для этого предмета, отсортированные по:
-            # 1. Текущей нагрузке (сумма need_for_attention)
-            # 2. Приоритету преподавателя
+            # Доступные преподаватели для этого предмета
+            student_subject = str(student.subject_id)
             available_teachers = [
                 t for t in teachers
-                if student.subject_id in t.subjects_id
+                if any(str(subj) == student_subject for subj in t.subjects_id)
             ]
 
             # Сортируем по текущей нагрузке и приоритету
@@ -245,26 +243,27 @@ class School:
                 t.priority
             ))
 
+            logger.info(f"Распределение студента {student.name} (предмет {student_subject})")
+            logger.info(f"Доступные преподаватели: {[t.name for t in available_teachers]}")
+
             is_assigned = False
             for teacher in available_teachers:
                 current_load = sum(s.need_for_attention for s in teacher_assignments[teacher])
+                logger.info(f"Преподаватель {teacher.name}: текущая нагрузка={current_load}, макс={teacher.maximum_attention}")
+                
                 if current_load + student.need_for_attention <= teacher.maximum_attention:
                     teacher_assignments[teacher].append(student)
                     is_assigned = True
-                    logger.debug(f"Студент {student.name} назначен преподавателю {teacher.name}")
+                    logger.info(f"✅ Студент {student.name} назначен преподавателю {teacher.name}")
                     break
+                else:
+                    logger.info(f"❌ Преподаватель {teacher.name} перегружен")
 
             if not is_assigned:
                 unassigned_students.append(student)
                 logger.warning(f"Не удалось назначить студента {student.name}")
 
         success = len(unassigned_students) == 0
-
-        if success:
-            logger.info("Распределение успешно завершено!")
-        else:
-            logger.warning(f"Не удалось распределить {len(unassigned_students)} студентов")
-
         return (success, teacher_assignments)
 
     # НОВЫЙ МЕТОД: Получение работающих преподавателей (тех, кому назначены студенты)

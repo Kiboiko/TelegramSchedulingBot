@@ -319,68 +319,71 @@ def check_student_availability_for_slots(
     result = {}
     current_time = start_time
     
-    logger.info(f"=== ДЕТАЛЬНАЯ ПРОВЕРКА ДОСТУПНОСТИ ===")
-    logger.info(f"Студент: {student.name}, предмет: {student.subject_id}")
-    logger.info(f"Всего преподавателей: {len(teachers)}")
-    
-    # Логируем всех преподавателей и их предметы
-    for i, teacher in enumerate(teachers):
-        logger.info(f"Преподаватель {i+1}: {teacher.name}, предметы: {teacher.subjects_id}, "
-                   f"время: {teacher.start_of_study_time}-{teacher.end_of_study_time}")
-    
-    logger.info(f"Всего студентов: {len(all_students)}")
-    
-    # Получаем распределение тем по времени для целевой даты
-    formatted_date = target_date.strftime("%Y.%m.%d")
-    loader = GoogleSheetsDataLoader(CREDENTIALS_PATH, SPREADSHEET_ID, formatted_date)
-    time_distribution = get_subject_distribution_by_time(loader, formatted_date)
-    
-    # Преобразуем subject_id студента в число для сравнения
-    try:
-        student_subject_id = int(student.subject_id)
-    except (ValueError, TypeError):
-        logger.error(f"Неверный формат subject_id: {student.subject_id}")
-        return {time_obj: False for time_obj in [start_time + timedelta(minutes=i*interval_minutes) 
-                for i in range(int((end_time.hour*60+end_time.minute - start_time.hour*60+start_time.minute)/interval_minutes)+1)]}
+    logger.info(f"=== ДЕТАЛЬНАЯ ПРОВЕРКА ДОСТУПНОСТИ С generate_teacher_student_allocation ===")
+    logger.info(f"Студент: {student.name}, предмет: {student.subject_id}, внимание: {student.need_for_attention}")
     
     while current_time <= end_time:
-        # Проверяем условие распределения для текущего времени
-        distribution_condition = True
-        if current_time in time_distribution:
-            distribution_condition = time_distribution[current_time]['condition_result']
-        
-        # Если условие распределения не выполняется, блокируем слот
-        if not distribution_condition:
-            result[current_time] = False
-            current_time = School.add_minutes_to_time(current_time, interval_minutes)
-            continue
-        
-        # Остальная логика проверки доступности
+        # Получаем активных студентов и преподавателей на текущее время
         active_students = [
             s for s in all_students 
-            if (s.start_of_studying_time <= current_time <= s.end_of_studying_time and
-                s != student)
+            if (s.start_of_studying_time <= current_time <= s.end_of_studying_time)
         ]
-        
-        students_with_target = active_students + [student]
         
         active_teachers = [
             t for t in teachers 
             if t.start_of_studying_time <= current_time <= t.end_of_studying_time
         ]
         
-        # Детальная проверка
-        can_allocate = True
+        # Детальная проверка доступности
+        can_allocate = False
         
         if not active_teachers:
             logger.info(f"Время {current_time}: нет активных преподавателей")
-            can_allocate = False
         else:
-            # ИСПРАВЛЕННАЯ ПРОВЕРКА: сравниваем числа с числами
-            subject_available = any(student_subject_id in t.subjects_id for t in active_teachers)
+            # ОТЛАДОЧНАЯ ИНФОРМАЦИЯ о активных преподавателях
+            logger.info(f"Время {current_time}: активных преподавателей - {len(active_teachers)}")
+            for i, teacher in enumerate(active_teachers):
+                logger.info(f"  Преподаватель {i+1}: {teacher.name}, предметы: {teacher.subjects_id}")
+            
+            # Проверяем, есть ли преподаватель для предмета нового студента
+            subject_available = False
+            matching_teachers = []
+            
+            for teacher in active_teachers:
+                # ВАЖНО: преобразуем subject_id к тому же типу, что и у преподавателя
+                teacher_subjects = [str(subj) for subj in teacher.subjects_id]
+                if str(student.subject_id) in teacher_subjects:
+                    subject_available = True
+                    matching_teachers.append(teacher)
+            
             if not subject_available:
-                logger.info(f"Время {current_time}: нет преподавателя для предмета {student_subject_id}")
-                can_allocate = False
+                logger.info(f"Время {current_time}: нет преподавателя для предмета {student.subject_id}")
+                logger.info(f"  Доступные предметы у преподавателей: {[t.subjects_id for t in active_teachers]}")
+            else:
+                logger.info(f"Время {current_time}: найдены преподаватели для предмета {student.subject_id}")
+                logger.info(f"  Подходящие преподаватели: {[t.name for t in matching_teachers]}")
+                
+                # ИСПОЛЬЗУЕМ generate_teacher_student_allocation для проверки комбинации
+                try:
+                    # Добавляем нового студента к активным студентам
+                    students_to_check = active_students + [student]
+                    
+                    logger.info(f"  Всего студентов для распределения: {len(students_to_check)}")
+                    
+                    # Проверяем возможность распределения
+                    success, allocation = School.generate_teacher_student_allocation(
+                        active_teachers, students_to_check
+                    )
+                    
+                    if success:
+                        can_allocate = True
+                        logger.info(f"  КОМБИНАЦИЯ УСПЕШНА")
+                    else:
+                        logger.info(f"  КОМБИНАЦИЯ НЕВОЗМОЖНА")
+                        
+                except Exception as e:
+                    logger.error(f"Ошибка при проверке комбинации: {e}")
+                    can_allocate = False
         
         result[current_time] = can_allocate
         current_time = School.add_minutes_to_time(current_time, interval_minutes)
@@ -1719,7 +1722,7 @@ async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
                     name="temp_check",
                     start_of_study_time="09:00",
                     end_of_study_time="20:00",
-                    subject_id=subject,
+                    subject_id=str(subject),
                     need_for_attention=state_data.get('need_for_attention', 1)
                 )
                 
@@ -1742,8 +1745,30 @@ async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
                     "Это может занять несколько секунд"
                 )
                 
+                logger.info(f"=== ИНФОРМАЦИЯ О ВРЕМЕННОМ СТУДЕНТЕ ===")
+                logger.info(f"Имя: {temp_student.name}")
+                logger.info(f"Предмет ID: {temp_student.subject_id}")
+                logger.info(f"Потребность во внимании: {temp_student.need_for_attention}")
+                logger.info(f"Время занятий: {temp_student.start_of_studying_time} - {temp_student.end_of_studying_time}")
+
+                logger.info(f"=== ИНФОРМАЦИЯ О ПРЕПОДАВАТЕЛЯХ ===")
+                for i, teacher in enumerate(all_teachers):
+                    logger.info(f"Преподаватель {i+1}: {teacher.name}")
+                    logger.info(f"  Предметы: {teacher.subjects_id}")
+                    logger.info(f"  Макс. внимание: {teacher.maximum_attention}")
+                    logger.info(f"  Время работы: {teacher.start_of_studying_time} - {teacher.end_of_studying_time}")
+
+                logger.info(f"=== ИНФОРМАЦИЯ О СТУДЕНТАХ ===")
+                for i, student in enumerate(all_students):
+                    logger.info(f"Студент {i+1}: {student.name}")
+                    logger.info(f"  Предмет: {student.subject_id}")
+                    logger.info(f"  Потребность: {student.need_for_attention}")
+                    logger.info(f"  Время занятий: {student.start_of_studying_time} - {student.end_of_studying_time}")
+
                 # Асинхронно проверяем доступность
                 availability_map = await asyncio.to_thread(
+
+                    
                     check_student_availability_for_slots,
                     student=temp_student,
                     all_students=all_students,
