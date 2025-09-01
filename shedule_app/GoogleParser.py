@@ -582,3 +582,72 @@ class GoogleSheetsDataLoader:
         except HttpError as error:
             print(f"Ошибка при создании листа: {error}")
             raise
+
+    def get_student_topic_by_user_id(self, user_id: str, target_date: str) -> Optional[str]:
+        """
+        Получает тему занятия для ученика по user_id на указанную дату
+        
+        Args:
+            user_id: ID ученика (обычно из колонки A в листе Ученики)
+            target_date: Дата в формате DD.MM.YYYY или YYYY.MM.DD
+        
+        Returns:
+            Название темы занятия или None, если не найдено
+        """
+        try:
+            # Загружаем план обучения, если еще не загружен
+            if not self._study_plan_cache:
+                self._load_study_plan_cache()
+            
+            # Получаем данные студента
+            student_sheet = self._get_sheet_data("Ученики")
+            if not student_sheet:
+                logger.warning("Лист 'Ученики' не найден")
+                return None
+            
+            # Находим колонки для указанной даты
+            date_columns = self._find_date_columns(student_sheet, target_date)
+            if date_columns[0] == -1:
+                logger.warning(f"Дата {target_date} не найдена в расписании учеников")
+                return None
+            
+            # Ищем студента по user_id (колонка A)
+            student_name = None
+            student_row = None
+            
+            for row in student_sheet[1:]:  # Пропускаем заголовок
+                if len(row) > 0 and str(row[0]).strip() == user_id:
+                    student_row = row
+                    if len(row) > 1:
+                        student_name = str(row[1]).strip()
+                    break
+            
+            if not student_row:
+                logger.warning(f"Ученик с user_id {user_id} не найден")
+                return None
+            
+            if not student_name:
+                logger.warning(f"Не удалось получить имя ученика для user_id {user_id}")
+                return None
+            
+            # Определяем номер занятия для этой даты
+            lesson_number = self._calculate_lesson_number_for_student(student_row, date_columns[0])
+            
+            # Получаем тему из плана обучения
+            if student_name in self._study_plan_cache:
+                student_plan = self._study_plan_cache[student_name]
+                topic = student_plan.get(lesson_number)
+                
+                if topic:
+                    logger.info(f"Для ученика {student_name} (ID: {user_id}) на {target_date} (занятие {lesson_number}): {topic}")
+                    return topic
+                else:
+                    logger.warning(f"Тема для занятия {lesson_number} не найдена в плане ученика {student_name}")
+            else:
+                logger.warning(f"План обучения для ученика {student_name} не найден")
+            
+            return None
+            
+        except Exception as ex:
+            logger.error(f"Ошибка при получении темы для ученика с ID {user_id}: {ex}")
+            return None

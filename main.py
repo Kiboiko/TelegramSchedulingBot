@@ -1712,22 +1712,26 @@ async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
 
         # Проверяем существующие брони
         
-
+        
         # Для учеников: проверяем доступность временных слотов
         availability_map = None
         if role == 'student' and subject:
             try:
                 # Создаем временного студента для проверки
+                loader = GoogleSheetsDataLoader(CREDENTIALS_PATH, SPREADSHEET_ID, formatted_date)
+                topic = loader.get_student_topic_by_user_id(str(user_id), formatted_date)
+                if not topic:
+                    topic = str(subject)
                 temp_student = Student(
                     name="temp_check",
                     start_of_study_time="09:00",
                     end_of_study_time="20:00",
-                    subject_id=str(subject),
-                    need_for_attention=state_data.get('need_for_attention', 1)
+                    subject_id=topic,
+                    need_for_attention=state_data.get('need_for_attention', 3)
                 )
                 
                 # Получаем всех студентов и преподавателей из Google Sheets
-                loader = GoogleSheetsDataLoader(CREDENTIALS_PATH, SPREADSHEET_ID, formatted_date)
+                
                 all_teachers, all_students = loader.load_data()
 
                 distribution = get_subject_distribution_by_time(loader, formatted_date)
