@@ -77,8 +77,7 @@ class JSONStorage:
                 time_end = datetime.strptime(booking.get('end_time', "00:00"), "%H:%M").time()
                 booking_datetime = datetime.combine(booking_date, time_end)
 
-                if booking_datetime >= current_time:
-                    valid_bookings.append(booking)
+                valid_bookings.append(booking)
             except Exception:
                 continue
 
