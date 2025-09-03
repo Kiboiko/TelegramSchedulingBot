@@ -30,9 +30,6 @@ from shedule_app.HelperMethods import School
 from shedule_app.models import Person,Teacher,Student
 from typing import List, Dict
 from shedule_app.GoogleParser import GoogleSheetsDataLoader
-from shedule_app.HelperMethods import School
-from shedule_app.models import Person, Teacher, Student
-from shedule_app.GoogleParser import GoogleSheetsDataLoader
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -42,7 +39,7 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 BOOKINGS_FILE = "bookings.json"
-CREDENTIALS_PATH = r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\credentials.json"
+CREDENTIALS_PATH = r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\credentials.json"
 SPREADSHEET_ID = "1r1MU8k8umwHx_E4Z-jFHRJ-kdwC43Jw0nwpVeH7T1GU"
 
 BOOKING_TYPES = ["Тип1"]
@@ -63,11 +60,7 @@ class BookingStates(StatesGroup):
     CONFIRMATION = State()
     SELECT_CHILD = State()  # Новое состояние для выбора ребенка
     PARENT_SELECT_CHILD = State()
-    SELECT_SCHEDULE_DATE = State()  # Новое состояние для выбора даты расписания
-    CONFIRM_SCHEDULE = State()  # Подтверждение составления расписания
-    # В начале файла main.py, после других констант
 
-ADMIN_IDS = [1180878673,973231400]  # Замените на реальные ID администраторов
 
 # Инициализация бота
 bot = Bot(token=BOT_TOKEN)
@@ -127,186 +120,6 @@ class RoleCheckMiddleware(BaseMiddleware):
 # Добавление middleware
 dp.update.middleware(RoleCheckMiddleware())
 
-def _add_minutes_to_time(self, time_obj: time, minutes: int) -> time:
-    """
-    Добавляет минуты к объекту time
-    """
-    from datetime import datetime, timedelta
-    dummy_date = datetime(2023, 1, 1)
-    combined_datetime = datetime.combine(dummy_date, time_obj)
-    new_datetime = combined_datetime + timedelta(minutes=minutes)
-    return new_datetime.time()
-
-# Добавляем метод в класс
-GoogleSheetsDataLoader._add_minutes_to_time = _add_minutes_to_time
-
-def get_subject_distribution_by_time(loader, target_date: str, condition_check: bool = True) -> Dict[time, Dict]:
-    """
-    Получает распределение тем занятий по получасовым интервалам для указанной даты
-    
-    Args:
-        loader: экземпляр GoogleSheetsDataLoader
-        target_date: дата в формаite "YYYY.MM.DD"
-        condition_check: если True, проверяет дополнительное условие
-    
-    Returns:
-        Словарь с временем как ключом и словарем {
-            'distribution': {тема: количество учеников},
-            'condition_result': bool (результат условия)
-        }
-        Всегда содержит все интервалы с 9:00 до 20:00
-    """
-    from datetime import time
-    from typing import Dict
-    
-    # Загружаем данные студентов
-    student_sheet = loader._get_sheet_data("Ученики")
-    if not student_sheet:
-        logger.error("Лист 'Ученики' не найден")
-        return _create_empty_time_slots()
-    
-    # Находим колонки для указанной даты
-    date_columns = loader._find_date_columns(student_sheet, target_date)
-    if date_columns == (-1, -1):
-        logger.error(f"Дата {target_date} не найдена в листе учеников")
-        return _create_empty_time_slots()
-    
-    start_col, end_col = date_columns
-    
-    # Загружаем план обучения
-    loader._load_study_plan_cache()
-    
-    # Создаем все временные интервалы с 9:00 до 20:00 с шагом 30 минут
-    time_slots = _create_empty_time_slots()
-    
-    # Обрабатываем каждого студента
-    for row in student_sheet[1:]:  # Пропускаем заголовок
-        if not row or len(row) <= max(start_col, end_col):
-            continue
-        
-        name = str(row[1]).strip() if len(row) > 1 else ""
-        if not name:
-            continue
-        
-        # Проверяем, есть ли запись на указанную дату
-        start_time_str = str(row[start_col]).strip() if len(row) > start_col and row[start_col] else ""
-        end_time_str = str(row[end_col]).strip() if len(row) > end_col and row[end_col] else ""
-        
-        if not start_time_str or not end_time_str:
-            continue  # Нет записи на эту дату
-        
-        # Получаем тему занятия для этого студента
-        lesson_number = loader._calculate_lesson_number_for_student(row, start_col)
-        topic = None
-        
-        if name in loader._study_plan_cache:
-            student_plan = loader._study_plan_cache[name]
-            topic = student_plan.get(lesson_number, "Неизвестная тема")
-        else:
-            # Пытаемся получить тему из предмета (колонка C)
-            if len(row) > 2 and row[2]:
-                subject_id = str(row[2]).strip()
-                topic = f"P{subject_id}"
-            else:
-                topic = "Тема не определена"
-        
-        # Парсим время начала и окончания
-        try:
-            start_time_parts = start_time_str.split(':')
-            end_time_parts = end_time_str.split(':')
-            
-            if len(start_time_parts) >= 2 and len(end_time_parts) >= 2:
-                start_hour = int(start_time_parts[0])
-                start_minute = int(start_time_parts[1])
-                end_hour = int(end_time_parts[0])
-                end_minute = int(end_time_parts[1])
-                
-                lesson_start = time(start_hour, start_minute)
-                lesson_end = time(end_hour, end_minute)
-                
-                # Находим все получасовые интервалы, попадающие в занятие
-                current_interval = time(9, 0)
-                while current_interval <= time(20, 0):
-                    interval_end = loader._add_minutes_to_time(current_interval, 30)
-                    if (current_interval >= lesson_start and interval_end <= lesson_end):
-                        # Этот интервал полностью внутри занятия
-                        if topic not in time_slots[current_interval]['distribution']:
-                            time_slots[current_interval]['distribution'][topic] = 0
-                        time_slots[current_interval]['distribution'][topic] += 1
-                    
-                    current_interval = interval_end
-                    
-        except (ValueError, IndexError) as e:
-            logger.warning(f"Ошибка парсинга времени для студента {name}: {e}")
-            continue
-    
-    # Вычисляем результат условия для каждого слота
-    for time_slot, data in time_slots.items():
-        topics_dict = data['distribution']
-        p1_count = topics_dict.get("P1", 0)
-        p2_count = topics_dict.get("P2", 0)
-        
-        data['condition_result'] = (p1_count < 2 and 
-                                  p2_count < 5 and 
-                                  p1_count + p2_count < 20)
-    
-    # Выводим результат в терминал
-    print(f"\n📊 РАСПРЕДЕЛЕНИЕ ТЕМ ПО ВРЕМЕНИ НА {target_date}")
-    print("=" * 60)
-    
-    # Выводим все интервалы, даже пустые
-    for time_slot, data in sorted(time_slots.items()):
-        topics_dict = data['distribution']
-        condition_result = data['condition_result']
-        
-        next_slot = loader._add_minutes_to_time(time_slot, 30)
-        print(f"\n🕒 {time_slot.strftime('%H:%M')} - {next_slot.strftime('%H:%M')}:")
-        print("-" * 30)
-        
-        if not topics_dict:
-            print("   Нет занятий")
-        else:
-            for topic, count in sorted(topics_dict.items(), key=lambda x: x[1], reverse=True):
-                print(f"   📚 {topic}: {count} ученик(ов)")
-        
-        # Выводим результат условия (даже для пустых интервалов)
-        if condition_check:
-            p1_count = topics_dict.get("P1", 0)
-            p2_count = topics_dict.get("P2", 0)
-            
-            print(f"   ⚡ Условие (P1<10 & P2<5 & P1+P2<20):")
-            print(f"      P1={p1_count}, P2={p2_count}, P1+P2={p1_count + p2_count}")
-            print(f"      Результат: {'✅ ВЫПОЛНЕНО' if condition_result else '❌ НЕ ВЫПОЛНЕНО'}")
-    
-    print("=" * 60)
-    total_students = sum(sum(topics_dict.values()) for data in time_slots.values() for topics_dict in [data['distribution']])
-    print(f"📈 Всего учеников на день: {total_students}")
-    
-    return time_slots
-
-
-def _create_empty_time_slots() -> Dict[time, Dict]:
-    """Создает словарь со всеми временными интервалами с 9:00 до 20:00"""
-    from datetime import time
-    
-    time_slots = {}
-    current_time = time(9, 0)
-    end_time = time(20, 0)
-    
-    while current_time <= end_time:
-        time_slots[current_time] = {
-            'distribution': {},
-            'condition_result': True  # Для пустых интервалов условие всегда выполняется
-        }
-        # Добавляем 30 минут для следующего интервала
-        next_time = (current_time.hour * 60 + current_time.minute + 30) // 60
-        next_minute = (current_time.hour * 60 + current_time.minute + 30) % 60
-        current_time = time(next_time, next_minute)
-    
-    return time_slots
-    
-
-
 def check_student_availability_for_slots(
     student: Student,
     all_students: List[Student],
@@ -319,71 +132,51 @@ def check_student_availability_for_slots(
     result = {}
     current_time = start_time
     
-    logger.info(f"=== ДЕТАЛЬНАЯ ПРОВЕРКА ДОСТУПНОСТИ С generate_teacher_student_allocation ===")
-    logger.info(f"Студент: {student.name}, предмет: {student.subject_id}, внимание: {student.need_for_attention}")
+    logger.info(f"=== ДЕТАЛЬНАЯ ПРОВЕРКА ДОСТУПНОСТИ ===")
+    logger.info(f"Студент: {student.name}, предмет: {student.subject_id}")
+    logger.info(f"Всего преподавателей: {len(teachers)}")
+    
+    # Логируем всех преподавателей и их предметы
+    for i, teacher in enumerate(teachers):
+        logger.info(f"Преподаватель {i+1}: {teacher.name}, предметы: {teacher.subjects_id}, "
+                   f"время: {teacher.start_of_study_time}-{teacher.end_of_study_time}")
+    
+    logger.info(f"Всего студентов: {len(all_students)}")
+    
+    # Преобразуем subject_id студента в число для сравнения
+    try:
+        student_subject_id = int(student.subject_id)
+    except (ValueError, TypeError):
+        logger.error(f"Неверный формат subject_id: {student.subject_id}")
+        return {time_obj: False for time_obj in [start_time + timedelta(minutes=i*interval_minutes) 
+                for i in range(int((end_time.hour*60+end_time.minute - start_time.hour*60+start_time.minute)/interval_minutes)+1)]}
     
     while current_time <= end_time:
-        # Получаем активных студентов и преподавателей на текущее время
         active_students = [
             s for s in all_students 
-            if (s.start_of_studying_time <= current_time <= s.end_of_studying_time)
+            if (s.start_of_studying_time <= current_time <= s.end_of_studying_time and
+                s != student)
         ]
+        
+        students_with_target = active_students + [student]
         
         active_teachers = [
             t for t in teachers 
             if t.start_of_studying_time <= current_time <= t.end_of_studying_time
         ]
         
-        # Детальная проверка доступности
-        can_allocate = False
+        # Детальная проверка
+        can_allocate = True
         
         if not active_teachers:
             logger.info(f"Время {current_time}: нет активных преподавателей")
+            can_allocate = False
         else:
-            # ОТЛАДОЧНАЯ ИНФОРМАЦИЯ о активных преподавателях
-            logger.info(f"Время {current_time}: активных преподавателей - {len(active_teachers)}")
-            for i, teacher in enumerate(active_teachers):
-                logger.info(f"  Преподаватель {i+1}: {teacher.name}, предметы: {teacher.subjects_id}")
-            
-            # Проверяем, есть ли преподаватель для предмета нового студента
-            subject_available = False
-            matching_teachers = []
-            
-            for teacher in active_teachers:
-                # ВАЖНО: преобразуем subject_id к тому же типу, что и у преподавателя
-                teacher_subjects = [str(subj) for subj in teacher.subjects_id]
-                if str(student.subject_id) in teacher_subjects:
-                    subject_available = True
-                    matching_teachers.append(teacher)
-            
+            # ИСПРАВЛЕННАЯ ПРОВЕРКА: сравниваем числа с числами
+            subject_available = any(student_subject_id in t.subjects_id for t in active_teachers)
             if not subject_available:
-                logger.info(f"Время {current_time}: нет преподавателя для предмета {student.subject_id}")
-                logger.info(f"  Доступные предметы у преподавателей: {[t.subjects_id for t in active_teachers]}")
-            else:
-                logger.info(f"Время {current_time}: найдены преподаватели для предмета {student.subject_id}")
-                logger.info(f"  Подходящие преподаватели: {[t.name for t in matching_teachers]}")
-                
-                # ИСПОЛЬЗУЕМ generate_teacher_student_allocation для проверки комбинации
-                try:
-                    # Добавляем нового студента к активным студентам
-                    students_to_check = active_students + [student]
-                    
-                    logger.info(f"  Всего студентов для распределения: {len(students_to_check)}")
-                    
-                    # Проверяем возможность распределения
-                    success, allocation = School.generate_teacher_student_allocation(
-                        active_teachers, students_to_check
-                    )
-                    
-                    if success:
-                        can_allocate = True
-                        logger.info(f"  КОМБИНАЦИЯ УСПЕШНА")
-                    else:
-                        logger.info(f"  КОМБИНАЦИЯ НЕВОЗМОЖНА")
-                        
-                except Exception as e:
-                    logger.error(f"Ошибка при проверке комбинации: {e}")
-                    can_allocate = False
+                logger.info(f"Время {current_time}: нет преподавателя для предмета {student_subject_id}")
+                can_allocate = False
         
         result[current_time] = can_allocate
         current_time = School.add_minutes_to_time(current_time, interval_minutes)
@@ -1069,29 +862,23 @@ no_roles_menu = ReplyKeyboardMarkup(
 
 
 async def generate_main_menu(user_id: int) -> ReplyKeyboardMarkup:
-    """Генерирует главное меню в зависимости от ролей и прав"""
+    """Генерирует главное меню в зависимости от ролей"""
     roles = storage.get_user_roles(user_id)
-
+    
     if not roles:
         return no_roles_menu
-
+    
     keyboard_buttons = []
-
-    # Проверяем, может ли пользователь бронировать
-    can_book = any(role in roles for role in ['teacher', 'parent']) or (
-            'student' in roles and 'parent' in roles
-    )
-
+    
+    # Проверяем, есть ли роли, которые могут бронировать
+    can_book = any(role in roles for role in ['teacher', 'student', 'parent'])
+    
     if can_book:
         keyboard_buttons.append([KeyboardButton(text="📅 Забронировать время")])
-
+    
     keyboard_buttons.append([KeyboardButton(text="📋 Мои бронирования")])
     keyboard_buttons.append([KeyboardButton(text="👤 Моя роль")])
-
-    # Добавляем кнопку составления расписания только для администраторов
-    if is_admin(user_id):
-        keyboard_buttons.append([KeyboardButton(text="📊 Составить расписание")])
-
+    
     return ReplyKeyboardMarkup(keyboard=keyboard_buttons, resize_keyboard=True)
 
 
@@ -1152,232 +939,6 @@ async def show_my_role(message: types.Message):
 #         "/help - показать эту справку"
 #     )
 
-def is_admin(user_id: int) -> bool:
-    """Проверяет, является ли пользователь администратором"""
-    return user_id in ADMIN_IDS
-
-
-@dp.message(F.text == "📊 Составить расписание")
-async def start_schedule_generation(message: types.Message, state: FSMContext):
-    """Начало процесса составления расписания"""
-    user_id = message.from_user.id
-
-    # Проверяем права доступа через список ADMIN_IDS
-    if not is_admin(user_id):
-        await message.answer(
-            "❌ У вас нет прав для составления расписания. Обратитесь к администратору.",
-            reply_markup=await generate_main_menu(user_id)
-        )
-        return
-
-    await message.answer(
-        "📅 Выберите дату для составления расписания:",
-        reply_markup=generate_calendar()
-    )
-    await state.set_state(BookingStates.SELECT_SCHEDULE_DATE)
-
-
-@dp.callback_query(BookingStates.SELECT_SCHEDULE_DATE, F.data.startswith("calendar_day_"))
-async def process_schedule_date_selection(callback: types.CallbackQuery, state: FSMContext):
-    """Обработка выбора даты для составления расписания"""
-    try:
-        data = callback.data
-        date_str = data.replace("calendar_day_", "")
-        year, month, day = map(int, date_str.split("-"))
-        selected_date = datetime(year, month, day).date()
-        formatted_date = selected_date.strftime("%d.%m.%Y")
-
-        await state.update_data(schedule_date=selected_date, formatted_date=formatted_date)
-
-        # Создаем клавиатуру подтверждения
-        builder = InlineKeyboardBuilder()
-        builder.row(
-            types.InlineKeyboardButton(text="✅ Да, составить", callback_data="confirm_schedule"),
-            types.InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_schedule")
-        )
-
-        await callback.message.edit_text(
-            f"📅 Вы выбрали дату: {formatted_date}\n"
-            "Составить расписание на эту дату?",
-            reply_markup=builder.as_markup()
-        )
-        await state.set_state(BookingStates.CONFIRM_SCHEDULE)
-        await callback.answer()
-
-    except Exception as e:
-        logger.error(f"Ошибка при выборе даты расписания: {e}")
-        await callback.answer("Ошибка при выборе даты", show_alert=True)
-
-
-@dp.callback_query(BookingStates.CONFIRM_SCHEDULE, F.data == "confirm_schedule")
-async def process_schedule_confirmation(callback: types.CallbackQuery, state: FSMContext):
-    """Запуск процесса составления расписания"""
-    try:
-        # Проверяем права еще раз на всякий случай
-        if not is_admin(callback.from_user.id):
-            await callback.answer("❌ Доступ запрещен", show_alert=True)
-            await state.clear()
-            return
-
-        data = await state.get_data()
-        selected_date = data.get('schedule_date')
-        formatted_date = data.get('formatted_date')
-
-        if not selected_date:
-            await callback.answer("Ошибка: дата не выбрана", show_alert=True)
-            return
-
-        # Показываем сообщение о начале процесса
-        await callback.message.edit_text(
-            f"⏳ Составляю расписание на {formatted_date}...\n"
-            "Это может занять несколько минут."
-        )
-
-        # Запускаем процесс составления расписания в отдельном потоке
-        result = await asyncio.to_thread(
-            generate_schedule_for_date,
-            selected_date.strftime("%d.%m.%Y")
-        )
-
-        if "Успешно" in result:
-            await callback.message.edit_text(
-                f"✅ Расписание на {formatted_date} успешно составлено!\n"
-                f"{result}\n\n"
-                "Расписание экспортировано в Google Sheets."
-            )
-        else:
-            await callback.message.edit_text(
-                f"❌ Не удалось составить расписание на {formatted_date}\n"
-                f"Ошибка: {result}"
-            )
-
-    except Exception as e:
-        logger.error(f"Ошибка при составлении расписания: {e}")
-        await callback.message.edit_text(
-            f"❌ Произошла ошибка при составлении расписания:\n{str(e)}"
-        )
-
-    await state.clear()
-
-
-@dp.message(Command("admin"))
-async def admin_command(message: types.Message):
-    """Команда для администраторов"""
-    user_id = message.from_user.id
-
-    if not is_admin(user_id):
-        await message.answer("❌ Эта команда только для администраторов")
-        return
-
-    # Показываем доступные команды администратора
-    admin_commands = [
-        "📊 Составить расписание - через кнопку в меню",
-        "/force_sync - принудительная синхронизация с Google Sheets",
-        "/stats - статистика системы"
-    ]
-
-    await message.answer(
-        "👨‍💻 Команды администратора:\n" + "\n".join(admin_commands)
-    )
-
-
-@dp.message(Command("force_sync"))
-async def force_sync_command(message: types.Message):
-    """Принудительная синхронизация с Google Sheets"""
-    if not is_admin(message.from_user.id):
-        await message.answer("❌ Эта команда только для администраторов")
-        return
-
-    await message.answer("⏳ Синхронизирую с Google Sheets...")
-
-    try:
-        if hasattr(storage, 'gsheets') and storage.gsheets:
-            success = storage.gsheets.sync_from_gsheets_to_json(storage)
-            if success:
-                await message.answer("✅ Синхронизация завершена успешно!")
-            else:
-                await message.answer("❌ Ошибка синхронизации")
-    except Exception as e:
-        await message.answer(f"❌ Ошибка: {str(e)}")
-
-
-@dp.message(Command("stats"))
-async def stats_command(message: types.Message):
-    """Показывает статистику системы"""
-    if not is_admin(message.from_user.id):
-        await message.answer("❌ Эта команда только для администраторов")
-        return
-
-    try:
-        bookings = storage.load()
-
-        # Статистика по бронированиям
-        teacher_bookings = [b for b in bookings if b.get('user_role') == 'teacher']
-        student_bookings = [b for b in bookings if b.get('user_role') == 'student']
-
-        # Статистика по пользователям
-        if hasattr(storage, 'gsheets') and storage.gsheets:
-            try:
-                worksheet = storage.gsheets._get_or_create_users_worksheet()
-                users_data = worksheet.get_all_records()
-                total_users = len(users_data)
-
-                teachers_count = sum(1 for u in users_data if 'teacher' in u.get('roles', '').lower())
-                students_count = sum(1 for u in users_data if 'student' in u.get('roles', '').lower())
-                parents_count = sum(1 for u in users_data if 'parent' in u.get('roles', '').lower())
-
-            except Exception as e:
-                total_users = teachers_count = students_count = parents_count = "Ошибка"
-        else:
-            total_users = teachers_count = students_count = parents_count = "N/A"
-
-        stats_text = (
-            "📊 Статистика системы:\n\n"
-            f"👥 Всего пользователей: {total_users}\n"
-            f"👨‍🏫 Преподавателей: {teachers_count}\n"
-            f"👨‍🎓 Учеников: {students_count}\n"
-            f"👨‍👩‍👧‍👦 Родителей: {parents_count}\n\n"
-            f"📅 Активных бронирований: {len(bookings)}\n"
-            f"   - Преподавателей: {len(teacher_bookings)}\n"
-            f"   - Учеников: {len(student_bookings)}"
-        )
-
-        await message.answer(stats_text)
-
-    except Exception as e:
-        await message.answer(f"❌ Ошибка получения статистики: {str(e)}")
-
-
-@dp.callback_query(
-    BookingStates.SELECT_SCHEDULE_DATE,
-    F.data.startswith("calendar_change_")
-)
-async def process_schedule_calendar_change(callback: types.CallbackQuery, state: FSMContext):
-    """Обрабатывает переключение месяцев в календаре для выбора даты расписания"""
-    try:
-        date_str = callback.data.replace("calendar_change_", "")
-        year, month = map(int, date_str.split("-"))
-
-        await callback.message.edit_reply_markup(
-            reply_markup=generate_calendar(year, month)
-        )
-        await callback.answer()
-    except Exception as e:
-        logger.error(f"Error changing calendar month for schedule: {e}")
-        await callback.answer("Не удалось изменить месяц", show_alert=True)
-
-@dp.callback_query(BookingStates.CONFIRM_SCHEDULE, F.data == "cancel_schedule")
-async def cancel_schedule_generation(callback: types.CallbackQuery, state: FSMContext):
-    """Отмена составления расписания"""
-    await callback.message.edit_text("❌ Составление расписания отменено")
-    await state.clear()
-
-    user_id = callback.from_user.id
-    await callback.message.answer(
-        "Выберите действие:",
-        reply_markup=await generate_main_menu(user_id)
-    )
-    await callback.answer()
 
 @dp.message(F.text == "❓ Обратиться к администратору")
 async def contact_admin(message: types.Message):
@@ -1386,22 +947,6 @@ async def contact_admin(message: types.Message):
         "обратитесь к администратору.\n\n"
         "После назначения ролей вы сможете пользоваться всеми функциями бота."
     )
-
-@dp.message(Command("book"))
-async def cmd_book(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
-    user_roles = storage.get_user_roles(user_id)
-    
-    # Проверка: если только student, запрещаем
-    if user_roles == ['student']:
-        await message.answer(
-            "❌ Ученики не могут самостоятельно записываться на занятия.\n"
-            "Для записи обратитесь к родителю или администратору."
-        )
-        return
-    
-    # Если проверка пройдена, продолжаем обычный процесс
-    await start_booking(message, state)
 
 
 @dp.message(F.text == "📅 Забронировать время")
@@ -1425,17 +970,7 @@ async def start_booking(message: types.Message, state: FSMContext):
         )
         return
     
-    if user_roles == ['student']:
-        await message.answer(
-            "❌ Ученики не могут самостоятельно записываться на занятия.\n"
-            "Для записи обратитесь к родителю или администратору.",
-            reply_markup=await generate_main_menu(user_id)
-        )
-        return
-    
     await state.update_data(user_name=user_name)
-
-    
     
     # Показываем доступные роли для бронирования
     builder = InlineKeyboardBuilder()
@@ -1447,7 +982,7 @@ async def start_booking(message: types.Message, state: FSMContext):
         available_booking_roles.append('teacher')
         builder.button(text="👨‍🏫 Я преподаватель", callback_data="role_teacher")
     
-    if 'student' in user_roles and 'parent' in user_roles:
+    if 'student' in user_roles:
         available_booking_roles.append('student') 
         builder.button(text="👨‍🎓 Я ученик", callback_data="role_student")
     
@@ -1630,15 +1165,8 @@ async def process_role_selection(callback: types.CallbackQuery, state: FSMContex
         await state.set_state(BookingStates.SELECT_SUBJECT)
         
     elif role == 'parent':
-        # ДЛЯ РОДИТЕЛЯ: не сохраняем с пустым списком, используем существующие данные
+        # Для родителя получаем детей
         children_ids = storage.get_parent_children(user_id)
-        
-        if children_ids is None:  # Если родитель еще не был сохранен
-            await callback.answer(
-                "Информация о родителе обрабатывается. Попробуйте снова через несколько секунд.",
-                show_alert=True
-            )
-            return
         
         if not children_ids:
             await callback.answer(
@@ -1667,6 +1195,37 @@ async def process_role_selection(callback: types.CallbackQuery, state: FSMContex
         await state.set_state(BookingStates.PARENT_SELECT_CHILD)
 
     await callback.answer()
+
+# @dp.callback_query(BookingStates.TEACHER_SUBJECTS, F.data.startswith("subject_"))
+# async def process_teacher_subjects(callback: types.CallbackQuery, state: FSMContext):
+#     data = await state.get_data()
+#     selected_subjects = data.get("subjects", [])
+
+#     subject_id = callback.data.split("_")[1]
+#     if subject_id in selected_subjects:
+#         selected_subjects.remove(subject_id)
+#     else:
+#         selected_subjects.append(subject_id)
+
+#     await state.update_data(subjects=selected_subjects)
+#     await callback.message.edit_reply_markup(
+#         reply_markup=generate_subjects_keyboard(selected_subjects, is_teacher=True)
+#     )
+#     await callback.answer()
+
+
+# @dp.callback_query(BookingStates.TEACHER_SUBJECTS, F.data == "subjects_done")
+# async def process_subjects_done(callback: types.CallbackQuery, state: FSMContext):
+#     data = await state.get_data()
+#     if not data.get("subjects"):
+#         await callback.answer("Выберите хотя бы один предмет!", show_alert=True)
+#         return
+
+#     storage.update_user_subjects(callback.from_user.id, data["subjects"])
+#     await state.update_data(booking_type="Тип1")  # Устанавливаем тип по умолчанию
+#     await callback.message.edit_text("Выберите дату:", reply_markup=generate_calendar())  # Пропускаем выбор типа
+#     await state.set_state(BookingStates.SELECT_DATE)
+#     await callback.answer()
 
 
 @dp.callback_query(BookingStates.SELECT_SUBJECT, F.data.startswith("subject_"))
@@ -1712,33 +1271,93 @@ async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
 
         # Проверяем существующие брони
         
-        
+
         # Для учеников: проверяем доступность временных слотов
         availability_map = None
         if role == 'student' and subject:
             try:
                 # Создаем временного студента для проверки
-                loader = GoogleSheetsDataLoader(CREDENTIALS_PATH, SPREADSHEET_ID, formatted_date)
-                topic = loader.get_student_topic_by_user_id(str(user_id), formatted_date)
-                if not topic:
-                    topic = str(subject)
                 temp_student = Student(
                     name="temp_check",
                     start_of_study_time="09:00",
                     end_of_study_time="20:00",
-                    subject_id=topic,
-                    need_for_attention=state_data.get('need_for_attention', 3)
+                    subject_id=subject,
+                    need_for_attention=state_data.get('need_for_attention', 1)
                 )
                 
                 # Получаем всех студентов и преподавателей из Google Sheets
-                
+                loader = GoogleSheetsDataLoader(CREDENTIALS_PATH, SPREADSHEET_ID, formatted_date)
                 all_teachers, all_students = loader.load_data()
-
-                distribution = get_subject_distribution_by_time(loader, formatted_date)
-                for time_slot, data in distribution.items():
-                    print(f"Время: {time_slot}")
-                    print(f"Условие выполнено: {data['condition_result']}")
                 
+                # # ВРЕМЕННО: если данные не загружаются, используем тестовые данные
+                # if not all_teachers:
+                #     logger.warning("Преподаватели не загружены из Google Sheets, используем тестовые данные")
+                #
+                #     # Тестовые преподаватели (активные с 9:00 до 18:00)
+                #     all_teachers = [
+                #         Teacher(
+                #             name="Мария Ивановна",
+                #             start_of_study_time="09:00",
+                #             end_of_study_time="18:00",
+                #             subjects_id=[1, 2],  # Математика и Физика
+                #             priority=1,
+                #             maximum_attention=20  # Увеличим емкость
+                #         ),
+                #         Teacher(
+                #             name="Петр Сергеевич",
+                #             start_of_study_time="10:00",
+                #             end_of_study_time="19:00",
+                #             subjects_id=[1, 3],  # Математика и Информатика
+                #             priority=2,
+                #             maximum_attention=15  # Увеличим емкость
+                #         )
+                #     ]
+                #
+                #     # Тестовые студенты с меньшей потребностью во внимании
+                #     all_students = [
+                #         Student(
+                #             name="Иван Петров",
+                #             start_of_study_time="10:00",
+                #             end_of_study_time="12:00",
+                #             subject_id=1,  # Математика
+                #             need_for_attention=2  # Уменьшим потребность
+                #         ),
+                #         Student(
+                #             name="Елена Сидорова",
+                #             start_of_study_time="14:00",
+                #             end_of_study_time="16:00",
+                #             subject_id=2,  # Физика
+                #             need_for_attention=2  # Уменьшим потребность
+                #         )
+                #     ]
+                #
+                # if not all_students:
+                #     logger.warning("Студенты не загружены из Google Sheets, используем тестовые данные")
+                #
+                #     # Тестовые студенты с разным временем
+                #     all_students = [
+                #         Student(
+                #             name="Иван Петров",
+                #             start_of_study_time="10:00",
+                #             end_of_study_time="12:00",
+                #             subject_id=1,  # Математика
+                #             need_for_attention=5
+                #         ),
+                #         Student(
+                #             name="Елена Сидорова",
+                #             start_of_study_time="14:00",
+                #             end_of_study_time="16:00",
+                #             subject_id=2,  # Физика
+                #             need_for_attention=3
+                #         ),
+                #         Student(
+                #             name="Алексей Козлов",
+                #             start_of_study_time="11:00",
+                #             end_of_study_time="13:00",
+                #             subject_id=1,  # Математика
+                #             need_for_attention=4
+                #         )
+                #     ]
                 
                 # Логируем загруженные данные
                 logger.info(f"Используется: {len(all_teachers)} преподавателей, {len(all_students)} студентов")
@@ -1749,30 +1368,8 @@ async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
                     "Это может занять несколько секунд"
                 )
                 
-                logger.info(f"=== ИНФОРМАЦИЯ О ВРЕМЕННОМ СТУДЕНТЕ ===")
-                logger.info(f"Имя: {temp_student.name}")
-                logger.info(f"Предмет ID: {temp_student.subject_id}")
-                logger.info(f"Потребность во внимании: {temp_student.need_for_attention}")
-                logger.info(f"Время занятий: {temp_student.start_of_studying_time} - {temp_student.end_of_studying_time}")
-
-                logger.info(f"=== ИНФОРМАЦИЯ О ПРЕПОДАВАТЕЛЯХ ===")
-                for i, teacher in enumerate(all_teachers):
-                    logger.info(f"Преподаватель {i+1}: {teacher.name}")
-                    logger.info(f"  Предметы: {teacher.subjects_id}")
-                    logger.info(f"  Макс. внимание: {teacher.maximum_attention}")
-                    logger.info(f"  Время работы: {teacher.start_of_studying_time} - {teacher.end_of_studying_time}")
-
-                logger.info(f"=== ИНФОРМАЦИЯ О СТУДЕНТАХ ===")
-                for i, student in enumerate(all_students):
-                    logger.info(f"Студент {i+1}: {student.name}")
-                    logger.info(f"  Предмет: {student.subject_id}")
-                    logger.info(f"  Потребность: {student.need_for_attention}")
-                    logger.info(f"  Время занятий: {student.start_of_studying_time} - {student.end_of_studying_time}")
-
                 # Асинхронно проверяем доступность
                 availability_map = await asyncio.to_thread(
-
-                    
                     check_student_availability_for_slots,
                     student=temp_student,
                     all_students=all_students,
@@ -2283,7 +1880,7 @@ async def process_role_parent_selection(callback: types.CallbackQuery, state: FS
     
     # Получаем детей родителя
     children_ids = storage.get_parent_children(user_id)
-    logger.info(f"Parent {user_id} children before processing: {children_ids}")
+    
     if not children_ids:
         await callback.answer(
             "У вас нет привязанных детей. Обратитесь к администратору.",
@@ -2292,9 +1889,6 @@ async def process_role_parent_selection(callback: types.CallbackQuery, state: FS
         return
     
     await state.update_data(user_role='parent')
-    
-    # НЕ сохраняем родителя снова - используем существующие данные
-    # Просто переходим к выбору ребенка
     
     # Создаем клавиатуру для выбора ребенка
     builder = InlineKeyboardBuilder()
@@ -2402,7 +1996,7 @@ async def sync_with_gsheets():
                     logger.info("Фоновая синхронизация с Google Sheets выполнена")
                 else:
                     logger.warning("Не удалось выполнить синхронизацию с Google Sheets")
-            await asyncio.sleep(60)  # Каждую минуту
+            await asyncio.sleep(3600)  # Каждый час
         except Exception as e:
             logger.error(f"Ошибка в фоновой синхронизации: {e}")
             await asyncio.sleep(600)  # Ждем 10 минут при ошибке
@@ -2464,63 +2058,6 @@ async def main():
     # Запуск бота
     await dp.start_polling(bot)
 
-
-def generate_schedule_for_date(target_date: str) -> str:
-    """
-    Функция для составления расписания на указанную дату
-    Использует функционал из Program.py
-    """
-    try:
-        # Импортируем необходимые модули
-        from shedule_app.GoogleParser import GoogleSheetsDataLoader
-        from shedule_app.HelperMethods import School
-        from shedule_app.ScheduleGenerator import ScheduleGenerator
-        from shedule_app.models import Teacher, Student
-
-        # Настройки
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        credentials_path = os.path.join(current_dir, "credentials.json")
-        spreadsheet_id = "1r1MU8k8umwHx_E4Z-jFHRJ-kdwC43Jw0nwpVeH7T1GU"
-
-        # Загружаем данные
-        loader = GoogleSheetsDataLoader(credentials_path, spreadsheet_id, target_date)
-        teachers, students = loader.load_data()
-
-        if not teachers or not students:
-            return "Нет данных преподавателей или студентов"
-
-        # Проверяем возможность распределения
-        can_allocate = School.check_teacher_student_allocation(teachers, students)
-
-        if not can_allocate:
-            return "Невозможно распределить студентов по преподавателям"
-
-        # Генерируем распределение
-        success, allocation = School.generate_teacher_student_allocation(teachers, students)
-
-        if not success:
-            return "Не удалось распределить всех студентов"
-
-        # Получаем работающих преподавателей
-        working_teachers = School.get_working_teachers(teachers, students)
-
-        # Генерируем матрицу расписания
-        schedule_matrix = ScheduleGenerator.generate_teacher_schedule_matrix(students, working_teachers)
-
-        # Экспортируем в Google Sheets
-        loader.export_schedule_to_google_sheets(schedule_matrix, [])
-
-        # Формируем отчет
-        total_students = len(students)
-        working_teacher_count = len(working_teachers)
-        total_teachers = len(teachers)
-
-        return (f"Успешно! Студентов: {total_students}, "
-                f"Работающих преподавателей: {working_teacher_count}/{total_teachers}")
-
-    except Exception as e:
-        logger.error(f"Ошибка в generate_schedule_for_date: {e}")
-        return f"Ошибка: {str(e)}"
 
 if __name__ == "__main__":
     logger.info("Starting bot...")
