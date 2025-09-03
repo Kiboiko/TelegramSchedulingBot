@@ -1,6 +1,6 @@
 import sys
 
-sys.path.append(r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
 
 import asyncio
 import json
@@ -30,7 +30,9 @@ from shedule_app.HelperMethods import School
 from shedule_app.models import Person,Teacher,Student
 from typing import List, Dict
 from shedule_app.GoogleParser import GoogleSheetsDataLoader
-
+from shedule_app.HelperMethods import School
+from shedule_app.models import Person, Teacher, Student
+from shedule_app.GoogleParser import GoogleSheetsDataLoader
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -39,9 +41,9 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 BOOKINGS_FILE = "bookings.json"
-CREDENTIALS_PATH = r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\credentials.json"
+CREDENTIALS_PATH = r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\credentials.json"
 SPREADSHEET_ID = "1r1MU8k8umwHx_E4Z-jFHRJ-kdwC43Jw0nwpVeH7T1GU"
-
+ADMIN_IDS = [1180878673, 973231400]
 BOOKING_TYPES = ["Тип1"]
 SUBJECTS = {
     "1": "Математика",
@@ -59,6 +61,10 @@ def _add_minutes_to_time(time_obj: time, minutes: int) -> time:
     combined_datetime = datetime.combine(dummy_date, time_obj)
     new_datetime = combined_datetime + timedelta(minutes=minutes)
     return new_datetime.time()
+
+def is_admin(user_id: int) -> bool:
+    """Проверяет, является ли пользователь администратором"""
+    return user_id in ADMIN_IDS
 
 def _create_empty_time_slots() -> Dict[time, Dict]:
     """Создает словарь со всеми временными интервалами с 9:00 до 20:00"""
@@ -89,6 +95,8 @@ class BookingStates(StatesGroup):
     CONFIRMATION = State()
     SELECT_CHILD = State()  # Новое состояние для выбора ребенка
     PARENT_SELECT_CHILD = State()
+    SELECT_SCHEDULE_DATE = State()  # Новое состояние для выбора даты расписания
+    CONFIRM_SCHEDULE = State()  # Подтверждение составления расписания
 
 
 # Инициализация бота
@@ -963,6 +971,63 @@ def generate_booking_actions(booking_id):
     return builder.as_markup()
 
 
+def generate_schedule_for_date(target_date: str) -> str:
+    """
+    Функция для составления расписания на указанную дату
+    Использует функционал из Program.py
+    """
+    try:
+        # Импортируем необходимые модули
+        from shedule_app.GoogleParser import GoogleSheetsDataLoader
+        from shedule_app.HelperMethods import School
+        from shedule_app.ScheduleGenerator import ScheduleGenerator
+        from shedule_app.models import Teacher, Student
+
+        # Настройки
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        credentials_path = os.path.join(current_dir, "credentials.json")
+        spreadsheet_id = "1r1MU8k8umwHx_E4Z-jFHRJ-kdwC43Jw0nwpVeH7T1GU"
+
+        # Загружаем данные
+        loader = GoogleSheetsDataLoader(credentials_path, spreadsheet_id, target_date)
+        teachers, students = loader.load_data()
+
+        if not teachers or not students:
+            return "Нет данных преподавателей или студентов"
+
+        # Проверяем возможность распределения
+        can_allocate = School.check_teacher_student_allocation(teachers, students)
+
+        if not can_allocate:
+            return "Невозможно распределить студентов по преподавателям"
+
+        # Генерируем распределение
+        success, allocation = School.generate_teacher_student_allocation(teachers, students)
+
+        if not success:
+            return "Не удалось распределить всех студентов"
+
+        # Получаем работающих преподавателей
+        working_teachers = School.get_working_teachers(teachers, students)
+
+        # Генерируем матрицу расписания
+        schedule_matrix = ScheduleGenerator.generate_teacher_schedule_matrix(students, working_teachers)
+
+        # Экспортируем в Google Sheets
+        loader.export_schedule_to_google_sheets(schedule_matrix, [])
+
+        # Формируем отчет
+        total_students = len(students)
+        working_teacher_count = len(working_teachers)
+        total_teachers = len(teachers)
+
+        return (f"Успешно! Студентов: {total_students}, "
+                f"Работающих преподавателей: {working_teacher_count}/{total_teachers}")
+
+    except Exception as e:
+        logger.error(f"Ошибка в generate_schedule_for_date: {e}")
+        return f"Ошибка: {str(e)}"
+
 def generate_subjects_keyboard(selected_subjects=None, is_teacher=False):
     builder = InlineKeyboardBuilder()
     selected_subjects = selected_subjects or []
@@ -1011,24 +1076,31 @@ no_roles_menu = ReplyKeyboardMarkup(
 
 
 async def generate_main_menu(user_id: int) -> ReplyKeyboardMarkup:
-    """Генерирует главное меню в зависимости от ролей"""
+    """Генерирует главное меню в зависимости от ролей и прав"""
     roles = storage.get_user_roles(user_id)
-    
+
     if not roles:
         return no_roles_menu
-    
+
     keyboard_buttons = []
-    
-    # Проверяем, есть ли роли, которые могут бронировать
-    can_book = any(role in roles for role in ['teacher', 'student', 'parent'])
-    
+
+    # Проверяем, может ли пользователь бронировать
+    can_book = any(role in roles for role in ['teacher', 'parent']) or (
+            'student' in roles and 'parent' in roles
+    )
+
     if can_book:
         keyboard_buttons.append([KeyboardButton(text="📅 Забронировать время")])
-    
+
     keyboard_buttons.append([KeyboardButton(text="📋 Мои бронирования")])
     keyboard_buttons.append([KeyboardButton(text="👤 Моя роль")])
-    
+
+    # Добавляем кнопку составления расписания только для администраторов
+    if is_admin(user_id):
+        keyboard_buttons.append([KeyboardButton(text="📊 Составить расписание")])
+
     return ReplyKeyboardMarkup(keyboard=keyboard_buttons, resize_keyboard=True)
+
 
 
 @dp.message(CommandStart())
@@ -1098,6 +1170,65 @@ async def contact_admin(message: types.Message):
     )
 
 
+@dp.message(F.text == "📊 Составить расписание")
+async def start_schedule_generation(message: types.Message, state: FSMContext):
+    """Начало процесса составления расписания"""
+    user_id = message.from_user.id
+
+    # Проверяем права доступа через список ADMIN_IDS
+    if not is_admin(user_id):
+        await message.answer(
+            "❌ У вас нет прав для составления расписания. Обратитесь к администратору.",
+            reply_markup=await generate_main_menu(user_id)
+        )
+        return
+
+    await message.answer(
+        "📅 Выберите дату для составления расписания:",
+        reply_markup=generate_calendar()
+    )
+    await state.set_state(BookingStates.SELECT_SCHEDULE_DATE)
+
+
+@dp.message(Command("admin"))
+async def admin_command(message: types.Message):
+    """Команда для администраторов"""
+    user_id = message.from_user.id
+
+    if not is_admin(user_id):
+        await message.answer("❌ Эта команда только для администраторов")
+        return
+
+    # Показываем доступные команды администратора
+    admin_commands = [
+        "📊 Составить расписание - через кнопку в меню",
+        "/force_sync - принудительная синхронизация с Google Sheets",
+        "/stats - статистика системы"
+    ]
+
+    await message.answer(
+        "👨‍💻 Команды администратора:\n" + "\n".join(admin_commands)
+    )
+
+
+@dp.message(Command("force_sync"))
+async def force_sync_command(message: types.Message):
+    """Принудительная синхронизация с Google Sheets"""
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ Эта команда только для администраторов")
+        return
+
+    await message.answer("⏳ Синхронизирую с Google Sheets...")
+
+    try:
+        if hasattr(storage, 'gsheets') and storage.gsheets:
+            success = storage.gsheets.sync_from_gsheets_to_json(storage)
+            if success:
+                await message.answer("✅ Синхронизация завершена успешно!")
+            else:
+                await message.answer("❌ Ошибка синхронизации")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {str(e)}")
 @dp.message(F.text == "📅 Забронировать время")
 @dp.message(Command("book"))
 async def start_booking(message: types.Message, state: FSMContext):
@@ -1257,6 +1388,120 @@ async def process_name(message: types.Message, state: FSMContext):
         await state.clear()
 
 
+@dp.callback_query(BookingStates.SELECT_SCHEDULE_DATE, F.data.startswith("calendar_day_"))
+async def process_schedule_date_selection(callback: types.CallbackQuery, state: FSMContext):
+    """Обработка выбора даты для составления расписания"""
+    try:
+        data = callback.data
+        date_str = data.replace("calendar_day_", "")
+        year, month, day = map(int, date_str.split("-"))
+        selected_date = datetime(year, month, day).date()
+        formatted_date = selected_date.strftime("%d.%m.%Y")
+
+        await state.update_data(schedule_date=selected_date, formatted_date=formatted_date)
+
+        # Создаем клавиатуру подтверждения
+        builder = InlineKeyboardBuilder()
+        builder.row(
+            types.InlineKeyboardButton(text="✅ Да, составить", callback_data="confirm_schedule"),
+            types.InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_schedule")
+        )
+
+        await callback.message.edit_text(
+            f"📅 Вы выбрали дату: {formatted_date}\n"
+            "Составить расписание на эту дату?",
+            reply_markup=builder.as_markup()
+        )
+        await state.set_state(BookingStates.CONFIRM_SCHEDULE)
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Ошибка при выборе даты расписания: {e}")
+        await callback.answer("Ошибка при выборе даты", show_alert=True)
+
+
+@dp.callback_query(BookingStates.CONFIRM_SCHEDULE, F.data == "confirm_schedule")
+async def process_schedule_confirmation(callback: types.CallbackQuery, state: FSMContext):
+    """Запуск процесса составления расписания"""
+    try:
+        # Проверяем права еще раз на всякий случай
+        if not is_admin(callback.from_user.id):
+            await callback.answer("❌ Доступ запрещен", show_alert=True)
+            await state.clear()
+            return
+
+        data = await state.get_data()
+        selected_date = data.get('schedule_date')
+        formatted_date = data.get('formatted_date')
+
+        if not selected_date:
+            await callback.answer("Ошибка: дата не выбрана", show_alert=True)
+            return
+
+        # Показываем сообщение о начале процесса
+        await callback.message.edit_text(
+            f"⏳ Составляю расписание на {formatted_date}...\n"
+            "Это может занять несколько минут."
+        )
+
+        # Запускаем процесс составления расписания в отдельном потоке
+        result = await asyncio.to_thread(
+            generate_schedule_for_date,
+            selected_date.strftime("%d.%m.%Y")
+        )
+
+        if "Успешно" in result:
+            await callback.message.edit_text(
+                f"✅ Расписание на {formatted_date} успешно составлено!\n"
+                f"{result}\n\n"
+                "Расписание экспортировано в Google Sheets."
+            )
+        else:
+            await callback.message.edit_text(
+                f"❌ Не удалось составить расписание на {formatted_date}\n"
+                f"Ошибка: {result}"
+            )
+
+    except Exception as e:
+        logger.error(f"Ошибка при составлении расписания: {e}")
+        await callback.message.edit_text(
+            f"❌ Произошла ошибка при составлении расписания:\n{str(e)}"
+        )
+
+    await state.clear()
+
+
+@dp.callback_query(BookingStates.CONFIRM_SCHEDULE, F.data == "cancel_schedule")
+async def cancel_schedule_generation(callback: types.CallbackQuery, state: FSMContext):
+    """Отмена составления расписания"""
+    await callback.message.edit_text("❌ Составление расписания отменено")
+    await state.clear()
+
+    user_id = callback.from_user.id
+    await callback.message.answer(
+        "Выберите действие:",
+        reply_markup=await generate_main_menu(user_id)
+    )
+    await callback.answer()
+
+
+@dp.callback_query(
+    BookingStates.SELECT_SCHEDULE_DATE,
+    F.data.startswith("calendar_change_")
+)
+async def process_schedule_calendar_change(callback: types.CallbackQuery, state: FSMContext):
+    """Обрабатывает переключение месяцев в календаре для выбора даты расписания"""
+    try:
+        date_str = callback.data.replace("calendar_change_", "")
+        year, month = map(int, date_str.split("-"))
+
+        await callback.message.edit_reply_markup(
+            reply_markup=generate_calendar(year, month)
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error changing calendar month for schedule: {e}")
+        await callback.answer("Не удалось изменить месяц", show_alert=True)
 @dp.callback_query(F.data.startswith("role_"))
 async def process_role_selection(callback: types.CallbackQuery, state: FSMContext):
     role = callback.data.split("_")[1]
@@ -1376,7 +1621,23 @@ async def process_role_selection(callback: types.CallbackQuery, state: FSMContex
 #     await state.set_state(BookingStates.SELECT_DATE)
 #     await callback.answer()
 
+@dp.callback_query(
+    BookingStates.SELECT_SCHEDULE_DATE,
+    F.data.startswith("calendar_change_")
+)
+async def process_schedule_calendar_change(callback: types.CallbackQuery, state: FSMContext):
+    """Обрабатывает переключение месяцев в календаре для выбора даты расписания"""
+    try:
+        date_str = callback.data.replace("calendar_change_", "")
+        year, month = map(int, date_str.split("-"))
 
+        await callback.message.edit_reply_markup(
+            reply_markup=generate_calendar(year, month)
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error changing calendar month for schedule: {e}")
+        await callback.answer("Не удалось изменить месяц", show_alert=True)
 @dp.callback_query(BookingStates.SELECT_SUBJECT, F.data.startswith("subject_"))
 async def process_student_subject(callback: types.CallbackQuery, state: FSMContext):
     subject_id = callback.data.split("_")[1]
@@ -2079,7 +2340,7 @@ async def sync_with_gsheets():
                     logger.info("Фоновая синхронизация с Google Sheets выполнена")
                 else:
                     logger.warning("Не удалось выполнить синхронизацию с Google Sheets")
-            await asyncio.sleep(3600)  # Каждый час
+            await asyncio.sleep(60)  # Каждый час
         except Exception as e:
             logger.error(f"Ошибка в фоновой синхронизации: {e}")
             await asyncio.sleep(600)  # Ждем 10 минут при ошибке
@@ -2135,7 +2396,7 @@ async def main():
 
     # Запуск фоновых задач
     asyncio.create_task(cleanup_old_bookings())
-    asyncio.create_task(sync_with_gsheets())
+    # asyncio.create_task(sync_with_gsheets())
     asyncio.create_task(sync_from_gsheets_background(storage))  # Новая задача
 
     # Запуск бота
