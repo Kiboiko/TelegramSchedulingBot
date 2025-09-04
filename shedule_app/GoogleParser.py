@@ -196,7 +196,7 @@ class GoogleSheetsDataLoader:
 
     def _load_subject_map(self) -> Dict[str, int]:
         subject_map = {}
-        sheet = self._get_sheet_data("Квалификации")
+        sheet = self._get_sheet_data("Предметы")
         if not sheet:
             return subject_map
 
