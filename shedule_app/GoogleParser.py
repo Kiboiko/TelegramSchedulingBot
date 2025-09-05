@@ -383,7 +383,7 @@ class GoogleSheetsDataLoader:
                 try:
                     need_for_attention = int(row[3])
                 except ValueError:
-                    need_for_attention = 1
+                    need_for_attention = 3
                     print(f"Внимание: некорректное значение потребности для ученика {name}, установлено значение 1")
 
             # Дополнительная проверка: если subject_id все еще -1, используем тему
@@ -435,7 +435,7 @@ class GoogleSheetsDataLoader:
 
             # Парсим предмет и потребность во внимании
             subject_id_int = -1
-            need_for_attention = 1
+            need_for_attention = 3
 
             # Предмет из колонки C (индекс 2)
             if len(row) > 2 and row[2]:
@@ -454,7 +454,7 @@ class GoogleSheetsDataLoader:
                 try:
                     need_for_attention = int(row[3])
                 except ValueError:
-                    need_for_attention = 1
+                    need_for_attention = 3
                     logger.warning(f"Некорректное значение потребности для ученика {name}, установлено значение 1")
 
             # Дополнительная проверка: если subject_id все еще -1, используем тему
