@@ -1,6 +1,6 @@
 import sys
 
-sys.path.append(r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
 
 import asyncio
 import json
@@ -41,7 +41,7 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 BOOKINGS_FILE = "bookings.json"
-CREDENTIALS_PATH = r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\credentials.json"
+CREDENTIALS_PATH = r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\credentials.json"
 SPREADSHEET_ID = "1r1MU8k8umwHx_E4Z-jFHRJ-kdwC43Jw0nwpVeH7T1GU"
 ADMIN_IDS = [1180878673, 973231400, 1312414595]
 BOOKING_TYPES = ["Тип1"]
@@ -142,12 +142,12 @@ class RoleCheckMiddleware(BaseMiddleware):
             if isinstance(event, Message):
                 await event.answer(
                     "⏳ Ваш аккаунт находится на проверке.\n"
-                    "Обратитесь к администратору для получения доступа.",
+                    "Обратитесь к администратору для получения доступа.\n Телефон администратора: +79001372727",
                     reply_markup=ReplyKeyboardRemove()
                 )
             elif isinstance(event, CallbackQuery):
                 await event.answer(
-                    "⏳ Обратитесь к администратору для получения доступа",
+                    "⏳ Обратитесь к администратору для получения доступа \n Телефон администратора: +79001372727",
                     show_alert=True
                 )
             return
@@ -1132,36 +1132,26 @@ async def show_my_role(message: types.Message):
         role_text = ", ".join([role_translations.get(role, role) for role in roles])
         await message.answer(f"Ваши роли: {role_text}")
     else:
-        await message.answer("Ваши роли еще не назначены. Обратитесь к администратору.")
+        await message.answer("Ваши роли еще не назначены. Обратитесь к администратору. \n Телефон администратора: +79001372727")
 
-# @dp.message(F.text == "ℹ️ Помощь")
-# async def show_help(message: types.Message):
-#     await cmd_help(message)
+@dp.message(F.text == "ℹ️ Помощь")
+async def show_help(message: types.Message):
+    await cmd_help(message)
 
 
-# @dp.message(Command("help"))
-# async def cmd_help(message: types.Message):
-#     await message.answer(
-#         "📋 Справка по боту:\n\n"
-#         "/book - начать процесс бронирования\n"
-#         " 1. Выбрать роль (ученик/преподаватель)\n"
-#         " 2. Ввести ваше ФИО\n"
-#         " 3. Выбрать предмет(ы)\n"
-#         " 4. Выбрать тип бронирования\n"
-#         " 5. Выбрать дату из календаря\n"
-#         " 6. Выбрать время начала и окончания\n"
-#         " 7. Подтвердить бронирование\n\n"
-#         "/my_bookings - показать ваши бронирования\n"
-#         "/my_role - показать вашу роль\n"
-#         "/help - показать эту справку"
-#     )
+@dp.message(Command("help"))
+async def cmd_help(message: types.Message):
+    await message.answer(
+        "обратитесь к администратору\nТелефон администратора: +79001372727.\n\n"
+        "/help - показать эту справку"
+    )
 
 
 @dp.message(F.text == "❓ Обратиться к администратору")
 async def contact_admin(message: types.Message):
     await message.answer(
         "📞 Для получения доступа к системе бронирования\n"
-        "обратитесь к администратору.\n\n"
+        "обратитесь к администратору \n Телефон администратора: +79001372727.\n\n"
         "После назначения ролей вы сможете пользоваться всеми функциями бота."
     )
 
@@ -1174,7 +1164,7 @@ async def start_schedule_generation(message: types.Message, state: FSMContext):
     # Проверяем права доступа через список ADMIN_IDS
     if not is_admin(user_id):
         await message.answer(
-            "❌ У вас нет прав для составления расписания. Обратитесь к администратору.",
+            "❌ У вас нет прав для составления расписания. Обратитесь к администратору. \n Телефон администратора: +79001372727",
             reply_markup=await generate_main_menu(user_id)
         )
         return
@@ -1241,7 +1231,7 @@ async def start_booking(message: types.Message, state: FSMContext):
     user_roles = storage.get_user_roles(user_id)
     if not user_roles:
         await message.answer(
-            "⏳ Обратитесь к администратору для получения ролей",
+            "⏳ Обратитесь к администратору для получения ролей \n Телефон администратора: +79001372727",
             reply_markup=await generate_main_menu(user_id)
         )
         return
@@ -1268,7 +1258,7 @@ async def start_booking(message: types.Message, state: FSMContext):
     
     if not available_booking_roles:
         await message.answer(
-            "❌ У вас нет ролей для бронирования. Обратитесь к администратору.",
+            "❌ У вас нет ролей для бронирования. Обратитесь к администратору. \n Телефон администратора: +79001372727",
             reply_markup=await generate_main_menu(user_id)
         )
         return
@@ -1286,7 +1276,7 @@ async def start_booking(message: types.Message, state: FSMContext):
             teacher_subjects = storage.get_teacher_subjects(user_id)
             if not teacher_subjects:
                 await message.answer(
-                    "У вас нет назначенных предметов. Обратитесь к администратору.",
+                    "У вас нет назначенных предметов. Обратитесь к администратору. \n Телефон администратора: +79001372727",
                     reply_markup=await generate_main_menu(user_id)
                 )
                 return
@@ -1315,7 +1305,7 @@ async def start_booking(message: types.Message, state: FSMContext):
             children_ids = storage.get_parent_children(user_id)
             if not children_ids:
                 await message.answer(
-                    "У вас нет привязанных детей. Обратитесь к администратору.",
+                    "У вас нет привязанных детей. Обратитесь к администратору.\n Телефон администратора: +79001372727",
                     reply_markup=await generate_main_menu(user_id)
                 )
                 return
@@ -1378,7 +1368,7 @@ async def process_name(message: types.Message, state: FSMContext):
     else:
         await message.answer(
             "✅ Ваше ФИО сохранено!\n"
-            "⏳ Обратитесь к администратору для получения ролей.",
+            "⏳ Обратитесь к администратору для получения ролей. \n Телефон администратора: +79001372727",
             reply_markup=await generate_main_menu(user_id)
         )
         await state.clear()
@@ -1525,7 +1515,7 @@ async def process_role_selection(callback: types.CallbackQuery, state: FSMContex
 
         if not teacher_subjects:
             await callback.answer(
-                "У вас нет назначенных предметов. Обратитесь к администратору.",
+                "У вас нет назначенных предметов. Обратитесь к администратору.\n Телефон администратора: +79001372727",
                 show_alert=True
             )
             return
@@ -1560,7 +1550,7 @@ async def process_role_selection(callback: types.CallbackQuery, state: FSMContex
         
         if not children_ids:
             await callback.answer(
-                "У вас нет привязанных детей. Обратитесь к администратору.",
+                "У вас нет привязанных детей. Обратитесь к администратору.\n Телефон администратора: +79001372727",
                 show_alert=True
             )
             return
@@ -2129,7 +2119,7 @@ async def show_role(message: types.Message):
         ])
         await message.answer(f"Ваши роли: {role_text}")
     else:
-        await message.answer("Ваши роли еще не назначены. Обратитесь к администратору.")
+        await message.answer("Ваши роли еще не назначены. Обратитесь к администратору.\n Телефон администратора: +79001372727")
 
 
 @dp.message(F.text == "❌ Отменить бронь")
@@ -2228,7 +2218,7 @@ async def process_role_parent_selection(callback: types.CallbackQuery, state: FS
     
     if not children_ids:
         await callback.answer(
-            "У вас нет привязанных детей. Обратитесь к администратору.",
+            "У вас нет привязанных детей. Обратитесь к администратору.\n Телефон администратора: +79001372727",
             show_alert=True
         )
         return
