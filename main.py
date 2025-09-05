@@ -43,7 +43,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 BOOKINGS_FILE = "bookings.json"
 CREDENTIALS_PATH = r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\credentials.json"
 SPREADSHEET_ID = "1r1MU8k8umwHx_E4Z-jFHRJ-kdwC43Jw0nwpVeH7T1GU"
-ADMIN_IDS = [1180878673, 973231400]
+ADMIN_IDS = [1180878673, 973231400, 1312414595]
 BOOKING_TYPES = ["Тип1"]
 SUBJECTS = {
     "1": "Математика",
@@ -248,12 +248,13 @@ def get_subject_distribution_by_time(loader, target_date: str, condition_check: 
     # Вычисляем результат условия для каждого слота
     for time_slot, data in time_slots.items():
         topics_dict = data['distribution']
-        p1_count = topics_dict.get("P1", 0)
-        p2_count = topics_dict.get("P2", 0)
+        p1_count = topics_dict.get("1", 0)
+        p2_count = topics_dict.get("2", 0)
+        p3_count = topics_dict.get("3", 0)
+        p4_count = topics_dict.get("4", 0)
         
-        data['condition_result'] = (p1_count < 2 and 
-                                  p2_count < 5 and 
-                                  p1_count + p2_count < 20)
+        data['condition_result'] = (p3_count < 5 and 
+                                  p1_count + p2_count + p3_count + p4_count < 25)
     
     return time_slots
 
