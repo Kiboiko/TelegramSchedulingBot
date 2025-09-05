@@ -115,7 +115,7 @@ class GoogleSheetsDataLoader:
             logger.info("\nСТУДЕНТЫ:")
             for student in students:
                 logger.info(
-                    f"  {student.name}: предмет {student.subject_id}, потребность {student.need_for_attention}, время {student.start_of_study_time}-{student.end_of_study_time}")
+                    f"  {student.name}: предмет {student.subject_id}, потребность {student.need_for_attention}, время {student.start_of_studying_time}-{student.end_of_studying_time}")
 
             logger.info(f"\nСУММАРНАЯ ПОТРЕБНОСТЬ: {sum(s.need_for_attention for s in students)}")
             logger.info(f"СУММАРНАЯ ЕМКОСТЬ: {sum(t.maximum_attention for t in teachers)}")

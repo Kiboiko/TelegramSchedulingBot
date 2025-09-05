@@ -1,6 +1,6 @@
 import sys
 
-sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\shedule_app")
 
 import asyncio
 import json
@@ -41,7 +41,7 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 BOOKINGS_FILE = "bookings.json"
-CREDENTIALS_PATH = r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\credentials.json"
+CREDENTIALS_PATH = r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\credentials.json"
 SPREADSHEET_ID = "1r1MU8k8umwHx_E4Z-jFHRJ-kdwC43Jw0nwpVeH7T1GU"
 ADMIN_IDS = [1180878673, 973231400, 1312414595]
 BOOKING_TYPES = ["Тип1"]
@@ -428,11 +428,22 @@ def generate_time_range_keyboard_with_availability(
                 )
             )
         else:
-            # Для учеников проверяем доступность
-            start_available = datetime.strptime(start_time, "%H:%M").time() in availability_map and availability_map[datetime.strptime(start_time, "%H:%M").time()]
-            end_available = datetime.strptime(end_time, "%H:%M").time() in availability_map and availability_map[datetime.strptime(end_time, "%H:%M").time()]
+            # Для учеников проверяем доступность всего интервала
+            is_interval_available = True
             
-            if start_available and end_available:
+            # Проверяем все временные слоты в выбранном интервале
+            start_obj = datetime.strptime(start_time, "%H:%M").time()
+            end_obj = datetime.strptime(end_time, "%H:%M").time()
+            
+            current_check = start_obj
+            while current_check < end_obj:
+                if current_check not in availability_map or not availability_map[current_check]:
+                    is_interval_available = False
+                    break
+                # Переходим к следующему получасовому слоту
+                current_check = School.add_minutes_to_time(current_check, 30)
+            
+            if is_interval_available:
                 builder.row(
                     types.InlineKeyboardButton(
                         text="✅ Подтвердить время",
@@ -442,8 +453,8 @@ def generate_time_range_keyboard_with_availability(
             else:
                 builder.row(
                     types.InlineKeyboardButton(
-                        text="❌ Интервал недоступен",
-                        callback_data="interval_unavailable"
+                        text="❌ Интервал содержит недоступные слоты",
+                        callback_data="interval_contains_unavailable"
                     )
                 )
 
@@ -455,6 +466,20 @@ def generate_time_range_keyboard_with_availability(
     )
 
     return builder.as_markup()
+
+@dp.callback_query(BookingStates.SELECT_TIME_RANGE, F.data == "interval_contains_unavailable")
+async def handle_interval_contains_unavailable(callback: types.CallbackQuery, state: FSMContext):
+    """Обрабатывает попытку подтверждения интервала с недоступными слотами"""
+    data = await state.get_data()
+    start_time = data.get('time_start')
+    end_time = data.get('time_end')
+    
+    await callback.answer(
+        f"❌ Выбранный интервал {start_time}-{end_time} содержит недоступные временные слоты\n"
+        "Выберите другой интервал, который не содержит значков 🔒",
+        show_alert=True
+    )
+
 
 def has_teacher_booking_conflict(user_id, date, time_start, time_end, exclude_id=None):
     """Проверяет конфликты бронирований только для преподавателей"""
@@ -1951,6 +1976,7 @@ async def switch_selection_mode(callback: types.CallbackQuery, state: FSMContext
 @dp.callback_query(BookingStates.SELECT_TIME_RANGE, F.data == "confirm_time_range")
 async def confirm_time_range(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
+    availability_map = data.get('availability_map')
     
     # Гарантируем, что booking_type = "Тип1"
     data['booking_type'] = "Тип1"
@@ -1959,6 +1985,25 @@ async def confirm_time_range(callback: types.CallbackQuery, state: FSMContext):
     subject = data.get('subject') if data.get('user_role') == 'student' else None
     user_id = callback.from_user.id
     date_str = data['selected_date'].strftime("%Y-%m-%d")
+
+    if availability_map is not None:
+        start_time = data.get('time_start')
+        end_time = data.get('time_end')
+        
+        if start_time and end_time:
+            start_obj = datetime.strptime(start_time, "%H:%M").time()
+            end_obj = datetime.strptime(end_time, "%H:%M").time()
+            
+            # Проверяем все слоты в интервале
+            current_check = start_obj
+            while current_check < end_obj:
+                if current_check not in availability_map or not availability_map[current_check]:
+                    await callback.answer(
+                        "❌ Выбранный интервал содержит недоступные временные слоты!",
+                        show_alert=True
+                    )
+                    return
+                current_check = School.add_minutes_to_time(current_check, 30)
     
     # Проверка для учеников - нет ли уже брони на этот предмет в этот день
     if data.get('user_role') == 'student' and subject:
