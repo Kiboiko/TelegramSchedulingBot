@@ -1,6 +1,6 @@
 import sys
 
-sys.path.append(r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
 
 import asyncio
 import json
@@ -41,7 +41,7 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 BOOKINGS_FILE = "bookings.json"
-CREDENTIALS_PATH = r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\credentials.json"
+CREDENTIALS_PATH = r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\credentials.json"
 SPREADSHEET_ID = "1r1MU8k8umwHx_E4Z-jFHRJ-kdwC43Jw0nwpVeH7T1GU"
 ADMIN_IDS = [1180878673, 973231400, 1312414595]
 BOOKING_TYPES = ["Тип1"]
@@ -608,14 +608,14 @@ def generate_calendar(year=None, month=None):
     # Заголовок с месяцем и годом
     month_name = datetime(year, month, 1).strftime("%B %Y")
     builder.row(types.InlineKeyboardButton(
-        text=month_name, 
+        text=month_name,
         callback_data="ignore_month_header"
     ))
 
     # Дни недели
     week_days = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
     builder.row(*[
-        types.InlineKeyboardButton(text=day, callback_data="ignore_weekday") 
+        types.InlineKeyboardButton(text=day, callback_data="ignore_weekday")
         for day in week_days
     ])
 
@@ -628,7 +628,7 @@ def generate_calendar(year=None, month=None):
     # Пустые кнопки для дней предыдущего месяца
     for _ in range(start_weekday):
         buttons.append(types.InlineKeyboardButton(
-            text=" ", 
+            text=" ",
             callback_data="ignore_empty_day"
         ))
 
@@ -637,7 +637,7 @@ def generate_calendar(year=None, month=None):
         current_date = datetime(year, month, day).date()
         if current_date < min_date:
             buttons.append(types.InlineKeyboardButton(
-                text=" ", 
+                text=" ",
                 callback_data="ignore_past_day"
             ))
         else:
@@ -657,24 +657,19 @@ def generate_calendar(year=None, month=None):
     next_month = month + 1 if month < 12 else 1
     next_year = year if month < 12 else year + 1
 
-    # Проверяем, можно ли перейти на предыдущий месяц
-    show_prev = datetime(prev_year, prev_month, 1).date() >= min_date
-
+    # ИСПРАВЛЕНИЕ: Всегда показываем кнопку "назад", если есть предыдущий месяц
+    # независимо от того, есть ли в нем доступные даты
     nav_buttons = []
-    if show_prev:
-        nav_buttons.append(types.InlineKeyboardButton(
-            text="⬅️", 
-            callback_data=f"calendar_change_{prev_year}-{prev_month}"
-        ))
-    else:
-        nav_buttons.append(types.InlineKeyboardButton(
-            text=" ", 
-            callback_data="ignore_prev_disabled"
-        ))
+
+    # Всегда показываем кнопку "назад" для навигации
+    nav_buttons.append(types.InlineKeyboardButton(
+        text="⬅️",
+        callback_data=f"calendar_change_{prev_year}-{prev_month}"
+    ))
 
     # Всегда показываем кнопку "вперед"
     nav_buttons.append(types.InlineKeyboardButton(
-        text="➡️", 
+        text="➡️",
         callback_data=f"calendar_change_{next_year}-{next_month}"
     ))
 

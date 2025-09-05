@@ -43,7 +43,7 @@ class GoogleSheetsManager:
     def _load_qualifications(self):
         """Загружает соответствия предметов из листа Квалификации"""
         try:
-            worksheet = self.spreadsheet.worksheet("Квалификации")
+            worksheet = self.spreadsheet.worksheet("Предметы")
             data = worksheet.get_all_values()
 
             self.qual_map = {}
