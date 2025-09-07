@@ -250,7 +250,7 @@ class GoogleSheetsManager:
         """Подготавливает данные для вставки с учетом предметов учеников"""
         # Сначала загружаем текущие данные из таблицы
         try:
-            worksheet = self.spreadsheet.worksheet("Преподаватели" if is_teacher else "Ученики")
+            worksheet = self.spreadsheet.worksheet("Преподаватели бот" if is_teacher else "Ученики бот")
             existing_data = worksheet.get_all_records()
         except Exception as e:
             logger.error(f"Ошибка при чтении существующих данных: {e}")
