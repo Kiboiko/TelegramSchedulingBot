@@ -41,6 +41,11 @@ class JSONStorage:
         booking_id = max([b.get('id', 0) for b in bookings] or [0]) + 1
         booking_data['id'] = booking_id
 
+        # Добавляем новые поля по умолчанию
+        if booking_data.get('user_role') == 'student':
+            booking_data.setdefault('subject_name', '')
+            booking_data.setdefault('class_name', '')
+
         # ДЕБАГ: Логируем данные перед сохранением
         logger.info(f"Adding booking: {json.dumps(booking_data, ensure_ascii=False)}")
 
