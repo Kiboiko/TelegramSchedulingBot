@@ -1,6 +1,6 @@
 import sys
 
-sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\ПК-2\Desktop\TelegramSchedulingBot\shedule_app")
 
 import asyncio
 import json
@@ -41,9 +41,9 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 BOOKINGS_FILE = "bookings.json"
-CREDENTIALS_PATH = r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\credentials.json"
+CREDENTIALS_PATH = r"C:\Users\ПК-2\Desktop\TelegramSchedulingBot\credentials.json"
 SPREADSHEET_ID = "1r1MU8k8umwHx_E4Z-jFHRJ-kdwC43Jw0nwpVeH7T1GU"
-ADMIN_IDS = [1180878673, 973231400]
+ADMIN_IDS = [1180878673, 973231400, 1312414595]
 BOOKING_TYPES = ["Тип1"]
 SUBJECTS = {
     "1": "Математика",
@@ -248,8 +248,8 @@ def get_subject_distribution_by_time(loader, target_date: str, condition_check: 
     # Вычисляем результат условия для каждого слота
     for time_slot, data in time_slots.items():
         topics_dict = data['distribution']
-        p1_count = topics_dict.get("P1", 0)
-        p2_count = topics_dict.get("P2", 0)
+        p1_count = topics_dict.get("1", 0)
+        p2_count = topics_dict.get("2", 0)
         
         data['condition_result'] = (p1_count < 2 and 
                                   p2_count < 5 and 
