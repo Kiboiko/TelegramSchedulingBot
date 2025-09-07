@@ -71,7 +71,7 @@ class GoogleSheetsDataLoader:
             logger.info(f"Загружено планов обучения: {len(self._study_plan_cache)}")
 
             # Лист преподавателей
-            teacher_sheet = self._get_sheet_data("Преподаватели")
+            teacher_sheet = self._get_sheet_data("Преподаватели бот")
             logger.info(f"Данные листа преподавателей: {len(teacher_sheet) if teacher_sheet else 0} строк")
             
             if not teacher_sheet:
@@ -90,7 +90,7 @@ class GoogleSheetsDataLoader:
                     logger.info(f"Добавлен преподаватель {i+1}: {teacher.name}")
 
             # Лист студентов
-            student_sheet = self._get_sheet_data("Ученики")
+            student_sheet = self._get_sheet_data("Ученики бот")
             logger.info(f"Данные листа учеников: {len(student_sheet) if student_sheet else 0} строк")
             
             if not student_sheet:
@@ -196,7 +196,7 @@ class GoogleSheetsDataLoader:
 
     def _load_subject_map(self) -> Dict[str, int]:
         subject_map = {}
-        sheet = self._get_sheet_data("Предметы")
+        sheet = self._get_sheet_data("Предметы бот")
         if not sheet:
             return subject_map
 
@@ -600,7 +600,7 @@ class GoogleSheetsDataLoader:
                 self._load_study_plan_cache()
             
             # Получаем данные студента
-            student_sheet = self._get_sheet_data("Ученики")
+            student_sheet = self._get_sheet_data("Ученики бот")
             if not student_sheet:
                 logger.warning("Лист 'Ученики' не найден")
                 return None

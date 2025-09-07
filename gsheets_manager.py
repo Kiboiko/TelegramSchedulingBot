@@ -43,7 +43,7 @@ class GoogleSheetsManager:
     def _load_qualifications(self):
         """Загружает соответствия предметов из листа Квалификации"""
         try:
-            worksheet = self.spreadsheet.worksheet("Предметы")
+            worksheet = self.spreadsheet.worksheet("Предметы бот")
             data = worksheet.get_all_values()
 
             self.qual_map = {}
@@ -88,9 +88,9 @@ class GoogleSheetsManager:
             students = self._add_users_without_bookings(students, 'student')
 
             success = True
-            if not self._update_sheet('Преподаватели', teachers, is_teacher=True):
+            if not self._update_sheet('Преподаватели бот', teachers, is_teacher=True):
                 success = False
-            if not self._update_sheet('Ученики', students, is_teacher=False):
+            if not self._update_sheet('Ученики бот', students, is_teacher=False):
                 success = False
 
             if success:
@@ -560,8 +560,8 @@ class GoogleSheetsManager:
     def sync_from_gsheets_to_json(self, storage):
         """Синхронизирует данные из Google Sheets в JSON хранилище"""
         try:
-            teacher_bookings = self.get_bookings_from_sheet("Преподаватели", is_teacher=True)
-            student_bookings = self.get_bookings_from_sheet("Ученики", is_teacher=False)
+            teacher_bookings = self.get_bookings_from_sheet("Преподаватели бот", is_teacher=True)
+            student_bookings = self.get_bookings_from_sheet("Ученики бот", is_teacher=False)
 
             all_bookings = teacher_bookings + student_bookings
 
@@ -607,7 +607,7 @@ class GoogleSheetsManager:
     def _get_or_create_users_worksheet(self):
         """Создает лист пользователей с колонками: user_id, user_name, roles, teacher_subjects"""
         try:
-            worksheet = self.spreadsheet.worksheet("Пользователи")
+            worksheet = self.spreadsheet.worksheet("Пользователи бот")
             # Проверяем структуру
             headers = worksheet.row_values(1)
             expected_headers = ["user_id", "user_name", "roles", "teacher_subjects"]
@@ -772,7 +772,7 @@ class GoogleSheetsManager:
     def _get_or_create_parents_worksheet(self):
         """Создает лист Родители с колонками: user_id, user_name, children_ids"""
         try:
-            worksheet = self.spreadsheet.worksheet("Родители")
+            worksheet = self.spreadsheet.worksheet("Родители бот")
             # Проверяем структуру
             headers = worksheet.row_values(1)
             expected_headers = ["user_id", "user_name", "children_ids"]
