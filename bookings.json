@@ -6,7 +6,7 @@
     "start_time": "11:00",
     "end_time": "16:30",
     "user_role": "teacher",
-    "created_at": "2025-09-07 11:36:46",
+    "created_at": "2025-09-07 13:04:02",
     "subjects": [
       "1",
       "2",
@@ -25,7 +25,7 @@
     "start_time": "11:00",
     "end_time": "18:00",
     "user_role": "teacher",
-    "created_at": "2025-09-07 11:36:46",
+    "created_at": "2025-09-07 13:04:02",
     "subjects": [
       "1",
       "2",
@@ -44,7 +44,7 @@
     "start_time": "18:00",
     "end_time": "20:00",
     "user_role": "teacher",
-    "created_at": "2025-09-07 11:36:46",
+    "created_at": "2025-09-07 13:04:02",
     "subjects": [
       "1",
       "2",
@@ -63,7 +63,7 @@
     "start_time": "11:00",
     "end_time": "16:30",
     "user_role": "teacher",
-    "created_at": "2025-09-07 11:36:46",
+    "created_at": "2025-09-07 13:04:02",
     "subjects": [
       "1",
       "2",
@@ -75,18 +75,18 @@
     "id": 4
   },
   {
-    "user_id": 991468733,
-    "user_name": "Полибин Вадим Константинович",
-    "date": "2025-09-04",
-    "start_time": "12:00",
-    "end_time": "19:00",
+    "user_id": 973231400,
+    "user_name": "Бойко Кирилл",
+    "date": "2025-09-10",
+    "start_time": "09:00",
+    "end_time": "14:00",
     "user_role": "teacher",
-    "created_at": "2025-09-07 11:36:46",
+    "created_at": "2025-09-07 13:04:02",
     "subjects": [
       "1",
       "2",
       "3",
-      "10"
+      "4"
     ],
     "booking_type": "Тип1",
     "priority": "",
@@ -95,11 +95,11 @@
   {
     "user_id": 991468733,
     "user_name": "Полибин Вадим Константинович",
-    "date": "2025-09-06",
-    "start_time": "19:30",
-    "end_time": "20:00",
+    "date": "2025-09-04",
+    "start_time": "12:00",
+    "end_time": "19:00",
     "user_role": "teacher",
-    "created_at": "2025-09-07 11:36:46",
+    "created_at": "2025-09-07 13:04:02",
     "subjects": [
       "1",
       "2",
@@ -107,8 +107,26 @@
       "10"
     ],
     "booking_type": "Тип1",
-    "priority": "",
+    "priority": "1",
     "id": 6
+  },
+  {
+    "user_id": 991468733,
+    "user_name": "Полибин Вадим Константинович",
+    "date": "2025-09-06",
+    "start_time": "19:30",
+    "end_time": "20:00",
+    "user_role": "teacher",
+    "created_at": "2025-09-07 13:04:02",
+    "subjects": [
+      "1",
+      "2",
+      "3",
+      "10"
+    ],
+    "booking_type": "Тип1",
+    "priority": "1",
+    "id": 7
   },
   {
     "user_id": 1312414595,
@@ -117,14 +135,14 @@
     "start_time": "10:00",
     "end_time": "18:00",
     "user_role": "teacher",
-    "created_at": "2025-09-07 11:36:46",
+    "created_at": "2025-09-07 13:04:02",
     "subjects": [
       "2",
       "11"
     ],
     "booking_type": "Тип1",
     "priority": "",
-    "id": 7
+    "id": 8
   },
   {
     "user_id": 973231400,
@@ -133,22 +151,7 @@
     "start_time": "14:00",
     "end_time": "15:00",
     "user_role": "student",
-    "created_at": "2025-09-07 11:36:47",
-    "subject": "3",
-    "booking_type": "Тип1",
-    "attention_need": "",
-    "subject_name": "",
-    "class_name": "",
-    "id": 8
-  },
-  {
-    "user_id": 22442244,
-    "user_name": "трен твинс",
-    "date": "2025-09-06",
-    "start_time": "13:00",
-    "end_time": "17:30",
-    "user_role": "student",
-    "created_at": "2025-09-07 11:36:47",
+    "created_at": "2025-09-07 13:04:03",
     "subject": "3",
     "booking_type": "Тип1",
     "attention_need": "",
@@ -157,13 +160,13 @@
     "id": 9
   },
   {
-    "user_id": 1180878673,
-    "user_name": "Белых Степан",
-    "date": "2025-09-05",
-    "start_time": "12:00",
-    "end_time": "14:00",
+    "user_id": 22442244,
+    "user_name": "трен твинс",
+    "date": "2025-09-06",
+    "start_time": "13:00",
+    "end_time": "17:30",
     "user_role": "student",
-    "created_at": "2025-09-07 11:36:47",
+    "created_at": "2025-09-07 13:04:03",
     "subject": "3",
     "booking_type": "Тип1",
     "attention_need": "",
@@ -172,14 +175,14 @@
     "id": 10
   },
   {
-    "user_id": 973231400,
-    "user_name": "Бойко Кирилл",
-    "date": "2025-09-01",
-    "start_time": "18:00",
-    "end_time": "19:30",
+    "user_id": 1180878673,
+    "user_name": "Белых Степан",
+    "date": "2025-09-05",
+    "start_time": "12:00",
+    "end_time": "14:00",
     "user_role": "student",
-    "created_at": "2025-09-07 11:36:47",
-    "subject": "1",
+    "created_at": "2025-09-07 13:04:03",
+    "subject": "3",
     "booking_type": "Тип1",
     "attention_need": "",
     "subject_name": "",
@@ -189,17 +192,32 @@
   {
     "user_id": 973231400,
     "user_name": "Бойко Кирилл",
+    "date": "2025-09-01",
+    "start_time": "18:00",
+    "end_time": "19:30",
+    "user_role": "student",
+    "created_at": "2025-09-07 13:04:03",
+    "subject": "1",
+    "booking_type": "Тип1",
+    "attention_need": "5",
+    "subject_name": "",
+    "class_name": "",
+    "id": 12
+  },
+  {
+    "user_id": 973231400,
+    "user_name": "Бойко Кирилл",
     "date": "2025-09-07",
     "start_time": "18:00",
     "end_time": "19:30",
     "user_role": "student",
-    "created_at": "2025-09-07 11:36:47",
+    "created_at": "2025-09-07 13:04:03",
     "subject": "1",
     "booking_type": "Тип1",
-    "attention_need": "",
+    "attention_need": "5",
     "subject_name": "",
     "class_name": "",
-    "id": 12
+    "id": 13
   },
   {
     "user_id": 222222222,
@@ -208,13 +226,13 @@
     "start_time": "18:00",
     "end_time": "19:30",
     "user_role": "student",
-    "created_at": "2025-09-07 11:36:47",
+    "created_at": "2025-09-07 13:04:03",
     "subject": "2",
     "booking_type": "Тип1",
     "attention_need": "",
-    "subject_name": "физика",
-    "class_name": "10",
-    "id": 13
+    "subject_name": "",
+    "class_name": "",
+    "id": 14
   },
   {
     "user_id": 222222222,
@@ -223,13 +241,13 @@
     "start_time": "12:00",
     "end_time": "15:00",
     "user_role": "student",
-    "created_at": "2025-09-07 11:36:47",
+    "created_at": "2025-09-07 13:04:03",
     "subject": "2",
     "booking_type": "Тип1",
     "attention_need": "",
-    "subject_name": "физика",
-    "class_name": "10",
-    "id": 14
+    "subject_name": "",
+    "class_name": "",
+    "id": 15
   },
   {
     "user_id": 973231400,
@@ -238,13 +256,42 @@
     "start_time": "19:30",
     "end_time": "20:00",
     "user_role": "student",
-    "created_at": "2025-09-07 11:36:47",
+    "created_at": "2025-09-07 13:04:03",
     "subject": "2",
     "booking_type": "Тип1",
     "attention_need": "",
     "subject_name": "",
     "class_name": "",
-    "id": 15
+    "id": 16
+  },
+  {
+    "user_id": 7890,
+    "user_name": "андрюха смаев",
+    "date": "2025-09-01",
+    "start_time": "11:00",
+    "end_time": "17:00",
+    "user_role": "student",
+    "created_at": "2025-09-07 13:04:03",
+    "subject": "3",
+    "booking_type": "Тип1",
+    "attention_need": "",
+    "subject_name": "",
+    "class_name": "",
+    "id": 17
+  },
+  {
+    "user_id": 654321,
+    "user_name": "булька барабулька",
+    "date": "2025-09-01",
+    "start_time": "12:00",
+    "end_time": "18:00",
+    "user_role": "student",
+    "created_at": "2025-09-07 13:04:03",
+    "subject": "2",
+    "booking_type": "Тип1",
+    "attention_need": "",
+    "subject_name": "",
+    "class_name": "",
+    "id": 18
   }
 ]
-[]

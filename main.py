@@ -1,6 +1,6 @@
 import sys
 
-sys.path.append(r"C:\Users\ПК-2\Desktop\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
 
 import asyncio
 import json
@@ -41,8 +41,8 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 BOOKINGS_FILE = "bookings.json"
-CREDENTIALS_PATH = r"C:\Users\ПК-2\Desktop\TelegramSchedulingBot\credentials.json"
-# SPREADSHEET_ID = "1r1MU8k8umwHx_E4Z-jFHRJ-kdwC43Jw0nwpVeH7T1GU"
+CREDENTIALS_PATH = r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\credentials.json"
+
 SPREADSHEET_ID = "1L4l6ONchMU5xk5v1y_50po_l0NwhssNCCCKTsy3aR_0"
 ADMIN_IDS = [1180878673, 973231400, 1312414595]
 BOOKING_TYPES = ["Тип1"]
@@ -109,7 +109,7 @@ storage = JSONStorage(file_path=BOOKINGS_FILE)
 try:
     gsheets = GoogleSheetsManager(
         credentials_file='credentials.json',
-        spreadsheet_id='1r1MU8k8umwHx_E4Z-jFHRJ-kdwC43Jw0nwpVeH7T1GU'
+        spreadsheet_id=SPREADSHEET_ID
     )
     gsheets.connect()
     storage.set_gsheets_manager(gsheets)
@@ -1008,7 +1008,7 @@ def generate_schedule_for_date(target_date: str) -> str:
         # Настройки
         current_dir = os.path.dirname(os.path.abspath(__file__))
         credentials_path = os.path.join(current_dir, "credentials.json")
-        spreadsheet_id = "1r1MU8k8umwHx_E4Z-jFHRJ-kdwC43Jw0nwpVeH7T1GU"
+        spreadsheet_id = SPREADSHEET_ID
 
         # Загружаем данные
         loader = GoogleSheetsDataLoader(credentials_path, spreadsheet_id, target_date)
