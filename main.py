@@ -142,12 +142,12 @@ class RoleCheckMiddleware(BaseMiddleware):
             if isinstance(event, Message):
                 await event.answer(
                     "⏳ Ваш аккаунт находится на проверке.\n"
-                    "Обратитесь к администратору для получения доступа.",
+                    "Обратитесь к администратору для получения доступа.\n Телефон администратора: +79001372727",
                     reply_markup=ReplyKeyboardRemove()
                 )
             elif isinstance(event, CallbackQuery):
                 await event.answer(
-                    "⏳ Обратитесь к администратору для получения доступа",
+                    "⏳ Обратитесь к администратору для получения доступа \n Телефон администратора: +79001372727",
                     show_alert=True
                 )
             return
@@ -250,10 +250,11 @@ def get_subject_distribution_by_time(loader, target_date: str, condition_check: 
         topics_dict = data['distribution']
         p1_count = topics_dict.get("1", 0)
         p2_count = topics_dict.get("2", 0)
+        p3_count = topics_dict.get("3", 0)
+        p4_count = topics_dict.get("4", 0)
         
-        data['condition_result'] = (p1_count < 2 and 
-                                  p2_count < 5 and 
-                                  p1_count + p2_count < 20)
+        data['condition_result'] = (p3_count < 5 and 
+                                  p1_count + p2_count + p3_count + p4_count < 25)
     
     return time_slots
 
@@ -427,11 +428,22 @@ def generate_time_range_keyboard_with_availability(
                 )
             )
         else:
-            # Для учеников проверяем доступность
-            start_available = datetime.strptime(start_time, "%H:%M").time() in availability_map and availability_map[datetime.strptime(start_time, "%H:%M").time()]
-            end_available = datetime.strptime(end_time, "%H:%M").time() in availability_map and availability_map[datetime.strptime(end_time, "%H:%M").time()]
+            # Для учеников проверяем доступность всего интервала
+            is_interval_available = True
             
-            if start_available and end_available:
+            # Проверяем все временные слоты в выбранном интервале
+            start_obj = datetime.strptime(start_time, "%H:%M").time()
+            end_obj = datetime.strptime(end_time, "%H:%M").time()
+            
+            current_check = start_obj
+            while current_check < end_obj:
+                if current_check not in availability_map or not availability_map[current_check]:
+                    is_interval_available = False
+                    break
+                # Переходим к следующему получасовому слоту
+                current_check = School.add_minutes_to_time(current_check, 30)
+            
+            if is_interval_available:
                 builder.row(
                     types.InlineKeyboardButton(
                         text="✅ Подтвердить время",
@@ -441,8 +453,8 @@ def generate_time_range_keyboard_with_availability(
             else:
                 builder.row(
                     types.InlineKeyboardButton(
-                        text="❌ Интервал недоступен",
-                        callback_data="interval_unavailable"
+                        text="❌ Интервал содержит недоступные слоты",
+                        callback_data="interval_contains_unavailable"
                     )
                 )
 
@@ -454,6 +466,20 @@ def generate_time_range_keyboard_with_availability(
     )
 
     return builder.as_markup()
+
+@dp.callback_query(BookingStates.SELECT_TIME_RANGE, F.data == "interval_contains_unavailable")
+async def handle_interval_contains_unavailable(callback: types.CallbackQuery, state: FSMContext):
+    """Обрабатывает попытку подтверждения интервала с недоступными слотами"""
+    data = await state.get_data()
+    start_time = data.get('time_start')
+    end_time = data.get('time_end')
+    
+    await callback.answer(
+        f"❌ Выбранный интервал {start_time}-{end_time} содержит недоступные временные слоты\n"
+        "Выберите другой интервал, который не содержит значков 🔒",
+        show_alert=True
+    )
+
 
 def has_teacher_booking_conflict(user_id, date, time_start, time_end, exclude_id=None):
     """Проверяет конфликты бронирований только для преподавателей"""
@@ -1131,36 +1157,26 @@ async def show_my_role(message: types.Message):
         role_text = ", ".join([role_translations.get(role, role) for role in roles])
         await message.answer(f"Ваши роли: {role_text}")
     else:
-        await message.answer("Ваши роли еще не назначены. Обратитесь к администратору.")
+        await message.answer("Ваши роли еще не назначены. Обратитесь к администратору. \n Телефон администратора: +79001372727")
 
-# @dp.message(F.text == "ℹ️ Помощь")
-# async def show_help(message: types.Message):
-#     await cmd_help(message)
+@dp.message(F.text == "ℹ️ Помощь")
+async def show_help(message: types.Message):
+    await cmd_help(message)
 
 
-# @dp.message(Command("help"))
-# async def cmd_help(message: types.Message):
-#     await message.answer(
-#         "📋 Справка по боту:\n\n"
-#         "/book - начать процесс бронирования\n"
-#         " 1. Выбрать роль (ученик/преподаватель)\n"
-#         " 2. Ввести ваше ФИО\n"
-#         " 3. Выбрать предмет(ы)\n"
-#         " 4. Выбрать тип бронирования\n"
-#         " 5. Выбрать дату из календаря\n"
-#         " 6. Выбрать время начала и окончания\n"
-#         " 7. Подтвердить бронирование\n\n"
-#         "/my_bookings - показать ваши бронирования\n"
-#         "/my_role - показать вашу роль\n"
-#         "/help - показать эту справку"
-#     )
+@dp.message(Command("help"))
+async def cmd_help(message: types.Message):
+    await message.answer(
+        "обратитесь к администратору\nТелефон администратора: +79001372727.\n\n"
+        "/help - показать эту справку"
+    )
 
 
 @dp.message(F.text == "❓ Обратиться к администратору")
 async def contact_admin(message: types.Message):
     await message.answer(
         "📞 Для получения доступа к системе бронирования\n"
-        "обратитесь к администратору.\n\n"
+        "обратитесь к администратору \n Телефон администратора: +79001372727.\n\n"
         "После назначения ролей вы сможете пользоваться всеми функциями бота."
     )
 
@@ -1173,7 +1189,7 @@ async def start_schedule_generation(message: types.Message, state: FSMContext):
     # Проверяем права доступа через список ADMIN_IDS
     if not is_admin(user_id):
         await message.answer(
-            "❌ У вас нет прав для составления расписания. Обратитесь к администратору.",
+            "❌ У вас нет прав для составления расписания. Обратитесь к администратору. \n Телефон администратора: +79001372727",
             reply_markup=await generate_main_menu(user_id)
         )
         return
@@ -1240,7 +1256,7 @@ async def start_booking(message: types.Message, state: FSMContext):
     user_roles = storage.get_user_roles(user_id)
     if not user_roles:
         await message.answer(
-            "⏳ Обратитесь к администратору для получения ролей",
+            "⏳ Обратитесь к администратору для получения ролей \n Телефон администратора: +79001372727",
             reply_markup=await generate_main_menu(user_id)
         )
         return
@@ -1267,7 +1283,7 @@ async def start_booking(message: types.Message, state: FSMContext):
     
     if not available_booking_roles:
         await message.answer(
-            "❌ У вас нет ролей для бронирования. Обратитесь к администратору.",
+            "❌ У вас нет ролей для бронирования. Обратитесь к администратору. \n Телефон администратора: +79001372727",
             reply_markup=await generate_main_menu(user_id)
         )
         return
@@ -1285,7 +1301,7 @@ async def start_booking(message: types.Message, state: FSMContext):
             teacher_subjects = storage.get_teacher_subjects(user_id)
             if not teacher_subjects:
                 await message.answer(
-                    "У вас нет назначенных предметов. Обратитесь к администратору.",
+                    "У вас нет назначенных предметов. Обратитесь к администратору. \n Телефон администратора: +79001372727",
                     reply_markup=await generate_main_menu(user_id)
                 )
                 return
@@ -1314,7 +1330,7 @@ async def start_booking(message: types.Message, state: FSMContext):
             children_ids = storage.get_parent_children(user_id)
             if not children_ids:
                 await message.answer(
-                    "У вас нет привязанных детей. Обратитесь к администратору.",
+                    "У вас нет привязанных детей. Обратитесь к администратору.\n Телефон администратора: +79001372727",
                     reply_markup=await generate_main_menu(user_id)
                 )
                 return
@@ -1377,7 +1393,7 @@ async def process_name(message: types.Message, state: FSMContext):
     else:
         await message.answer(
             "✅ Ваше ФИО сохранено!\n"
-            "⏳ Обратитесь к администратору для получения ролей.",
+            "⏳ Обратитесь к администратору для получения ролей. \n Телефон администратора: +79001372727",
             reply_markup=await generate_main_menu(user_id)
         )
         await state.clear()
@@ -1524,7 +1540,7 @@ async def process_role_selection(callback: types.CallbackQuery, state: FSMContex
 
         if not teacher_subjects:
             await callback.answer(
-                "У вас нет назначенных предметов. Обратитесь к администратору.",
+                "У вас нет назначенных предметов. Обратитесь к администратору.\n Телефон администратора: +79001372727",
                 show_alert=True
             )
             return
@@ -1559,7 +1575,7 @@ async def process_role_selection(callback: types.CallbackQuery, state: FSMContex
         
         if not children_ids:
             await callback.answer(
-                "У вас нет привязанных детей. Обратитесь к администратору.",
+                "У вас нет привязанных детей. Обратитесь к администратору.\n Телефон администратора: +79001372727",
                 show_alert=True
             )
             return
@@ -1960,6 +1976,7 @@ async def switch_selection_mode(callback: types.CallbackQuery, state: FSMContext
 @dp.callback_query(BookingStates.SELECT_TIME_RANGE, F.data == "confirm_time_range")
 async def confirm_time_range(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
+    availability_map = data.get('availability_map')
     
     # Гарантируем, что booking_type = "Тип1"
     data['booking_type'] = "Тип1"
@@ -1968,6 +1985,25 @@ async def confirm_time_range(callback: types.CallbackQuery, state: FSMContext):
     subject = data.get('subject') if data.get('user_role') == 'student' else None
     user_id = callback.from_user.id
     date_str = data['selected_date'].strftime("%Y-%m-%d")
+
+    if availability_map is not None:
+        start_time = data.get('time_start')
+        end_time = data.get('time_end')
+        
+        if start_time and end_time:
+            start_obj = datetime.strptime(start_time, "%H:%M").time()
+            end_obj = datetime.strptime(end_time, "%H:%M").time()
+            
+            # Проверяем все слоты в интервале
+            current_check = start_obj
+            while current_check < end_obj:
+                if current_check not in availability_map or not availability_map[current_check]:
+                    await callback.answer(
+                        "❌ Выбранный интервал содержит недоступные временные слоты!",
+                        show_alert=True
+                    )
+                    return
+                current_check = School.add_minutes_to_time(current_check, 30)
     
     # Проверка для учеников - нет ли уже брони на этот предмет в этот день
     if data.get('user_role') == 'student' and subject:
@@ -2120,10 +2156,15 @@ async def show_bookings(message: types.Message):
 async def show_role(message: types.Message):
     roles = storage.get_user_roles(message.from_user.id)
     if roles:
-        role_text = ", ".join(["преподаватель" if role == "teacher" else "ученик" for role in roles])
+        role_text = ", ".join([
+            "преподаватель" if role == "teacher" 
+            else "родитель" if role == "parent" 
+            else "ученик" 
+            for role in roles
+        ])
         await message.answer(f"Ваши роли: {role_text}")
     else:
-        await message.answer("Ваши роли еще не назначены. Обратитесь к администратору.")
+        await message.answer("Ваши роли еще не назначены. Обратитесь к администратору.\n Телефон администратора: +79001372727")
 
 
 @dp.message(F.text == "❌ Отменить бронь")
@@ -2222,7 +2263,7 @@ async def process_role_parent_selection(callback: types.CallbackQuery, state: FS
     
     if not children_ids:
         await callback.answer(
-            "У вас нет привязанных детей. Обратитесь к администратору.",
+            "У вас нет привязанных детей. Обратитесь к администратору.\n Телефон администратора: +79001372727",
             show_alert=True
         )
         return
