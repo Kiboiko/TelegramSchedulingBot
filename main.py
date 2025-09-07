@@ -42,7 +42,8 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 BOOKINGS_FILE = "bookings.json"
 CREDENTIALS_PATH = r"C:\Users\ПК-2\Desktop\TelegramSchedulingBot\credentials.json"
-SPREADSHEET_ID = "1r1MU8k8umwHx_E4Z-jFHRJ-kdwC43Jw0nwpVeH7T1GU"
+# SPREADSHEET_ID = "1r1MU8k8umwHx_E4Z-jFHRJ-kdwC43Jw0nwpVeH7T1GU"
+SPREADSHEET_ID = "1L4l6ONchMU5xk5v1y_50po_l0NwhssNCCCKTsy3aR_0"
 ADMIN_IDS = [1180878673, 973231400, 1312414595]
 BOOKING_TYPES = ["Тип1"]
 SUBJECTS = {
