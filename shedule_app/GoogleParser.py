@@ -137,64 +137,70 @@ class GoogleSheetsDataLoader:
         return teachers, students
 
     def _find_date_columns(self, sheet: List[List[Any]], date: str) -> Tuple[int, int]:
-            if not sheet:
-                return (-1, -1)
+        if not sheet:
+            return (-1, -1)
+        logger.info(f"Заголовки таблицы: {sheet[0]}")
+        header_row = sheet[0]
+        start_col = -1
+        end_col = -1
 
-            header_row = sheet[0]
-            start_col = -1
-            end_col = -1
-
-            # Определяем базовый индекс начала колонок с датами
-            # Для преподавателей: после ID, Имя, Предмет ID, Приоритет (4 колонки)
-            # Для учеников: после ID, Имя, Предмет ID, Предмет, Класс, Потребность (6 колонок)
-            base_date_start_index = 6  # Новый базовый индекс для учеников (A=0, B=1, C=2, D=3, E=4, F=5, G=6...)
-
-            # Пробуем разные форматы даты
-            target_date_formats = []
+        # Пробуем разные форматы даты
+        target_date_formats = []
+        
+        try:
+            # Пробуем разные варианты парсинга даты
+            date_formats_to_try = [
+                "%Y.%m.%d", "%d.%m.%Y", "%Y-%m-%d", "%d-%m-%Y",
+                "%Y/%m/%d", "%d/%m/%Y"
+            ]
             
-            try:
-                date_obj = datetime.strptime(date, "%d.%m.%Y")
-                target_date_formats.extend([
-                    date_obj.strftime("%Y.%m.%d"),
-                    date_obj.strftime("%Y/%m/%d"), 
-                    date_obj.strftime("%Y-%m-%d"),
-                    date_obj.strftime("%d.%m.%Y"),
-                    date_obj.strftime("%d/%m/%Y"),
-                    date_obj.strftime("%d-%m-%Y"),
-                    date,
-                ])
-            except ValueError:
+            parsed_date = None
+            for date_format in date_formats_to_try:
                 try:
-                    date_obj = datetime.strptime(date, "%Y.%m.%d")
-                    target_date_formats.extend([
-                        date_obj.strftime("%Y.%m.%d"),
-                        date_obj.strftime("%Y/%m/%d"),
-                        date_obj.strftime("%Y-%m-%d"),
-                        date_obj.strftime("%d.%m.%Y"),
-                        date_obj.strftime("%d/%m/%Y"),
-                        date_obj.strftime("%d-%m-%Y"),
-                        date,
-                    ])
+                    parsed_date = datetime.strptime(date, date_format)
+                    break
                 except ValueError:
-                    target_date_formats = [date]
+                    continue
+            
+            if parsed_date:
+                target_date_formats.extend([
+                    parsed_date.strftime("%d.%m.%Y"),  # Приоритетный формат DD.MM.YYYY
+                    parsed_date.strftime("%Y.%m.%d"),  # Формат YYYY.MM.DD
+                    parsed_date.strftime("%Y-%m-%d"),
+                    parsed_date.strftime("%d-%m-%Y"),
+                    parsed_date.strftime("%Y/%m/%d"),
+                    parsed_date.strftime("%d/%m/%Y"),
+                    date,  # Оригинальный формат
+                ])
+        except ValueError:
+            target_date_formats = [date]
 
-            logger.info(f"Поиск даты '{date}' в форматах: {target_date_formats}")
+        logger.info(f"Поиск даты '{date}' в форматах: {target_date_formats}")
 
-            # Ищем дату начиная с базового индекса
-            for i in range(base_date_start_index, len(header_row)):
-                cell_str = str(header_row[i]).strip() if i < len(header_row) else ""
-                for date_format in target_date_formats:
-                    if cell_str == date_format:
-                        if start_col == -1:
-                            start_col = i
-                            logger.info(f"Найдено начало: колонка {i} - '{cell_str}'")
-                        else:
-                            end_col = i
-                            logger.info(f"Найдено окончание: колонка {i} - '{cell_str}'")
-                        break
+        # Ищем дату в заголовках
+        for i, cell_value in enumerate(header_row):
+            cell_str = str(cell_value).strip().lower() if cell_value else ""
+            
+            # Проверяем все форматы
+            for date_format in target_date_formats:
+                if cell_str == date_format.lower():
+                    if start_col == -1:
+                        start_col = i
+                        logger.info(f"Найдено начало: колонка {i} - '{cell_value}'")
+                    else:
+                        end_col = i
+                        logger.info(f"Найдено окончание: колонка {i} - '{cell_value}'")
+                    break
 
-            logger.info(f"Результат поиска: start_col={start_col}, end_col={end_col}")
-            return (start_col, end_col)
+        # Если нашли только start_col, но не end_col, ищем парную колонку
+        if start_col != -1 and end_col == -1:
+            # Предполагаем, что end_col следующая за start_col
+            if start_col + 1 < len(header_row):
+                end_col = start_col + 1
+                logger.info(f"Предполагаемое окончание: колонка {end_col}")
+
+        logger.info(f"Результат поиска: start_col={start_col}, end_col={end_col}")
+        return (start_col, end_col)
 
     def _load_subject_map(self) -> Dict[str, int]:
         subject_map = {}
@@ -265,7 +271,7 @@ class GoogleSheetsDataLoader:
 
     def _get_sheet_data(self, sheet_name: str) -> Optional[List[List[Any]]]:
         try:
-            range_name = f"{sheet_name}!A:Z"
+            range_name = f"{sheet_name}"  # ← Загружаем весь лист
             result = self.service.spreadsheets().values().get(
                 spreadsheetId=self.spreadsheet_id,
                 range=range_name
