@@ -137,62 +137,64 @@ class GoogleSheetsDataLoader:
         return teachers, students
 
     def _find_date_columns(self, sheet: List[List[Any]], date: str) -> Tuple[int, int]:
-        if not sheet:
-            return (-1, -1)
+            if not sheet:
+                return (-1, -1)
 
-        header_row = sheet[0]
-        start_col = -1
-        end_col = -1
+            header_row = sheet[0]
+            start_col = -1
+            end_col = -1
 
-        # Пробуем разные форматы даты
-        target_date_formats = []
+            # Определяем базовый индекс начала колонок с датами
+            # Для преподавателей: после ID, Имя, Предмет ID, Приоритет (4 колонки)
+            # Для учеников: после ID, Имя, Предмет ID, Предмет, Класс, Потребность (6 колонок)
+            base_date_start_index = 6  # Новый базовый индекс для учеников (A=0, B=1, C=2, D=3, E=4, F=5, G=6...)
 
-        # Пробуем распарсить входящую дату в разных форматах
-        try:
-            # Пробуем формат DD.MM.YYYY
-            date_obj = datetime.strptime(date, "%d.%m.%Y")
-            target_date_formats.extend([
-                date_obj.strftime("%Y.%m.%d"),  # 2025.09.01
-                date_obj.strftime("%Y/%m/%d"),  # 2025/09/01
-                date_obj.strftime("%Y-%m-%d"),  # 2025-09-01
-                date_obj.strftime("%d.%m.%Y"),  # 01.09.2025 (оригинальный)
-                date_obj.strftime("%d/%m/%Y"),  # 01/09/2025
-                date_obj.strftime("%d-%m-%Y"),  # 01-09-2025
-                date,  # оригинальный формат
-            ])
-        except ValueError:
+            # Пробуем разные форматы даты
+            target_date_formats = []
+            
             try:
-                # Пробуем формат YYYY.MM.DD
-                date_obj = datetime.strptime(date, "%Y.%m.%d")
+                date_obj = datetime.strptime(date, "%d.%m.%Y")
                 target_date_formats.extend([
-                    date_obj.strftime("%Y.%m.%d"),  # 2025.09.01
-                    date_obj.strftime("%Y/%m/%d"),  # 2025/09/01
-                    date_obj.strftime("%Y-%m-%d"),  # 2025-09-01
-                    date_obj.strftime("%d.%m.%Y"),  # 01.09.2025
-                    date_obj.strftime("%d/%m/%Y"),  # 01/09/2025
-                    date_obj.strftime("%d-%m-%Y"),  # 01-09-2025
-                    date,  # оригинальный формат
+                    date_obj.strftime("%Y.%m.%d"),
+                    date_obj.strftime("%Y/%m/%d"), 
+                    date_obj.strftime("%Y-%m-%d"),
+                    date_obj.strftime("%d.%m.%Y"),
+                    date_obj.strftime("%d/%m/%Y"),
+                    date_obj.strftime("%d-%m-%Y"),
+                    date,
                 ])
             except ValueError:
-                # Если оба формата не подходят, используем оригинальный
-                target_date_formats = [date]
+                try:
+                    date_obj = datetime.strptime(date, "%Y.%m.%d")
+                    target_date_formats.extend([
+                        date_obj.strftime("%Y.%m.%d"),
+                        date_obj.strftime("%Y/%m/%d"),
+                        date_obj.strftime("%Y-%m-%d"),
+                        date_obj.strftime("%d.%m.%Y"),
+                        date_obj.strftime("%d/%m/%Y"),
+                        date_obj.strftime("%d-%m-%Y"),
+                        date,
+                    ])
+                except ValueError:
+                    target_date_formats = [date]
 
-        logger.info(f"Поиск даты '{date}' в форматах: {target_date_formats}")
+            logger.info(f"Поиск даты '{date}' в форматах: {target_date_formats}")
 
-        for i, cell in enumerate(header_row):
-            cell_str = str(cell).strip()
-            for date_format in target_date_formats:
-                if cell_str == date_format:
-                    if start_col == -1:
-                        start_col = i
-                        logger.info(f"Найдено начало: колонка {i} - '{cell_str}'")
-                    else:
-                        end_col = i
-                        logger.info(f"Найдено окончание: колонка {i} - '{cell_str}'")
-                    break
+            # Ищем дату начиная с базового индекса
+            for i in range(base_date_start_index, len(header_row)):
+                cell_str = str(header_row[i]).strip() if i < len(header_row) else ""
+                for date_format in target_date_formats:
+                    if cell_str == date_format:
+                        if start_col == -1:
+                            start_col = i
+                            logger.info(f"Найдено начало: колонка {i} - '{cell_str}'")
+                        else:
+                            end_col = i
+                            logger.info(f"Найдено окончание: колонка {i} - '{cell_str}'")
+                        break
 
-        logger.info(f"Результат поиска: start_col={start_col}, end_col={end_col}")
-        return (start_col, end_col)
+            logger.info(f"Результат поиска: start_col={start_col}, end_col={end_col}")
+            return (start_col, end_col)
 
     def _load_subject_map(self) -> Dict[str, int]:
         subject_map = {}
@@ -215,7 +217,7 @@ class GoogleSheetsDataLoader:
 
     def _load_study_plan_cache(self):
         self._study_plan_cache = {}
-        study_plan_sheet = self._get_sheet_data("План обучения")
+        study_plan_sheet = self._get_sheet_data("План обучения бот")
         if not study_plan_sheet or len(study_plan_sheet) < 2:
             return
 
@@ -251,8 +253,9 @@ class GoogleSheetsDataLoader:
 
     def _calculate_lesson_number_for_student(self, student_row: List[Any], target_date_column_index: int) -> int:
         lesson_count = 0
-        # Колонки с датами начинаются с индекса 4 (колонка E)
-        first_date_column_index = 4
+        # Колонки с датами начинаются с индекса 6 (колонка G) после:
+        # A=ID, B=Имя, C=Предмет ID, D=Предмет, E=Класс, F=Потребность
+        first_date_column_index = 6
 
         for i in range(first_date_column_index, target_date_column_index, 2):  # Переходим через колонку
             if i < len(student_row) and student_row[i] and str(student_row[i]).strip():
@@ -336,8 +339,9 @@ class GoogleSheetsDataLoader:
             logger.error(f"Ошибка парсинга преподавателя: {ex}")
             return None
 
+
     def _parse_student_row(self, row: List[Any], subject_map: Dict[str, int],
-                           date_columns: Tuple[int, int]) -> Optional[Student]:
+                       date_columns: Tuple[int, int]) -> Optional[Student]:
         try:
             name = str(row[1]).strip() if len(row) > 1 else ""
 
@@ -354,7 +358,7 @@ class GoogleSheetsDataLoader:
             if not start_time_str or not end_time_str:
                 return None
 
-            # Определяем номер занятия
+            # Определяем номер занятия (учитываем новые колонки)
             lesson_number = self._calculate_lesson_number_for_student(row, start_col)
 
             # Ищем тему в плане обучения
@@ -363,81 +367,11 @@ class GoogleSheetsDataLoader:
                 student_plan = self._study_plan_cache[name]
                 topic = student_plan.get(lesson_number)
 
-            subject_id_int = -1
-            need_for_attention = 1
-
-            # Сначала пробуем получить subject_id из колонки C (индекс 2)
-            if len(row) > 2 and row[2]:
-                try:
-                    subject_id_int = int(row[2])
-                except ValueError:
-                    # Если колонка C не число, используем тему из плана обучения
-                    if topic and topic.isdigit():
-                        subject_id_int = int(topic)
-                    else:
-                        print(f"Ошибка: не удалось определить предмет для ученика {name}")
-                        return None
-
-            # Потребность во внимании - исправленная логика
-            if len(row) > 3 and row[3]:
-                try:
-                    need_for_attention = int(row[3])
-                except ValueError:
-                    need_for_attention = 3
-                    print(f"Внимание: некорректное значение потребности для ученика {name}, установлено значение 1")
-
-            # Дополнительная проверка: если subject_id все еще -1, используем тему
-            if subject_id_int == -1 and topic and topic.isdigit():
-                subject_id_int = int(topic)
-
-            if subject_id_int == -1:
-                print(f"Ошибка: не удалось определить предмет для ученика {name}")
-                return None
-
-            return Student(
-                name=name,
-                start_of_study_time=self._normalize_time(start_time_str),
-                end_of_study_time=self._normalize_time(end_time_str),
-                subject_id=subject_id_int,
-                need_for_attention=need_for_attention
-            )
-
-        except Exception as ex:
-            print(f"Ошибка парсинга студента {name if 'name' in locals() else 'unknown'}: {ex}")
-            return None
-
-    def _parse_student_row(self, row: List[Any], subject_map: Dict[str, int],
-                           date_columns: Tuple[int, int]) -> Optional[Student]:
-        try:
-            name = str(row[1]).strip() if len(row) > 1 else ""
-
-            # Проверяем запись на выбранную дату
-            start_col, end_col = date_columns
-            start_time_str = ""
-            end_time_str = ""
-
-            if start_col != -1 and len(row) > start_col and row[start_col]:
-                start_time_str = str(row[start_col])
-            if end_col != -1 and len(row) > end_col and row[end_col]:
-                end_time_str = str(row[end_col])
-
-            if not start_time_str or not end_time_str:
-                return None
-
-            # Определяем номер занятия
-            lesson_number = self._calculate_lesson_number_for_student(row, start_col)
-
-            # Ищем тему в плане обучения
-            topic = None
-            if name in self._study_plan_cache:
-                student_plan = self._study_plan_cache[name]
-                topic = student_plan.get(lesson_number)
-
-            # Парсим предмет и потребность во внимании
+            # Предмет из колонки C (индекс 2) - Предмет ID
             subject_id_int = -1
             need_for_attention = 3
 
-            # Предмет из колонки C (индекс 2)
+            # Предмет из колонки C (индекс 2) - Предмет ID
             if len(row) > 2 and row[2]:
                 try:
                     subject_id_int = int(row[2])
@@ -449,13 +383,13 @@ class GoogleSheetsDataLoader:
                         logger.warning(f"Не удалось определить предмет для ученика {name}")
                         return None
 
-            # Потребность во внимании из колонки D (индекс 3)
-            if len(row) > 3 and row[3]:
+            # Потребность во внимании из колонки F (индекс 5) - после новых колонок
+            if len(row) > 5 and row[5]:
                 try:
-                    need_for_attention = int(row[3])
+                    need_for_attention = int(row[5])
                 except ValueError:
                     need_for_attention = 3
-                    logger.warning(f"Некорректное значение потребности для ученика {name}, установлено значение 1")
+                    logger.warning(f"Некорректное значение потребности для ученика {name}, установлено значение 3")
 
             # Дополнительная проверка: если subject_id все еще -1, используем тему
             if subject_id_int == -1 and topic and topic.isdigit():

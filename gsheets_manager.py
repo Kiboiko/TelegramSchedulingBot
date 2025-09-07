@@ -671,7 +671,7 @@ class GoogleSheetsManager:
     def save_user_subject(self, user_id: int, user_name: str, subject_id: str) -> bool:
         """Сохраняет связь пользователь-предмет для учеников"""
         try:
-            worksheet = self._get_or_create_worksheet("Ученики")
+            worksheet = self._get_or_create_worksheet("Ученики бот")
             records = worksheet.get_all_records()
 
             row_num = None

@@ -1,6 +1,6 @@
 import sys
 
-sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\ПК-2\Desktop\TelegramSchedulingBot\shedule_app")
 
 import asyncio
 import json
@@ -41,9 +41,9 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 BOOKINGS_FILE = "bookings.json"
-CREDENTIALS_PATH = r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\credentials.json"
-
-SPREADSHEET_ID = "1L4l6ONchMU5xk5v1y_50po_l0NwhssNCCCKTsy3aR_0"
+CREDENTIALS_PATH = r"C:\Users\ПК-2\Desktop\TelegramSchedulingBot\credentials.json"
+SPREADSHEET_ID = "1r1MU8k8umwHx_E4Z-jFHRJ-kdwC43Jw0nwpVeH7T1GU"
+# SPREADSHEET_ID = "1L4l6ONchMU5xk5v1y_50po_l0NwhssNCCCKTsy3aR_0"
 ADMIN_IDS = [1180878673, 973231400, 1312414595]
 BOOKING_TYPES = ["Тип1"]
 SUBJECTS = {
@@ -166,7 +166,7 @@ def get_subject_distribution_by_time(loader, target_date: str, condition_check: 
     from typing import Dict
     
     # Загружаем данные студентов
-    student_sheet = loader._get_sheet_data("Ученики")
+    student_sheet = loader._get_sheet_data("Ученики бот")
     if not student_sheet:
         logger.error("Лист 'Ученики' не найден")
         return _create_empty_time_slots()
