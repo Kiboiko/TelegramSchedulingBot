@@ -190,7 +190,11 @@ class GoogleSheetsManager:
 
     def _ensure_sheet_structure(self, worksheet, formatted_dates: List[str], is_teacher: bool):
         """Создает структуру листа заново"""
-        headers = ['ID', 'Имя', 'Предмет']
+        headers = ['ID', 'Имя', 'Предмет ID']
+
+        # Добавляем новые столбцы только для учеников
+        if not is_teacher:
+            headers.extend(['Предмет', 'Класс'])
 
         if is_teacher:
             headers.append('Приоритет')
@@ -242,7 +246,7 @@ class GoogleSheetsManager:
     #
     #     return records
     def _prepare_records(self, bookings: List[Dict[str, Any]],
-                     formatted_dates: List[str], is_teacher: bool) -> Dict[str, Any]:
+                         formatted_dates: List[str], is_teacher: bool) -> Dict[str, Any]:
         """Подготавливает данные для вставки с учетом предметов учеников"""
         # Сначала загружаем текущие данные из таблицы
         try:
@@ -254,14 +258,19 @@ class GoogleSheetsManager:
 
         records = {}
 
-        # Создаем словарь для быстрого поиска существующих значений приоритета/потребности
+        # Создаем словарь для быстрого поиска существующих значений
         existing_values = {}
         for row in existing_data:
-            key = f"{row['ID']}_{row['Имя']}" if is_teacher else f"{row['ID']}_{row['Предмет']}"
             if is_teacher:
+                key = f"{row['ID']}_{row['Имя']}"
                 existing_values[key] = row.get('Приоритет', '')
             else:
-                existing_values[key] = row.get('Потребность во внимании (мин)', '')
+                key = f"{row['ID']}_{row['Предмет ID']}"
+                existing_values[key] = {
+                    'attention_need': row.get('Потребность во внимании (мин)', ''),
+                    'subject_name': row.get('Предмет', ''),  # Новое поле
+                    'class_name': row.get('Класс', '')  # Новое поле
+                }
 
         for booking in bookings:
             if 'user_name' not in booking:
@@ -269,7 +278,7 @@ class GoogleSheetsManager:
 
             name = booking['user_name']
             user_id = str(booking.get('user_id', ''))
-            
+
             # Для записей без даты создаем специальную обработку
             date = booking.get('date')
             if date:
@@ -288,16 +297,26 @@ class GoogleSheetsManager:
 
             if key not in records:
                 # Используем существующее значение или значение из booking, или пустую строку
-                priority_or_attention = existing_values.get(key, booking.get(
-                    'priority' if is_teacher else 'attention_need', ''))
-
-                records[key] = {
-                    'id': user_id,
-                    'name': name,
-                    'subject': subject_str,
-                    'priority' if is_teacher else 'attention_need': priority_or_attention,
-                    'bookings': {}
-                }
+                if is_teacher:
+                    priority_or_attention = existing_values.get(key, booking.get('priority', ''))
+                    records[key] = {
+                        'id': user_id,
+                        'name': name,
+                        'subject': subject_str,
+                        'priority': priority_or_attention,
+                        'bookings': {}
+                    }
+                else:
+                    existing_val = existing_values.get(key, {})
+                    records[key] = {
+                        'id': user_id,
+                        'name': name,
+                        'subject': subject_str,
+                        'attention_need': existing_val.get('attention_need', booking.get('attention_need', '')),
+                        'subject_name': existing_val.get('subject_name', ''),  # Новое поле
+                        'class_name': existing_val.get('class_name', ''),  # Новое поле
+                        'bookings': {}
+                    }
 
             if date in formatted_dates:
                 records[key]['bookings'][date] = {
@@ -308,7 +327,7 @@ class GoogleSheetsManager:
         return records
 
     def _update_worksheet_data(self, worksheet, records: Dict[str, Any],
-                           formatted_dates: List[str], is_teacher: bool):
+                               formatted_dates: List[str], is_teacher: bool):
         """Вставляет данные в лист"""
         if not records:
             worksheet.batch_clear(["A2:Z1000"])
@@ -318,6 +337,13 @@ class GoogleSheetsManager:
         rows = []
         for record in records.values():
             row = [record['id'], record['name'], record['subject']]
+
+            # Добавляем новые столбцы только для учеников
+            if not is_teacher:
+                row.extend([
+                    record.get('subject_name', ''),  # Новый столбец "Предмет"
+                    record.get('class_name', '')  # Новый столбец "Класс"
+                ])
 
             if is_teacher:
                 row.append(record.get('priority', ''))
@@ -450,17 +476,29 @@ class GoogleSheetsManager:
                 user_name = row[1] if len(row) > 1 else ""
                 subject = row[2] if len(row) > 2 else ""
 
-                # Получаем приоритет/потребность независимо от регистра в заголовке
+                # Получаем дополнительные данные для учеников
+                subject_name = ''
+                class_name = ''
                 priority_or_attention = ''
-                if is_teacher:
-                    if 'приоритет' in headers and len(row) > headers.index('приоритет'):
-                        priority_or_attention = row[headers.index('приоритет')]
-                else:
+
+                if not is_teacher:
+                    # Новые поля для учеников
+                    if 'предмет' in headers and len(row) > headers.index('предмет'):
+                        subject_name = row[headers.index('предмет')]
+                    if 'класс' in headers and len(row) > headers.index('класс'):
+                        class_name = row[headers.index('класс')]
                     if 'потребность во внимании (мин)' in headers and len(row) > headers.index(
                             'потребность во внимании (мин)'):
                         priority_or_attention = row[headers.index('потребность во внимании (мин)')]
+                else:
+                    if 'приоритет' in headers and len(row) > headers.index('приоритет'):
+                        priority_or_attention = row[headers.index('приоритет')]
 
-                start_col = 4  # Начинаем с колонки E (после ID, Имя, Предмет, Приоритет/Потребность)
+                start_col = 4  # Начинаем с колонки E (после ID, Имя, Предмет ID)
+
+                # Увеличиваем start_col на 2 для учеников (из-за новых столбцов)
+                if not is_teacher:
+                    start_col += 2
 
                 for i in range(start_col, len(row), 2):
                     if i + 1 >= len(row):
@@ -505,6 +543,9 @@ class GoogleSheetsManager:
                                 booking["subject"] = subject
                             booking["booking_type"] = "Тип1"
                             booking["attention_need"] = priority_or_attention
+                            # Добавляем новые поля для учеников
+                            booking["subject_name"] = subject_name
+                            booking["class_name"] = class_name
 
                         bookings.append(booking)
                     except ValueError as e:
