@@ -6,7 +6,7 @@
     "start_time": "11:00",
     "end_time": "16:30",
     "user_role": "teacher",
-    "created_at": "2025-09-07 13:04:02",
+    "created_at": "2025-09-07 13:13:22",
     "subjects": [
       "1",
       "2",
@@ -25,7 +25,7 @@
     "start_time": "11:00",
     "end_time": "18:00",
     "user_role": "teacher",
-    "created_at": "2025-09-07 13:04:02",
+    "created_at": "2025-09-07 13:13:22",
     "subjects": [
       "1",
       "2",
@@ -44,7 +44,7 @@
     "start_time": "18:00",
     "end_time": "20:00",
     "user_role": "teacher",
-    "created_at": "2025-09-07 13:04:02",
+    "created_at": "2025-09-07 13:13:22",
     "subjects": [
       "1",
       "2",
@@ -63,7 +63,7 @@
     "start_time": "11:00",
     "end_time": "16:30",
     "user_role": "teacher",
-    "created_at": "2025-09-07 13:04:02",
+    "created_at": "2025-09-07 13:13:22",
     "subjects": [
       "1",
       "2",
@@ -81,7 +81,7 @@
     "start_time": "09:00",
     "end_time": "14:00",
     "user_role": "teacher",
-    "created_at": "2025-09-07 13:04:02",
+    "created_at": "2025-09-07 13:13:22",
     "subjects": [
       "1",
       "2",
@@ -99,7 +99,7 @@
     "start_time": "12:00",
     "end_time": "19:00",
     "user_role": "teacher",
-    "created_at": "2025-09-07 13:04:02",
+    "created_at": "2025-09-07 13:13:22",
     "subjects": [
       "1",
       "2",
@@ -107,7 +107,7 @@
       "10"
     ],
     "booking_type": "Тип1",
-    "priority": "1",
+    "priority": "",
     "id": 6
   },
   {
@@ -117,7 +117,7 @@
     "start_time": "19:30",
     "end_time": "20:00",
     "user_role": "teacher",
-    "created_at": "2025-09-07 13:04:02",
+    "created_at": "2025-09-07 13:13:22",
     "subjects": [
       "1",
       "2",
@@ -125,7 +125,7 @@
       "10"
     ],
     "booking_type": "Тип1",
-    "priority": "1",
+    "priority": "",
     "id": 7
   },
   {
@@ -135,7 +135,7 @@
     "start_time": "10:00",
     "end_time": "18:00",
     "user_role": "teacher",
-    "created_at": "2025-09-07 13:04:02",
+    "created_at": "2025-09-07 13:13:22",
     "subjects": [
       "2",
       "11"
@@ -151,7 +151,7 @@
     "start_time": "14:00",
     "end_time": "15:00",
     "user_role": "student",
-    "created_at": "2025-09-07 13:04:03",
+    "created_at": "2025-09-07 13:13:23",
     "subject": "3",
     "booking_type": "Тип1",
     "attention_need": "",
@@ -166,7 +166,7 @@
     "start_time": "13:00",
     "end_time": "17:30",
     "user_role": "student",
-    "created_at": "2025-09-07 13:04:03",
+    "created_at": "2025-09-07 13:13:23",
     "subject": "3",
     "booking_type": "Тип1",
     "attention_need": "",
@@ -181,7 +181,7 @@
     "start_time": "12:00",
     "end_time": "14:00",
     "user_role": "student",
-    "created_at": "2025-09-07 13:04:03",
+    "created_at": "2025-09-07 13:13:23",
     "subject": "3",
     "booking_type": "Тип1",
     "attention_need": "",
@@ -196,7 +196,7 @@
     "start_time": "18:00",
     "end_time": "19:30",
     "user_role": "student",
-    "created_at": "2025-09-07 13:04:03",
+    "created_at": "2025-09-07 13:13:23",
     "subject": "1",
     "booking_type": "Тип1",
     "attention_need": "5",
@@ -211,7 +211,7 @@
     "start_time": "18:00",
     "end_time": "19:30",
     "user_role": "student",
-    "created_at": "2025-09-07 13:04:03",
+    "created_at": "2025-09-07 13:13:23",
     "subject": "1",
     "booking_type": "Тип1",
     "attention_need": "5",
@@ -226,12 +226,12 @@
     "start_time": "18:00",
     "end_time": "19:30",
     "user_role": "student",
-    "created_at": "2025-09-07 13:04:03",
+    "created_at": "2025-09-07 13:13:23",
     "subject": "2",
     "booking_type": "Тип1",
     "attention_need": "",
-    "subject_name": "",
-    "class_name": "",
+    "subject_name": "физ",
+    "class_name": "10",
     "id": 14
   },
   {
@@ -241,12 +241,12 @@
     "start_time": "12:00",
     "end_time": "15:00",
     "user_role": "student",
-    "created_at": "2025-09-07 13:04:03",
+    "created_at": "2025-09-07 13:13:23",
     "subject": "2",
     "booking_type": "Тип1",
     "attention_need": "",
-    "subject_name": "",
-    "class_name": "",
+    "subject_name": "физ",
+    "class_name": "10",
     "id": 15
   },
   {
@@ -256,7 +256,7 @@
     "start_time": "19:30",
     "end_time": "20:00",
     "user_role": "student",
-    "created_at": "2025-09-07 13:04:03",
+    "created_at": "2025-09-07 13:13:23",
     "subject": "2",
     "booking_type": "Тип1",
     "attention_need": "",
@@ -271,7 +271,7 @@
     "start_time": "11:00",
     "end_time": "17:00",
     "user_role": "student",
-    "created_at": "2025-09-07 13:04:03",
+    "created_at": "2025-09-07 13:13:23",
     "subject": "3",
     "booking_type": "Тип1",
     "attention_need": "",
@@ -286,7 +286,7 @@
     "start_time": "12:00",
     "end_time": "18:00",
     "user_role": "student",
-    "created_at": "2025-09-07 13:04:03",
+    "created_at": "2025-09-07 13:13:23",
     "subject": "2",
     "booking_type": "Тип1",
     "attention_need": "",

@@ -248,29 +248,7 @@ class GoogleSheetsManager:
     def _prepare_records(self, bookings: List[Dict[str, Any]],
                          formatted_dates: List[str], is_teacher: bool) -> Dict[str, Any]:
         """Подготавливает данные для вставки с учетом предметов учеников"""
-        # Сначала загружаем текущие данные из таблицы
-        try:
-            worksheet = self.spreadsheet.worksheet("Преподаватели бот" if is_teacher else "Ученики бот")
-            existing_data = worksheet.get_all_records()
-        except Exception as e:
-            logger.error(f"Ошибка при чтении существующих данных: {e}")
-            existing_data = []
-
         records = {}
-
-        # Создаем словарь для быстрого поиска существующих значений
-        existing_values = {}
-        for row in existing_data:
-            if is_teacher:
-                key = f"{row['ID']}_{row['Имя']}"
-                existing_values[key] = row.get('Приоритет', '')
-            else:
-                key = f"{row['ID']}_{row['Предмет ID']}"
-                existing_values[key] = {
-                    'attention_need': row.get('Потребность во внимании (мин)', ''),
-                    'subject_name': row.get('Предмет', ''),  # Новое поле
-                    'class_name': row.get('Класс', '')  # Новое поле
-                }
 
         for booking in bookings:
             if 'user_name' not in booking:
@@ -278,45 +256,29 @@ class GoogleSheetsManager:
 
             name = booking['user_name']
             user_id = str(booking.get('user_id', ''))
-
-            # Для записей без даты создаем специальную обработку
-            date = booking.get('date')
-            if date:
-                date = self.format_date(date) if isinstance(date, str) else ''
-            else:
-                date = ''  # Пустая дата для пользователей без записей
+            date = self.format_date(booking['date']) if booking.get('date') else ''
 
             if is_teacher:
+                # Для преподавателей используем ID предметов
                 subjects = booking.get('subjects', [])
                 subject_str = ', '.join(subjects)
                 key = f"{user_id}_{name}"
             else:
+                # Для учеников используем ID предмета
                 subject = booking.get('subject', '')
                 subject_str = subject
                 key = f"{user_id}_{subject_str}"
 
             if key not in records:
-                # Используем существующее значение или значение из booking, или пустую строку
-                if is_teacher:
-                    priority_or_attention = existing_values.get(key, booking.get('priority', ''))
-                    records[key] = {
-                        'id': user_id,
-                        'name': name,
-                        'subject': subject_str,
-                        'priority': priority_or_attention,
-                        'bookings': {}
-                    }
-                else:
-                    existing_val = existing_values.get(key, {})
-                    records[key] = {
-                        'id': user_id,
-                        'name': name,
-                        'subject': subject_str,
-                        'attention_need': existing_val.get('attention_need', booking.get('attention_need', '')),
-                        'subject_name': existing_val.get('subject_name', ''),  # Новое поле
-                        'class_name': existing_val.get('class_name', ''),  # Новое поле
-                        'bookings': {}
-                    }
+                records[key] = {
+                    'id': user_id,
+                    'name': name,
+                    'subject': subject_str,
+                    'attention_need': booking.get('attention_need', ''),
+                    'subject_name': booking.get('subject_name', ''),  # Сохраняем название предмета
+                    'class_name': booking.get('class_name', ''),  # Сохраняем класс
+                    'bookings': {}
+                }
 
             if date in formatted_dates:
                 records[key]['bookings'][date] = {
@@ -460,7 +422,7 @@ class GoogleSheetsManager:
             if len(data) < 2:
                 return []
 
-            headers = [h.lower() for h in data[0]]  # Приводим заголовки к нижнему регистру для удобства
+            headers = [h.lower() for h in data[0]]  # Приводим заголовки к нижнему регистру
             bookings = []
             reverse_qual_map = {v: k for k, v in self.qual_map.items()}
 
