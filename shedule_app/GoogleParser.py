@@ -259,9 +259,9 @@ class GoogleSheetsDataLoader:
 
     def _calculate_lesson_number_for_student(self, student_row: List[Any], target_date_column_index: int) -> int:
         lesson_count = 0
-        # Колонки с датами начинаются с индекса 6 (колонка G) после:
+        # Колонки с датами начинаются с индекса 14 (колонка O) после:
         # A=ID, B=Имя, C=Предмет ID, D=Предмет, E=Класс, F=Потребность
-        first_date_column_index = 6
+        first_date_column_index = 14
 
         for i in range(first_date_column_index, target_date_column_index, 2):  # Переходим через колонку
             if i < len(student_row) and student_row[i] and str(student_row[i]).strip():
@@ -271,7 +271,7 @@ class GoogleSheetsDataLoader:
 
     def _get_sheet_data(self, sheet_name: str) -> Optional[List[List[Any]]]:
         try:
-            range_name = f"{sheet_name}"  # ← Загружаем весь лист
+            range_name = f"{sheet_name}!A:JF"  # ← Загружаем до 4 января
             result = self.service.spreadsheets().values().get(
                 spreadsheetId=self.spreadsheet_id,
                 range=range_name
@@ -390,9 +390,9 @@ class GoogleSheetsDataLoader:
                         return None
 
             # Потребность во внимании из колонки F (индекс 5) - после новых колонок
-            if len(row) > 5 and row[5]:
+            if len(row) > 4 and row[4]:
                 try:
-                    need_for_attention = int(row[5])
+                    need_for_attention = int(row[4])
                 except ValueError:
                     need_for_attention = 3
                     logger.warning(f"Некорректное значение потребности для ученика {name}, установлено значение 3")

@@ -41,27 +41,76 @@ class JSONStorage:
         booking_id = max([b.get('id', 0) for b in bookings] or [0]) + 1
         booking_data['id'] = booking_id
 
-        # Добавляем новые поля по умолчанию
-        if booking_data.get('user_role') == 'student':
-            booking_data.setdefault('subject_name', '')
-            booking_data.setdefault('class_name', '')
-
-        # ДЕБАГ: Логируем данные перед сохранением
         logger.info(f"Adding booking: {json.dumps(booking_data, ensure_ascii=False)}")
 
+        # Всегда добавляем в локальное хранилище
         bookings.append(booking_data)
+        
+        # Для студентов пытаемся обновить Google Sheets
+        if (booking_data.get('user_role') == 'student' and 
+            hasattr(self, 'gsheets') and self.gsheets):
+            
+            user_id = booking_data.get('user_id')
+            subject_id = booking_data.get('subject')
+            date = booking_data.get('date')
+            start_time = booking_data.get('start_time')
+            end_time = booking_data.get('end_time')
+            
+            if all([user_id, subject_id, date, start_time, end_time]):
+                # Пытаемся обновить ячейку, но не зависим от результата
+                self.update_student_booking_cell(user_id, subject_id, date, start_time, end_time)
+        
+        # Сохраняем в JSON
         self.save(bookings)
         return booking_data
+    
+    def _save_bookings(self, bookings: List[Dict[str, Any]], sync_to_gsheets: bool = True):
+        """Внутренний метод сохранения"""
+        try:
+            with open(self.file_path, 'w', encoding='utf-8') as f:
+                json.dump(bookings, f, ensure_ascii=False, indent=2)
+            
+            # Всегда синхронизируем, если указано
+            if sync_to_gsheets and self.gsheets:
+                self._sync_with_gsheets()
+        except Exception as e:
+            logger.error(f"Ошибка при сохранении данных: {e}")
 
     def cancel_booking(self, booking_id: int) -> bool:
         """Отменяет бронирование"""
         bookings = self.load()
+        
+        booking_to_cancel = None
+        for booking in bookings:
+            if booking.get('id') == booking_id:
+                booking_to_cancel = booking
+                break
+
+        if not booking_to_cancel:
+            return False
         initial_count = len(bookings)
         bookings = [b for b in bookings if b.get('id') != booking_id]
+
+        if (hasattr(self, 'gsheets') and self.gsheets and booking_to_cancel.get('user_role') == 'student'):
+            user_id = booking_to_cancel.get('user_id')
+            subject_id = booking_to_cancel.get('subject')
+            date = booking_to_cancel.get('date')
+            
+            if all([user_id, subject_id, date]):
+                # Очищаем ячейки, устанавливая пустые значения
+                success = self.gsheets.update_student_booking_cell(
+                    user_id, subject_id, date, "", ""
+                )
+                if success:
+                    logger.info(f"Очищены ячейки для бронирования ID {booking_id}")
+                else:
+                    logger.warning(f"Не удалось очистить ячейки для бронирования ID {booking_id}")
 
         if len(bookings) < initial_count:
             self.save(bookings)
             return True
+        
+
         return False
 
     def _filter_old_bookings(self, bookings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -95,41 +144,41 @@ class JSONStorage:
                 bookings = self.load()
                 logger.info(f"Syncing {len(bookings)} bookings to Google Sheets")
                 
-                # Добавляем пользователей с ролями, но без записей
-                all_users_with_roles = self._get_all_users_with_roles()
+                # # Добавляем пользователей с ролями, но без записей
+                # all_users_with_roles = self._get_all_users_with_roles()
                 
-                # Добавляем пустые записи для пользователей с ролями, но без бронирований
-                for user_data in all_users_with_roles:
-                    user_id = user_data['user_id']
-                    user_name = user_data['user_name']
-                    roles = user_data['roles']
+                # # Добавляем пустые записи для пользователей с ролями, но без бронирований
+                # for user_data in all_users_with_roles:
+                #     user_id = user_data['user_id']
+                #     user_name = user_data['user_name']
+                #     roles = user_data['roles']
                     
-                    # Проверяем, есть ли уже записи для этого пользователя
-                    has_booking = any(b.get('user_id') == user_id for b in bookings)
+                #     # Проверяем, есть ли уже записи для этого пользователя
+                #     has_booking = any(b.get('user_id') == user_id for b in bookings)
                     
-                    if not has_booking:
-                        # Добавляем пустую запись
-                        empty_booking = {
-                            'user_id': user_id,
-                            'user_name': user_name,
-                            'user_role': roles[0],  # берем первую роль
-                            'date': None,
-                            'start_time': '',
-                            'end_time': '',
-                            'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        }
+                #     if not has_booking:
+                #         # Добавляем пустую запись
+                #         empty_booking = {
+                #             'user_id': user_id,
+                #             'user_name': user_name,
+                #             'user_role': roles[0],  # берем первую роль
+                #             'date': None,
+                #             'start_time': '',
+                #             'end_time': '',
+                #             'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                #         }
                         
-                        if 'teacher' in roles:
-                            empty_booking['subjects'] = []
-                            empty_booking['priority'] = ''
-                        if 'student' in roles:
-                            empty_booking['subject'] = ''
-                            empty_booking['attention_need'] = ''
+                #         if 'teacher' in roles:
+                #             empty_booking['subjects'] = []
+                #             empty_booking['priority'] = ''
+                #         if 'student' in roles:
+                #             empty_booking['subject'] = ''
+                #             empty_booking['attention_need'] = ''
                         
-                        bookings.append(empty_booking)
-                        logger.info(f"Added empty booking for user {user_name} (ID: {user_id})")
+                #         bookings.append(empty_booking)
+                #         logger.info(f"Added empty booking for user {user_name} (ID: {user_id})")
 
-                self.gsheets.update_all_sheets(bookings)
+                # self.gsheets.update_all_sheets(bookings)
             except Exception as e:
                 logger.error(f"Ошибка синхронизации с Google Sheets: {e}")
 
@@ -360,3 +409,16 @@ class JSONStorage:
         if not hasattr(self, 'gsheets') or not self.gsheets:
             return False
         return self.gsheets.save_parent_info(parent_id, parent_name, children_ids)
+    
+    def get_available_subjects_for_student(self, user_id: int) -> List[str]:
+        """Получает доступные предметы для ученика"""
+        if not hasattr(self, 'gsheets') or not self.gsheets:
+            return []
+        return self.gsheets.get_available_subjects_for_student(user_id)
+
+    def update_student_booking_cell(self, user_id: int, subject_id: str, date: str, 
+                                start_time: str, end_time: str) -> bool:
+        """Обновляет только конкретную ячейку для ученика"""
+        if not hasattr(self, 'gsheets') or not self.gsheets:
+            return False
+        return self.gsheets.update_student_booking_cell(user_id, subject_id, date, start_time, end_time)

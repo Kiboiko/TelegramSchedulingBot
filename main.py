@@ -34,7 +34,7 @@ from shedule_app.HelperMethods import School
 from shedule_app.models import Person, Teacher, Student
 from shedule_app.GoogleParser import GoogleSheetsDataLoader
 # Настройка логирования
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 load_dotenv()
@@ -42,8 +42,8 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 BOOKINGS_FILE = "bookings.json"
 CREDENTIALS_PATH = r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\credentials.json"
-SPREADSHEET_ID = "1r1MU8k8umwHx_E4Z-jFHRJ-kdwC43Jw0nwpVeH7T1GU"
-# SPREADSHEET_ID = "1L4l6ONchMU5xk5v1y_50po_l0NwhssNCCCKTsy3aR_0"
+#SPREADSHEET_ID = "1r1MU8k8umwHx_E4Z-jFHRJ-kdwC43Jw0nwpVeH7T1GU"
+SPREADSHEET_ID = "1rhU8tWEaQEU0OP70ZfAabNGx7GA2uZjNgbq8sru114Q"
 ADMIN_IDS = [1180878673, 973231400, 1312414595]
 BOOKING_TYPES = ["Тип1"]
 SUBJECTS = {
@@ -522,38 +522,6 @@ def generate_booking_types():
     builder.adjust(2)
     return builder.as_markup()
 
-
-# def merge_adjacent_bookings(bookings):
-#     """Объединяет смежные бронирования одного типа"""
-#     if not bookings:
-#         return bookings
-
-#     sorted_bookings = sorted(bookings, key=lambda x: (
-#         x.get('booking_type', ''),
-#         x.get('date', ''),
-#         x.get('start_time', '')
-#     ))
-
-#     merged = []
-#     current = sorted_bookings[0]
-
-#     for next_booking in sorted_bookings[1:]:
-#         if (current.get('booking_type') == next_booking.get('booking_type') and
-#                 current.get('date') == next_booking.get('date') and
-#                 current.get('end_time') == next_booking.get('start_time')):
-
-#             current = {
-#                 **current,
-#                 'end_time': next_booking.get('end_time'),
-#                 'id': min(current.get('id', 0), next_booking.get('id', 0)),
-#                 'merged': True
-#             }
-#         else:
-#             merged.append(current)
-#             current = next_booking
-
-#     merged.append(current)
-#     return merged
 
 
 def load_bookings():
@@ -1050,11 +1018,16 @@ def generate_schedule_for_date(target_date: str) -> str:
         logger.error(f"Ошибка в generate_schedule_for_date: {e}")
         return f"Ошибка: {str(e)}"
 
-def generate_subjects_keyboard(selected_subjects=None, is_teacher=False):
+def generate_subjects_keyboard(selected_subjects=None, is_teacher=False, available_subjects=None):
     builder = InlineKeyboardBuilder()
     selected_subjects = selected_subjects or []
+    
+    # Если указаны доступные предметы, показываем только их
+    subjects_to_show = SUBJECTS
+    if available_subjects is not None:
+        subjects_to_show = {k: v for k, v in SUBJECTS.items() if k in available_subjects}
 
-    for subject_id, subject_name in SUBJECTS.items():
+    for subject_id, subject_name in subjects_to_show.items():
         emoji = "✅" if subject_id in selected_subjects else "⬜️"
         builder.button(
             text=f"{emoji} {subject_name}",
@@ -1563,10 +1536,19 @@ async def process_role_selection(callback: types.CallbackQuery, state: FSMContex
 
     elif role == 'student':
         # Для ученика сразу запрашиваем предмет
+        available_subjects = storage.get_available_subjects_for_student(user_id)
+
+        if not available_subjects:
+            await callback.answer(
+                "У вас нет доступных предметов. Обратитесь к администратору.\n Телефон администратора: +79001372727",
+                show_alert=True
+            )
+            return
+        
         await callback.message.edit_text(
             "Вы выбрали роль ученика\n"
             "Выберите предмет для занятия:",
-            reply_markup=generate_subjects_keyboard()
+            reply_markup=generate_subjects_keyboard(available_subjects=available_subjects)
         )
         await state.set_state(BookingStates.SELECT_SUBJECT)
         
@@ -2302,6 +2284,15 @@ async def process_child_selection(callback: types.CallbackQuery, state: FSMConte
         await callback.answer("Ошибка: информация о ребенке не найдена", show_alert=True)
         return
     
+    available_subjects = storage.get_available_subjects_for_student(child_id)
+
+    if not available_subjects:
+        await callback.answer(
+            "У ребенка нет доступных предметов. Обратитесь к администратору.\n Телефон администратора: +79001372727",
+            show_alert=True
+        )
+        return
+    
     await state.update_data(
         child_id=child_id,
         child_name=child_info.get('user_name', ''),
@@ -2311,7 +2302,7 @@ async def process_child_selection(callback: types.CallbackQuery, state: FSMConte
     await callback.message.edit_text(
         f"Выбран ребенок: {child_info.get('user_name', '')}\n"
         "Выберите предмет для занятия:",
-        reply_markup=generate_subjects_keyboard()
+        reply_markup=generate_subjects_keyboard(available_subjects=available_subjects)
     )
     await state.set_state(BookingStates.SELECT_SUBJECT)
     await callback.answer()
@@ -2384,6 +2375,7 @@ async def sync_with_gsheets():
 
 
 async def on_startup():
+    logger.info("Заглушка")
     """Действия при запуске бота"""
     # Принудительная синхронизация при старте
     if gsheets:
@@ -2411,7 +2403,7 @@ async def on_startup():
             logger.error(f"Ошибка при очистке дубликатов: {e}")
 
 
-async def sync_from_gsheets_background(storage):
+async def sync_from_gsheets_background():
     """Фоновая синхронизация из Google Sheets в JSON"""
     while True:
         try:
@@ -2434,7 +2426,7 @@ async def main():
     # Запуск фоновых задач
     asyncio.create_task(cleanup_old_bookings())
     # asyncio.create_task(sync_with_gsheets())
-    asyncio.create_task(sync_from_gsheets_background(storage))  # Новая задача
+    asyncio.create_task(sync_from_gsheets_background())  # Новая задача
 
     # Запуск бота
     await dp.start_polling(bot)

@@ -205,46 +205,6 @@ class GoogleSheetsManager:
         worksheet.clear()
         worksheet.append_row(headers)
 
-    # def _prepare_records(self, bookings: List[Dict[str, Any]],
-    #                      formatted_dates: List[str], is_teacher: bool) -> Dict[str, Any]:
-    #     """Подготавливает данные для вставки с учетом предметов учеников"""
-    #     records = {}
-    #
-    #     for booking in bookings:
-    #         if 'user_name' not in booking or 'date' not in booking:
-    #             continue
-    #
-    #         name = booking['user_name']
-    #         user_id = str(booking.get('user_id', ''))
-    #         date = self.format_date(booking['date'])
-    #
-    #         if is_teacher:
-    #             # Для преподавателей используем ID предметов
-    #             subjects = booking.get('subjects', [])
-    #             subject_str = ', '.join(subjects)
-    #             key = f"{user_id}_{name}"
-    #         else:
-    #             # Для учеников используем ID предмета
-    #             subject = booking.get('subject', '')
-    #             subject_str = subject
-    #             key = f"{user_id}_{subject_str}"
-    #
-    #         if key not in records:
-    #             records[key] = {
-    #                 'id': user_id,
-    #                 'name': name,
-    #                 'subject': subject_str,
-    #                 'attention_need': booking.get('attention_need', ''),
-    #                 'bookings': {}
-    #             }
-    #
-    #         if date in formatted_dates:
-    #             records[key]['bookings'][date] = {
-    #                 'start': booking.get('start_time', ''),
-    #                 'end': booking.get('end_time', '')
-    #             }
-    #
-    #     return records
     def _prepare_records(self, bookings: List[Dict[str, Any]],
                          formatted_dates: List[str], is_teacher: bool) -> Dict[str, Any]:
         """Подготавливает данные для вставки с учетом предметов учеников"""
@@ -329,90 +289,6 @@ class GoogleSheetsManager:
 
         logger.info(f"Обновлено {len(rows)} строк в листе '{worksheet.title}'")
 
-    # def get_bookings_from_sheet(self, sheet_name: str, is_teacher: bool) -> List[Dict[str, Any]]:
-    #     try:
-    #         worksheet = self.spreadsheet.worksheet(sheet_name)
-    #         data = worksheet.get_all_values()
-    #
-    #         if len(data) < 2:
-    #             return []
-    #
-    #         headers = data[0]
-    #         bookings = []
-    #         reverse_qual_map = {v: k for k, v in self.qual_map.items()}
-    #
-    #         for row in data[1:]:
-    #             if not row or not row[0]:
-    #                 continue
-    #
-    #             try:
-    #                 user_id = int(row[0]) if row[0].strip() else None
-    #             except ValueError:
-    #                 user_id = None
-    #
-    #             user_name = row[1] if len(row) > 1 else ""
-    #             subject = row[2] if len(row) > 2 else ""
-    #
-    #             if is_teacher:
-    #                 priority = row[3] if len(row) > 3 else ""
-    #             else:
-    #                 attention_need = row[3] if len(row) > 3 else ""
-    #
-    #             start_col = 4 if is_teacher else 4  # Для всех начинаем с колонки E (после ID, Имя, Предмет, Потребность/Приоритет)
-    #
-    #             for i in range(start_col, len(row), 2):
-    #                 if i + 1 >= len(row):
-    #                     break
-    #
-    #                 date_header = headers[i].split()[0] if i < len(headers) else ""
-    #                 start_time = row[i] if i < len(row) else ""
-    #                 end_time = row[i + 1] if i + 1 < len(row) else ""
-    #
-    #                 if not date_header or not start_time or not end_time:
-    #                     continue
-    #
-    #                 try:
-    #                     date_obj = datetime.strptime(date_header, "%d.%m.%Y")
-    #                     date_str = date_obj.strftime("%Y-%m-%d")
-    #
-    #                     booking = {
-    #                         "user_id": user_id if user_id is not None else -1,
-    #                         "user_name": user_name,
-    #                         "date": date_str,
-    #                         "start_time": start_time,
-    #                         "end_time": end_time,
-    #                         "user_role": "teacher" if is_teacher else "student",
-    #                         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    #                     }
-    #
-    #                     if is_teacher:
-    #                         subjects = []
-    #                         for subj in subject.split(","):
-    #                             subj = subj.strip()
-    #                             if subj in reverse_qual_map:
-    #                                 subjects.append(reverse_qual_map[subj])
-    #                             else:
-    #                                 subjects.append(subj)
-    #                         booking["subjects"] = subjects
-    #                         booking["booking_type"] = "Тип1"
-    #                         booking["priority"] = priority
-    #                     else:
-    #                         if subject in reverse_qual_map:
-    #                             booking["subject"] = reverse_qual_map[subject]
-    #                         else:
-    #                             booking["subject"] = subject
-    #                         booking["booking_type"] = "Тип1"
-    #                         booking["attention_need"] = attention_need
-    #
-    #                     bookings.append(booking)
-    #                 except ValueError as e:
-    #                     logger.error(f"Ошибка обработки данных: {e}")
-    #                     continue
-    #
-    #         return bookings
-    #     except Exception as e:
-    #         logger.error(f"Ошибка чтения из листа '{sheet_name}': {e}")
-    #         return []
 
     def get_bookings_from_sheet(self, sheet_name: str, is_teacher: bool) -> List[Dict[str, Any]]:
         try:
@@ -460,7 +336,7 @@ class GoogleSheetsManager:
 
                 # Увеличиваем start_col на 2 для учеников (из-за новых столбцов)
                 if not is_teacher:
-                    start_col += 2
+                    start_col += 12
 
                 for i in range(start_col, len(row), 2):
                     if i + 1 >= len(row):
@@ -806,4 +682,100 @@ class GoogleSheetsManager:
             return True
         except Exception as e:
             logger.error(f"Error saving parent info: {e}")
+            return False
+        
+    def get_available_subjects_for_student(self, user_id: int) -> List[str]:
+        """Получает доступные предметы для ученика (ищет только по строкам с соответствующим user_id)"""
+        try:
+            worksheet = self._get_or_create_worksheet("Ученики бот")
+            data = worksheet.get_all_values()
+            
+            logger.info(f"Поиск предметов для user_id: {user_id}")
+            logger.info(f"Всего строк в листе: {len(data)}")
+            
+            if not data or len(data) < 2:
+                logger.info("Нет данных или только заголовок")
+                return []
+            
+            available_subjects = []
+            
+            # Пропускаем заголовок (первую строку)
+            for i, row in enumerate(data[1:], start=2):
+                if not row:
+                    continue
+                    
+                row_user_id = row[0].strip() if len(row) > 0 and row[0] else ""
+                row_subject = row[2].strip() if len(row) > 2 and row[2] else ""
+                
+                logger.info(f"Строка {i}: user_id='{row_user_id}', subject='{row_subject}'")
+                
+                # Ищем только строки с соответствующим user_id
+                if row_user_id == str(user_id) and row_subject:
+                    logger.info(f"Найден предмет для user_id {user_id}: {row_subject}")
+                    available_subjects.append(row_subject)
+            
+            logger.info(f"Итоговый список предметов для user_id {user_id}: {available_subjects}")
+            return list(set(available_subjects))
+            
+        except Exception as e:
+            logger.error(f"Ошибка получения доступных предметов для user_id {user_id}: {e}")
+            return []
+        
+    def update_student_booking_cell(self, user_id: int, subject_id: str, date: str, 
+                               start_time: str, end_time: str) -> bool:
+        """Обновляет только конкретную ячейку для ученика"""
+        try:
+            worksheet = self._get_or_create_worksheet("Ученики бот")
+            data = worksheet.get_all_values()
+            
+            if len(data) < 2:
+                return False
+            
+            # Находим заголовки
+            headers = [h.lower() for h in data[0]]
+            
+            # Ищем колонку для даты
+            date_col_start = -1
+            date_col_end = -1
+            
+            formatted_date = self.format_date(date) if date else ''
+            
+            for i, header in enumerate(headers):
+                if header.startswith(formatted_date.lower()):
+                    if date_col_start == -1:
+                        date_col_start = i
+                    else:
+                        date_col_end = i
+                        break
+            
+            if date_col_start == -1:
+                logger.error(f"Дата {formatted_date} не найдена в заголовках")
+                return False
+            
+            # Ищем строку с user_id и subject_id
+            target_row = -1
+            for row_idx, row in enumerate(data[1:], start=2):  # Пропускаем заголовок
+                if (len(row) > 0 and str(row[0]).strip() == str(user_id) and 
+                    len(row) > 2 and str(row[2]).strip() == str(subject_id)):
+                    target_row = row_idx
+                    break
+            
+            if target_row == -1:
+                logger.error(f"Не найдена строка для user_id {user_id} и subject_id {subject_id}")
+                return False
+            
+            # Обновляем только нужные ячейки
+            if date_col_end != -1:  # Есть отдельная колонка для конца времени
+                worksheet.update_cell(target_row, date_col_start + 1, start_time)
+                worksheet.update_cell(target_row, date_col_end + 1, end_time)
+            else:  # Только одна колонка для даты (предполагаем, что следующая - для конца)
+                worksheet.update_cell(target_row, date_col_start + 1, start_time)
+                if date_col_start + 2 <= len(data[0]):
+                    worksheet.update_cell(target_row, date_col_start + 2, end_time)
+            
+            logger.info(f"Обновлена ячейка для user_id {user_id}, subject {subject_id}, date {formatted_date}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Ошибка обновления ячейки: {e}")
             return False
