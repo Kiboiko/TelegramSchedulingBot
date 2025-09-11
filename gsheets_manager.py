@@ -338,6 +338,9 @@ class GoogleSheetsManager:
                 if not is_teacher:
                     start_col += 12
 
+                if is_teacher:
+                    start_col += 10
+
                 for i in range(start_col, len(row), 2):
                     if i + 1 >= len(row):
                         break
@@ -778,4 +781,65 @@ class GoogleSheetsManager:
             
         except Exception as e:
             logger.error(f"Ошибка обновления ячейки: {e}")
+            return False
+        
+    def update_teacher_booking_cell(self, user_id: int, subjects: List[str], date: str, 
+                               start_time: str, end_time: str) -> bool:
+        """Обновляет только конкретную ячейку для преподавателя"""
+        try:
+            worksheet = self._get_or_create_worksheet("Преподаватели бот")
+            data = worksheet.get_all_values()
+            
+            if len(data) < 2:
+                return False
+            
+            # Находим заголовки
+            headers = [h.lower() for h in data[0]]
+            
+            # Ищем колонку для даты
+            date_col_start = -1
+            date_col_end = -1
+            
+            formatted_date = self.format_date(date) if date else ''
+            
+            for i, header in enumerate(headers):
+                if header.startswith(formatted_date.lower()):
+                    if date_col_start == -1:
+                        date_col_start = i
+                    else:
+                        date_col_end = i
+                        break
+            
+            if date_col_start == -1:
+                logger.error(f"Дата {formatted_date} не найдена в заголовках")
+                return False
+            
+            # Ищем строку с user_id и subjects
+            target_row = -1
+            subjects_str = ', '.join(subjects)
+            
+            for row_idx, row in enumerate(data[1:], start=2):  # Пропускаем заголовок
+                if (len(row) > 0 and str(row[0]).strip() == str(user_id) and 
+                    len(row) > 2 and str(row[2]).strip() == subjects_str):
+                    target_row = row_idx
+                    break
+            
+            if target_row == -1:
+                logger.error(f"Не найдена строка для user_id {user_id} и subjects {subjects_str}")
+                return False
+            
+            # Обновляем только нужные ячейки
+            if date_col_end != -1:  # Есть отдельная колонка для конца времени
+                worksheet.update_cell(target_row, date_col_start + 1, start_time)
+                worksheet.update_cell(target_row, date_col_end + 1, end_time)
+            else:  # Только одна колонка для даты (предполагаем, что следующая - для конца)
+                worksheet.update_cell(target_row, date_col_start + 1, start_time)
+                if date_col_start + 2 <= len(data[0]):
+                    worksheet.update_cell(target_row, date_col_start + 2, end_time)
+            
+            logger.info(f"Обновлена ячейка для user_id {user_id}, subjects {subjects_str}, date {formatted_date}")
+            return True
+                
+        except Exception as e:
+            logger.error(f"Ошибка обновления ячейки преподавателя: {e}")
             return False

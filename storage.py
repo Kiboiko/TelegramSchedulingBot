@@ -46,23 +46,39 @@ class JSONStorage:
         # Всегда добавляем в локальное хранилище
         bookings.append(booking_data)
         
-        # Для студентов пытаемся обновить Google Sheets
-        if (booking_data.get('user_role') == 'student' and 
-            hasattr(self, 'gsheets') and self.gsheets):
+        user_id = booking_data.get('user_id')
+        date = booking_data.get('date')
+        start_time = booking_data.get('start_time')
+        end_time = booking_data.get('end_time')
+        
+        # Для студентов и преподавателей пытаемся обновить Google Sheets
+        if (hasattr(self, 'gsheets') and self.gsheets and 
+            all([user_id, date, start_time, end_time])):
             
-            user_id = booking_data.get('user_id')
-            subject_id = booking_data.get('subject')
-            date = booking_data.get('date')
-            start_time = booking_data.get('start_time')
-            end_time = booking_data.get('end_time')
+            user_role = booking_data.get('user_role')
             
-            if all([user_id, subject_id, date, start_time, end_time]):
-                # Пытаемся обновить ячейку, но не зависим от результата
-                self.update_student_booking_cell(user_id, subject_id, date, start_time, end_time)
+            if user_role == 'student':
+                subject_id = booking_data.get('subject')
+                if subject_id:
+                    # Обновляем ячейку для студента
+                    self.update_student_booking_cell(user_id, subject_id, date, start_time, end_time)
+            
+            elif user_role == 'teacher':
+                subjects = booking_data.get('subjects', [])
+                if subjects:
+                    # Обновляем ячейку для преподавателя
+                    self.update_teacher_booking_cell(user_id, subjects, date, start_time, end_time)
         
         # Сохраняем в JSON
         self.save(bookings)
         return booking_data
+    
+    def update_teacher_booking_cell(self, user_id: int, subjects: List[str], date: str, 
+                              start_time: str, end_time: str) -> bool:
+        """Обновляет только конкретную ячейку для преподавателя"""
+        if not hasattr(self, 'gsheets') or not self.gsheets:
+            return False
+        return self.gsheets.update_teacher_booking_cell(user_id, subjects, date, start_time, end_time)
     
     def _save_bookings(self, bookings: List[Dict[str, Any]], sync_to_gsheets: bool = True):
         """Внутренний метод сохранения"""
@@ -91,26 +107,31 @@ class JSONStorage:
         initial_count = len(bookings)
         bookings = [b for b in bookings if b.get('id') != booking_id]
 
-        if (hasattr(self, 'gsheets') and self.gsheets and booking_to_cancel.get('user_role') == 'student'):
+        if (hasattr(self, 'gsheets') and self.gsheets and booking_to_cancel):
             user_id = booking_to_cancel.get('user_id')
-            subject_id = booking_to_cancel.get('subject')
             date = booking_to_cancel.get('date')
+            user_role = booking_to_cancel.get('user_role')
             
-            if all([user_id, subject_id, date]):
-                # Очищаем ячейки, устанавливая пустые значения
-                success = self.gsheets.update_student_booking_cell(
-                    user_id, subject_id, date, "", ""
-                )
-                if success:
-                    logger.info(f"Очищены ячейки для бронирования ID {booking_id}")
-                else:
-                    logger.warning(f"Не удалось очистить ячейки для бронирования ID {booking_id}")
+            if all([user_id, date]):
+                if user_role == 'student':
+                    subject_id = booking_to_cancel.get('subject')
+                    if subject_id:
+                        # Очищаем ячейки для студента
+                        success = self.gsheets.update_student_booking_cell(
+                            user_id, subject_id, date, "", ""
+                        )
+                elif user_role == 'teacher':
+                    subjects = booking_to_cancel.get('subjects', [])
+                    if subjects:
+                        # Очищаем ячейки для преподавателя
+                        success = self.gsheets.update_teacher_booking_cell(
+                            user_id, subjects, date, "", ""
+                        )
 
         if len(bookings) < initial_count:
             self.save(bookings)
             return True
         
-
         return False
 
     def _filter_old_bookings(self, bookings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
