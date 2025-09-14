@@ -293,7 +293,15 @@ class GoogleSheetsManager:
     def get_bookings_from_sheet(self, sheet_name: str, is_teacher: bool) -> List[Dict[str, Any]]:
         try:
             worksheet = self.spreadsheet.worksheet(sheet_name)
-            data = worksheet.get_all_values()
+            
+            if not is_teacher:
+                max_col = 242
+                data_range = f"A1:{gspread.utils.rowcol_to_a1(1000, max_col)}"  # Читаем до 1000 строк и JF столбца
+                data = worksheet.get_values(data_range, value_render_option='FORMATTED_VALUE')
+            else:
+                data = worksheet.get_all_values()
+
+            
 
             if len(data) < 2:
                 return []
@@ -335,8 +343,18 @@ class GoogleSheetsManager:
                 start_col = 4  # Начинаем с колонки E (после ID, Имя, Предмет ID)
 
                 # Увеличиваем start_col на 2 для учеников (из-за новых столбцов)
+                date_columns_start = -1
+                for i, header in enumerate(data[0]):
+                    if header and any(char.isdigit() for char in header) and '.' in header:
+                        date_columns_start = i
+                        break
+
+                logger.info(f"Чтение листа '{sheet_name}'")
+                logger.info(f"Заголовки: {headers}")
+                logger.info(f"Всего строк: {len(data)}")
+                logger.info(f"Начало колонок с датами: {date_columns_start}")
                 if not is_teacher:
-                    start_col += 12
+                    start_col = date_columns_start
 
                 if is_teacher:
                     start_col += 10
