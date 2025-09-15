@@ -3,6 +3,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 import logging
+import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -289,28 +290,43 @@ class GoogleSheetsManager:
 
         logger.info(f"Обновлено {len(rows)} строк в листе '{worksheet.title}'")
 
-
     def get_bookings_from_sheet(self, sheet_name: str, is_teacher: bool) -> List[Dict[str, Any]]:
         try:
             worksheet = self.spreadsheet.worksheet(sheet_name)
-            
-            if not is_teacher:
-                max_col = 242
-                data_range = f"A1:{gspread.utils.rowcol_to_a1(1000, max_col)}"  # Читаем до 1000 строк и JF столбца
-                data = worksheet.get_values(data_range, value_render_option='FORMATTED_VALUE')
-            else:
-                data = worksheet.get_all_values()
-
-            
+            data = worksheet.get_all_values()
 
             if len(data) < 2:
                 return []
 
-            headers = [h.lower() for h in data[0]]  # Приводим заголовки к нижнему регистру
+            headers = [h.lower() for h in data[0]]
             bookings = []
             reverse_qual_map = {v: k for k, v in self.qual_map.items()}
 
-            for row in data[1:]:
+            # ДЕБАГ: Логируем структуру таблицы
+            logger.info(f"Структура листа '{sheet_name}':")
+            logger.info(f"Заголовки: {headers}")
+            logger.info(f"Кол-во столбцов: {len(headers)}")
+
+            # ОСНОВНОЕ ИСПРАВЛЕНИЕ: Определяем правильные индексы столбцов
+            # Структура вашей таблицы:
+            # A: ID, B: Имя, C: Предмет ID, D: Потребность во внимании,
+            # E-N: дополнительные столбцы (не даты)
+            # O-JF: Даты (начиная с 01.09.2025)
+
+            # Определяем индекс начала столбцов с датами
+            date_start_col = 14  # Столбец O (индекс 14) - первая дата 01.09.2025
+
+            # Находим конец столбцов с датами - ищем первый пустой заголовок после начала дат
+            date_end_col = date_start_col
+            for i in range(date_start_col, len(headers)):
+                if not headers[i] or headers[i].strip() == '':
+                    break
+                date_end_col = i
+            date_end_col += 1  # включаем последний столбец
+
+            logger.info(f"Столбцы с датами: с {date_start_col} по {date_end_col}")
+
+            for row_idx, row in enumerate(data[1:], start=2):
                 if not row or not row[0]:
                     continue
 
@@ -320,58 +336,50 @@ class GoogleSheetsManager:
                     user_id = None
 
                 user_name = row[1] if len(row) > 1 else ""
-                subject = row[2] if len(row) > 2 else ""
 
-                # Получаем дополнительные данные для учеников
-                subject_name = ''
-                class_name = ''
-                priority_or_attention = ''
+                if not is_teacher:  # Для учеников
+                    subject = row[2] if len(row) > 2 else ""  # Столбец C - Предмет ID
+                    attention_need = row[3] if len(row) > 3 else ""  # Столбец D - Потребность
 
-                if not is_teacher:
-                    # Новые поля для учеников
-                    if 'предмет' in headers and len(row) > headers.index('предмет'):
-                        subject_name = row[headers.index('предмет')]
-                    if 'класс' in headers and len(row) > headers.index('класс'):
-                        class_name = row[headers.index('класс')]
-                    if 'потребность во внимании (мин)' in headers and len(row) > headers.index(
-                            'потребность во внимании (мин)'):
-                        priority_or_attention = row[headers.index('потребность во внимании (мин)')]
-                else:
-                    if 'приоритет' in headers and len(row) > headers.index('приоритет'):
-                        priority_or_attention = row[headers.index('приоритет')]
+                    # Дополнительные данные из второй части таблицы
+                    subject_name = row[11] if len(row) > 11 else ""  # Столбец L - Предмет
+                    class_name = row[10] if len(row) > 10 else ""  # Столбец K - Класс
+                else:  # Для преподавателей
+                    subject = row[2] if len(row) > 2 else ""  # Столбец C - Предметы
+                    priority = row[3] if len(row) > 3 else ""  # Столбец D - Приоритет
 
-                start_col = 4  # Начинаем с колонки E (после ID, Имя, Предмет ID)
-
-                # Увеличиваем start_col на 2 для учеников (из-за новых столбцов)
-                date_columns_start = -1
-                for i, header in enumerate(data[0]):
-                    if header and any(char.isdigit() for char in header) and '.' in header:
-                        date_columns_start = i
+                # Обрабатываем только столбцы с датами (начиная с O)
+                for i in range(date_start_col, min(date_end_col, len(row)), 2):
+                    if i + 1 >= len(row) or i >= len(headers):
                         break
 
-                logger.info(f"Чтение листа '{sheet_name}'")
-                logger.info(f"Заголовки: {headers}")
-                logger.info(f"Всего строк: {len(data)}")
-                logger.info(f"Начало колонок с датами: {date_columns_start}")
-                if not is_teacher:
-                    start_col = date_columns_start
-
-                if is_teacher:
-                    start_col += 10
-
-                for i in range(start_col, len(row), 2):
-                    if i + 1 >= len(row):
-                        break
-
+                    # Получаем дату из заголовка
                     date_header = headers[i].split()[0] if i < len(headers) else ""
                     start_time = row[i] if i < len(row) else ""
                     end_time = row[i + 1] if i + 1 < len(row) else ""
 
+                    # Пропускаем если нет времени или некорректная дата
                     if not date_header or not start_time or not end_time:
                         continue
 
                     try:
-                        date_obj = datetime.strptime(date_header, "%d.%m.%Y")
+                        # Пытаемся распарсить дату (может быть в разных форматах)
+                        date_formats = ["%d.%m.%Y", "%d.%m", "%d.%m.%y"]
+                        date_obj = None
+
+                        for date_format in date_formats:
+                            try:
+                                date_obj = datetime.strptime(date_header, date_format)
+                                # Если год не указан, используем текущий
+                                if date_format == "%d.%m":
+                                    date_obj = date_obj.replace(year=datetime.now().year)
+                                break
+                            except ValueError:
+                                continue
+
+                        if not date_obj:
+                            continue
+
                         date_str = date_obj.strftime("%Y-%m-%d")
 
                         booking = {
@@ -394,28 +402,31 @@ class GoogleSheetsManager:
                                     subjects.append(subj)
                             booking["subjects"] = subjects
                             booking["booking_type"] = "Тип1"
-                            booking["priority"] = priority_or_attention
+                            booking["priority"] = priority
                         else:
                             if subject in reverse_qual_map:
                                 booking["subject"] = reverse_qual_map[subject]
                             else:
                                 booking["subject"] = subject
                             booking["booking_type"] = "Тип1"
-                            booking["attention_need"] = priority_or_attention
+                            booking["attention_need"] = attention_need
                             # Добавляем новые поля для учеников
                             booking["subject_name"] = subject_name
                             booking["class_name"] = class_name
 
                         bookings.append(booking)
+
                     except ValueError as e:
-                        logger.error(f"Ошибка обработки данных: {e}")
+                        logger.debug(f"Ошибка обработки даты {date_header}: {e}")
                         continue
 
+            logger.info(f"Успешно обработано {len(bookings)} записей из листа '{sheet_name}'")
             return bookings
+
         except Exception as e:
             logger.error(f"Ошибка чтения из листа '{sheet_name}': {e}")
+            logger.error(f"Трассировка: {traceback.format_exc()}")
             return []
-
     def sync_from_gsheets_to_json(self, storage):
         """Синхронизирует данные из Google Sheets в JSON хранилище"""
         try:
