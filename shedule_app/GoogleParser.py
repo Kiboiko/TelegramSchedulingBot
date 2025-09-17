@@ -139,7 +139,7 @@ class GoogleSheetsDataLoader:
     def _find_date_columns(self, sheet: List[List[Any]], date: str) -> Tuple[int, int]:
         if not sheet:
             return (-1, -1)
-        logger.info(f"Заголовки таблицы: {sheet[0]}")
+        
         header_row = sheet[0]
         start_col = -1
         end_col = -1
@@ -151,7 +151,7 @@ class GoogleSheetsDataLoader:
             # Пробуем разные варианты парсинга даты
             date_formats_to_try = [
                 "%Y.%m.%d", "%d.%m.%Y", "%Y-%m-%d", "%d-%m-%Y",
-                "%Y/%m/%d", "%d/%m/%Y"
+                "%Y/%m/%d", "%d/%m/%Y", "%d.%m.%y", "%d.%m"
             ]
             
             parsed_date = None
@@ -163,14 +163,24 @@ class GoogleSheetsDataLoader:
                     continue
             
             if parsed_date:
+                # Генерируем все возможные форматы для поиска
                 target_date_formats.extend([
-                    parsed_date.strftime("%d.%m.%Y"),  # Приоритетный формат DD.MM.YYYY
-                    parsed_date.strftime("%Y.%m.%d"),  # Формат YYYY.MM.DD
-                    parsed_date.strftime("%Y-%m-%d"),
-                    parsed_date.strftime("%d-%m-%Y"),
-                    parsed_date.strftime("%Y/%m/%d"),
-                    parsed_date.strftime("%d/%m/%Y"),
+                    parsed_date.strftime("%d.%m.%Y"),  # DD.MM.YYYY
+                    parsed_date.strftime("%Y.%m.%d"),  # YYYY.MM.DD
+                    parsed_date.strftime("%Y-%m-%d"),  # YYYY-MM-DD
+                    parsed_date.strftime("%d-%m-%Y"),  # DD-MM-YYYY
+                    parsed_date.strftime("%d/%m/%Y"),  # DD/MM/YYYY
+                    parsed_date.strftime("%Y/%m/%d"),  # YYYY/MM/DD
+                    parsed_date.strftime("%d.%m.%y"),  # DD.MM.YY
+                    parsed_date.strftime("%d.%m"),     # DD.MM (без года)
                     date,  # Оригинальный формат
+                ])
+                
+                # Также добавляем варианты с пробелами и другими разделителями
+                target_date_formats.extend([
+                    parsed_date.strftime("%d . %m . %Y"),
+                    parsed_date.strftime("%d - %m - %Y"),
+                    parsed_date.strftime("%d / %m / %Y"),
                 ])
         except ValueError:
             target_date_formats = [date]
@@ -183,7 +193,8 @@ class GoogleSheetsDataLoader:
             
             # Проверяем все форматы
             for date_format in target_date_formats:
-                if cell_str == date_format.lower():
+                search_format = date_format.lower().strip()
+                if cell_str == search_format:
                     if start_col == -1:
                         start_col = i
                         logger.info(f"Найдено начало: колонка {i} - '{cell_value}'")
