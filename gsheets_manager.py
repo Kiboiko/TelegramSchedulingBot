@@ -295,7 +295,7 @@ class GoogleSheetsManager:
             worksheet = self.spreadsheet.worksheet(sheet_name)
             data = worksheet.get_all_values()
 
-            if len(data) < 2:
+            if len(data) < 3:
                 return []
 
             headers = [h.lower() for h in data[0]]
@@ -326,7 +326,7 @@ class GoogleSheetsManager:
 
             logger.info(f"Столбцы с датами: с {date_start_col} по {date_end_col}")
 
-            for row_idx, row in enumerate(data[1:], start=2):
+            for row_idx, row in enumerate(data[2:], start=3):
                 if not row or not row[0]:
                     continue
 
@@ -725,14 +725,14 @@ class GoogleSheetsManager:
             logger.info(f"Поиск предметов для user_id: {user_id}")
             logger.info(f"Всего строк в листе: {len(data)}")
             
-            if not data or len(data) < 2:
+            if not data or len(data) < 3:
                 logger.info("Нет данных или только заголовок")
                 return []
             
             available_subjects = []
             
             # Пропускаем заголовок (первую строку)
-            for i, row in enumerate(data[1:], start=2):
+            for i, row in enumerate(data[2:], start=3):
                 if not row:
                     continue
                     

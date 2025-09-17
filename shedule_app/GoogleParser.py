@@ -81,13 +81,13 @@ class GoogleSheetsDataLoader:
             date_columns = self._find_date_columns(teacher_sheet, self.target_date)
             logger.info(f"Колонки даты для преподавателей: {date_columns}")
 
-            for i, row in enumerate(teacher_sheet[1:]):
+            for i, row in enumerate(teacher_sheet[2:]):
                 if not row:
                     continue
                 teacher = self._parse_teacher_row(row, subject_map, date_columns)
                 if teacher:
                     teachers.append(teacher)
-                    logger.info(f"Добавлен преподаватель {i+1}: {teacher.name}")
+                    logger.info(f"Добавлен преподаватель {i+3}: {teacher.name}")
 
             # Лист студентов
             student_sheet = self._get_sheet_data("Ученики бот")
@@ -99,13 +99,13 @@ class GoogleSheetsDataLoader:
             student_date_columns = self._find_date_columns(student_sheet, self.target_date)
             logger.info(f"Колонки даты для учеников: {student_date_columns}")
 
-            for i, row in enumerate(student_sheet[1:]):
+            for i, row in enumerate(student_sheet[2:]):
                 if not row:
                     continue
                 student = self._parse_student_row(row, subject_map, student_date_columns)
                 if student:
                     students.append(student)
-                    logger.info(f"Добавлен студент {i+1}: {student.name}")
+                    logger.info(f"Добавлен студент {i+3}: {student.name}")
             logger.info("\n=== ДЕТАЛЬНАЯ ИНФОРМАЦИЯ О ДАННЫХ ===")
             logger.info("ПРЕПОДАВАТЕЛИ:")
             for teacher in teachers:
