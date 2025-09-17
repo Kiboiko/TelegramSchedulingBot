@@ -104,6 +104,13 @@ class JSONStorage:
 
         if not booking_to_cancel:
             return False
+        
+        date_str = booking_to_cancel.get('date')
+        if date_str and len(date_str.split('.')) == 2:  # Формат DD.MM
+            # Добавляем текущий год
+            current_year = datetime.now().year
+            full_date = f"{date_str}.{current_year}"
+            booking_to_cancel['date'] = full_date
         initial_count = len(bookings)
         bookings = [b for b in bookings if b.get('id') != booking_id]
 

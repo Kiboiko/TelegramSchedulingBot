@@ -2073,7 +2073,7 @@ async def process_confirmation(callback: types.CallbackQuery, state: FSMContext)
         "user_name": target_user_name,
         "user_role": data['user_role'],
         "booking_type": "Тип1",
-        "date": data['selected_date'].strftime("%Y-%m-%d"),
+        "date": data['selected_date'].strftime("%d.%m"),
         "start_time": data['time_start'],
         "end_time": data['time_end'],
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
