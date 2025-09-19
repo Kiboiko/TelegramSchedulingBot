@@ -303,9 +303,9 @@ class GoogleSheetsManager:
             reverse_qual_map = {v: k for k, v in self.qual_map.items()}
 
             # ДЕБАГ: Логируем структуру таблицы
-            logger.info(f"Структура листа '{sheet_name}':")
-            logger.info(f"Заголовки: {headers}")
-            logger.info(f"Кол-во столбцов: {len(headers)}")
+            # logger.info(f"Структура листа '{sheet_name}':")
+            # logger.info(f"Заголовки: {headers}")
+            # logger.info(f"Кол-во столбцов: {len(headers)}")
 
             # ОСНОВНОЕ ИСПРАВЛЕНИЕ: Определяем правильные индексы столбцов
             # Структура вашей таблицы:
@@ -596,7 +596,7 @@ class GoogleSheetsManager:
 
             return True
         except Exception as e:
-            logger.error(f"Ошибка сохранения предмета ученика: {e}")
+            # logger.error(f"Ошибка сохранения предмета ученика: {e}")
             return False
 
     def get_teacher_subjects(self, user_id: int) -> List[str]:
@@ -739,7 +739,7 @@ class GoogleSheetsManager:
                 row_user_id = row[0].strip() if len(row) > 0 and row[0] else ""
                 row_subject = row[2].strip() if len(row) > 2 and row[2] else ""
                 
-                logger.info(f"Строка {i}: user_id='{row_user_id}', subject='{row_subject}'")
+                # logger.info(f"Строка {i}: user_id='{row_user_id}', subject='{row_subject}'")
                 
                 # Ищем только строки с соответствующим user_id
                 if row_user_id == str(user_id) and row_subject:

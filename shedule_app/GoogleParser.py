@@ -139,7 +139,7 @@ class GoogleSheetsDataLoader:
     def _find_date_columns(self, sheet: List[List[Any]], date: str) -> Tuple[int, int]:
         if not sheet:
             return (-1, -1)
-        logger.info(f"Заголовки таблицы: {sheet[0]}")
+        # logger.info(f"Заголовки таблицы: {sheet[0]}")
         header_row = sheet[0]
         start_col = -1
         end_col = -1
@@ -175,7 +175,7 @@ class GoogleSheetsDataLoader:
         except ValueError:
             target_date_formats = [date]
 
-        logger.info(f"Поиск даты '{date}' в форматах: {target_date_formats}")
+        # logger.info(f"Поиск даты '{date}' в форматах: {target_date_formats}")
 
         # Ищем дату в заголовках
         for i, cell_value in enumerate(header_row):

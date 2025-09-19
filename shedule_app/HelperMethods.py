@@ -249,15 +249,15 @@ class School:
             is_assigned = False
             for teacher in available_teachers:
                 current_load = sum(s.need_for_attention for s in teacher_assignments[teacher])
-                logger.info(f"Преподаватель {teacher.name}: текущая нагрузка={current_load}, макс={teacher.maximum_attention}")
+                # logger.info(f"Преподаватель {teacher.name}: текущая нагрузка={current_load}, макс={teacher.maximum_attention}")
                 
                 if current_load + student.need_for_attention <= teacher.maximum_attention:
                     teacher_assignments[teacher].append(student)
                     is_assigned = True
-                    logger.info(f"✅ Студент {student.name} назначен преподавателю {teacher.name}")
+                    # logger.info(f"✅ Студент {student.name} назначен преподавателю {teacher.name}")
                     break
-                else:
-                    logger.info(f"❌ Преподаватель {teacher.name} перегружен")
+                # else:
+                    # logger.info(f"❌ Преподаватель {teacher.name} перегружен")
 
             if not is_assigned:
                 unassigned_students.append(student)

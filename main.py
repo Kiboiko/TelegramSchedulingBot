@@ -1,6 +1,6 @@
 import sys
 
-sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\ПК-2\Desktop\TelegramSchedulingBot\shedule_app")
 
 import asyncio
 import json
@@ -41,9 +41,9 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 BOOKINGS_FILE = "bookings.json"
-CREDENTIALS_PATH = r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\credentials.json"
+CREDENTIALS_PATH = r"C:\Users\ПК-2\Desktop\TelegramSchedulingBot\credentials.json"
 #SPREADSHEET_ID = "1r1MU8k8umwHx_E4Z-jFHRJ-kdwC43Jw0nwpVeH7T1GU"
-SPREADSHEET_ID = "1gFtQ7UJstu-Uv_BpgCUp24unsVT9oajSyWxU0j0GMpg"
+SPREADSHEET_ID = "1rs2SVEuJWf2Bc8rQcbLJvPpJWF4pyaDoqCTufhz_y9s"
 ADMIN_IDS = [1180878673, 973231400, 1312414595]
 BOOKING_TYPES = ["Тип1"]
 SUBJECTS = {
@@ -1064,7 +1064,8 @@ additional_menu = ReplyKeyboardMarkup(
 # Комбинированное меню для пользователей без ролей
 no_roles_menu = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="❓ Обратиться к администратору")]
+        [KeyboardButton(text="❓ Обратиться к администратору")],
+        [KeyboardButton(text="🔄 Проверить наличие ролей")]
     ],
     resize_keyboard=True
 )
@@ -1114,10 +1115,15 @@ async def cmd_start(message: types.Message, state: FSMContext):
     else:
         await message.answer(
             "Добро пожаловать в систему бронирования!\n"
-            "Введите ваше полное ФИО для регистрации:",
+            "Введите ваши имя и фамилию для регистрации:",
             reply_markup=ReplyKeyboardRemove()
         )
         await state.set_state(BookingStates.INPUT_NAME)
+
+@dp.message(F.text == "🔄 Проверить наличие ролей")
+async def check_roles(message: types.Message, state: FSMContext):
+    """Обработчик кнопки проверки ролей - выполняет команду /start"""
+    await cmd_start(message, state)
 
 @dp.message(F.text == "👤 Моя роль")
 async def show_my_role(message: types.Message):
@@ -1469,6 +1475,19 @@ async def cancel_schedule_generation(callback: types.CallbackQuery, state: FSMCo
     )
     await callback.answer()
 
+@dp.callback_query(BookingStates.CONFIRMATION, F.data == "booking_cancel")
+async def process_cancellation(callback: types.CallbackQuery, state: FSMContext):
+    """Обрабатывает отмену бронирования"""
+    await callback.message.edit_text("❌ Бронирование отменено")
+    await state.clear()
+    
+    user_id = callback.from_user.id
+    await callback.message.answer(
+        "Выберите действие:",
+        reply_markup=await generate_main_menu(user_id)
+    )
+    await callback.answer()
+
 
 @dp.callback_query(
     BookingStates.SELECT_SCHEDULE_DATE,
@@ -1696,7 +1715,7 @@ async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
                 # Получаем всех студентов и преподавателей из Google Sheets
                 all_teachers, all_students = loader.load_data()
                 distribution = get_subject_distribution_by_time(loader, formatted_date)
-                
+                logger.info(temp_student)
                 # Логируем загруженные данные
                 logger.info(f"Используется: {len(all_teachers)} преподавателей, {len(all_students)} студентов")
                 
