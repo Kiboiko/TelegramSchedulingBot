@@ -1,6 +1,6 @@
 import sys
 
-sys.path.append(r"C:\Users\ПК-2\Desktop\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\shedule_app")
 
 import asyncio
 import json
@@ -41,9 +41,9 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 BOOKINGS_FILE = "bookings.json"
-CREDENTIALS_PATH = r"C:\Users\ПК-2\Desktop\TelegramSchedulingBot\credentials.json"
+CREDENTIALS_PATH = r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\credentials.json"
 #SPREADSHEET_ID = "1r1MU8k8umwHx_E4Z-jFHRJ-kdwC43Jw0nwpVeH7T1GU"
-SPREADSHEET_ID = "1rs2SVEuJWf2Bc8rQcbLJvPpJWF4pyaDoqCTufhz_y9s"
+SPREADSHEET_ID = "1gFtQ7UJstu-Uv_BpgCUp24unsVT9oajSyWxU0j0GMpg"
 ADMIN_IDS = [1180878673, 973231400, 1312414595]
 BOOKING_TYPES = ["Тип1"]
 SUBJECTS = {
@@ -1047,7 +1047,8 @@ main_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📅 Забронировать время")],
         [KeyboardButton(text="📋 Мои бронирования")],
-        [KeyboardButton(text="👤 Моя роль")]
+        [KeyboardButton(text="👤 Моя роль")],
+        [KeyboardButton(text="ℹ️ Помощь")]
     ],
     resize_keyboard=True
 )
@@ -1056,7 +1057,7 @@ main_menu = ReplyKeyboardMarkup(
 additional_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="❓ Обратиться к администратору")],
-        [KeyboardButton(text="👤 Моя роль")]
+        [KeyboardButton(text="👤 Моя роль")],
     ],
     resize_keyboard=True
 )
@@ -1065,7 +1066,7 @@ additional_menu = ReplyKeyboardMarkup(
 no_roles_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="❓ Обратиться к администратору")],
-        [KeyboardButton(text="🔄 Проверить наличие ролей")]
+        [KeyboardButton(text="🔄 Проверить наличие ролей")],
     ],
     resize_keyboard=True
 )
@@ -1090,6 +1091,7 @@ async def generate_main_menu(user_id: int) -> ReplyKeyboardMarkup:
 
     keyboard_buttons.append([KeyboardButton(text="📋 Мои бронирования")])
     keyboard_buttons.append([KeyboardButton(text="👤 Моя роль")])
+    keyboard_buttons.append([KeyboardButton(text="ℹ️ Помощь")])
 
     # Добавляем кнопку составления расписания только для администраторов
     if is_admin(user_id):
@@ -1147,8 +1149,14 @@ async def show_help(message: types.Message):
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
     await message.answer(
-        "обратитесь к администратору\nТелефон администратора: +79001372727.\n\n"
-        "/help - показать эту справку"
+        "📞 Для получения помощи обратитесь к администратору\n"
+        "Телефон администратора: +79001372727.\n\n"
+        "Доступные команды:\n"
+        "/start - начать работу с ботом\n"
+        "/help - показать эту справку\n"
+        "/book - забронировать время\n"
+        "/my_bookings - посмотреть свои бронирования\n"
+        "/my_role - узнать свою роль"
     )
 
 
