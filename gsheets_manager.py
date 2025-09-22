@@ -48,9 +48,14 @@ class GoogleSheetsManager:
             data = worksheet.get_all_values()
 
             self.qual_map = {}
-            for row in data:
-                if len(row) >= 2 and row[0].strip().isdigit():
+            logger.info("=== ДАННЫЕ ИЗ ЛИСТА 'Предметы бот' ===")
+            for i, row in enumerate(data):
+                logger.info(f"Строка {i}: {row}")
+                if len(row) >= 2 and row[0].strip().isdigit():  # ID в колонке A
                     self.qual_map[row[1].strip().lower()] = row[0].strip()
+                    logger.info(f"Добавлено в qual_map: '{row[1].strip().lower()}' -> '{row[0].strip()}'")
+
+            logger.info(f"Итоговый qual_map: {self.qual_map}")
         except Exception as e:
             logger.error(f"Ошибка загрузки квалификаций: {e}")
 
