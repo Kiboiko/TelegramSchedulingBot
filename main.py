@@ -1,7 +1,7 @@
 # main.py
 import sys
 
-sys.path.append(r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
 
 import asyncio
 import json
@@ -33,6 +33,7 @@ from shedule_app.GoogleParser import GoogleSheetsDataLoader
 # Импорты из новых файлов
 from config import *
 from states import BookingStates
+from feedback import FeedbackManager, FeedbackStates
 
 # Настройка логирования
 logging.basicConfig(level=logging.DEBUG)
@@ -56,7 +57,7 @@ except Exception as e:
     logger.error(f"Google Sheets initialization error: {e}")
     gsheets = None
 
-
+feedback_manager = FeedbackManager(storage, gsheets, bot)
 class RoleCheckMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         # Пропускаем команду /start, /help и ввод имени
@@ -1529,6 +1530,181 @@ async def process_schedule_confirmation(callback: types.CallbackQuery, state: FS
     await state.clear()
 
 
+@dp.callback_query(F.data.startswith("feedback_"))
+async def handle_feedback_rating(callback: types.CallbackQuery, state: FSMContext):
+    """Обрабатывает выбор оценки обратной связи"""
+    try:
+        # Обрабатываем отдельно кнопку отправки деталей
+        if callback.data == "feedback_submit_details":
+            await handle_feedback_submit(callback, state)
+            return
+
+        data_parts = callback.data.split('_')
+        if len(data_parts) < 4:
+            logger.error(f"Неверный формат callback_data: {callback.data}")
+            await callback.answer("Ошибка обработки запроса", show_alert=True)
+            return
+
+        rating_type = data_parts[1]  # good, better, bad
+        subject_id = data_parts[2]
+        date_str = '_'.join(data_parts[3:])  # Дата может содержать дефисы, поэтому объединяем остальные части
+
+        user_id = callback.from_user.id
+
+        # Получаем название предмета
+        from config import SUBJECTS
+        subject_name = SUBJECTS.get(subject_id, f"Предмет {subject_id}")
+
+        await state.update_data(
+            feedback_subject=subject_id,
+            feedback_date=date_str,
+            feedback_rating=rating_type
+        )
+
+        if rating_type == 'good':
+            # Для "Хорошо" - сразу сохраняем и благодарим
+            feedback_manager.save_feedback_response(
+                user_id, date_str, subject_id, 'good'
+            )
+
+            await callback.message.edit_text(
+                "Спасибо за обратную связь! 💫"
+            )
+
+        elif rating_type == 'better':
+            # Для "Могло быть лучше" - запрашиваем детали
+            await callback.message.edit_text(
+                "Чего не хватило для идеального занятия?\n\n"
+                "Напишите ваши предложения и нажмите кнопку ниже:"
+            )
+
+            # Создаем клавиатуру с кнопкой отправки
+            keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(
+                    text="📨 Все написал, отправить",
+                    callback_data="feedback_submit_details"
+                )]
+            ])
+
+            await callback.message.edit_reply_markup(reply_markup=keyboard)
+            await state.set_state(FeedbackStates.WAITING_FEEDBACK_DETAILS)
+
+        elif rating_type == 'bad':
+            # Для "Ужасно" - предупреждаем и запрашиваем детали
+            await callback.message.edit_text(
+                "Сожалеем о негативном опыте! 😔\n"
+                "Что случилось?\n\n"
+                "Если ситуация требует немедленного решения, "
+                "звоните по номеру: +79001372727\n\n"
+                "Опишите проблему и нажмите кнопку отправки:"
+            )
+
+            keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(
+                    text="📨 Все написал, отправить",
+                    callback_data="feedback_submit_details"
+                )]
+            ])
+
+            await callback.message.edit_reply_markup(reply_markup=keyboard)
+            await state.set_state(FeedbackStates.WAITING_FEEDBACK_DETAILS)
+
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Ошибка обработки feedback: {e}")
+        await callback.answer("Произошла ошибка", show_alert=True)
+@dp.callback_query(F.data == "feedback_submit_details")
+async def handle_feedback_submit_button(callback: types.CallbackQuery, state: FSMContext):
+    """Обрабатывает нажатие кнопки отправки деталей обратной связи"""
+    await handle_feedback_submit(callback, state)
+async def handle_feedback_submit(callback: types.CallbackQuery, state: FSMContext):
+    """Обрабатывает отправку деталей обратной связи"""
+    try:
+        data = await state.get_data()
+        user_id = callback.from_user.id
+
+        # Получаем текст из состояния
+        details = data.get('feedback_details', '')
+
+        if not details:
+            # Если текста нет в состоянии, пытаемся получить из сообщения
+            message_text = callback.message.text
+            system_texts = [
+                "Чего не хватило для идеального занятия?",
+                "Сожалеем о негативном опыте!",
+                "Что случилось?",
+                "Если ситуация требует немедленного решения"
+            ]
+
+            details = message_text
+            for system_text in system_texts:
+                details = details.replace(system_text, "").strip()
+
+            # Убираем маркдаун разметку если есть
+            details = details.replace("*Ваш ответ:*", "").strip()
+
+        # Проверяем, что у нас есть все необходимые данные
+        if not all(key in data for key in ['feedback_date', 'feedback_subject', 'feedback_rating']):
+            await callback.answer("Ошибка: недостаточно данных для сохранения", show_alert=True)
+            return
+
+        # Сохраняем обратную связь
+        feedback_manager.save_feedback_response(
+            user_id,
+            data['feedback_date'],
+            data['feedback_subject'],
+            data['feedback_rating'],
+            details
+        )
+
+        await callback.message.edit_text(
+            "Спасибо за обратную связь! 💫\n"
+            "Ваше мнение очень важно для нас!"
+        )
+
+        await state.clear()
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Ошибка отправки feedback: {e}")
+        await callback.answer("Ошибка отправки", show_alert=True)
+
+
+@dp.message(FeedbackStates.WAITING_FEEDBACK_DETAILS)
+async def handle_feedback_text_input(message: types.Message, state: FSMContext):
+    """Обрабатывает текстовый ввод для обратной связи"""
+    try:
+        data = await state.get_data()
+        rating_type = data.get('feedback_rating', 'better')
+
+        # Сохраняем текст от пользователя в состоянии
+        await state.update_data(feedback_details=message.text)
+
+        if rating_type == 'better':
+            base_text = "Чего не хватило для идеального занятия?\n\n"
+        else:  # bad
+            base_text = "Сожалеем о негативном опыте! 😔\nЧто случилось?\n\n"
+            base_text += "Если ситуация требует немедленного решения, звоните: +79001372727\n\n"
+
+        new_text = base_text + f"*Ваш ответ:* {message.text}"
+
+        keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(
+                text="📨 Все написал, отправить",
+                callback_data="feedback_submit_details"
+            )]
+        ])
+
+        await message.answer(
+            new_text,
+            reply_markup=keyboard,
+            parse_mode="Markdown"
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка обработки текста feedback: {e}")
+        await message.answer("Произошла ошибка, попробуйте еще раз")
 @dp.callback_query(BookingStates.CONFIRM_SCHEDULE, F.data == "cancel_schedule")
 async def cancel_schedule_generation(callback: types.CallbackQuery, state: FSMContext):
     """Отмена составления расписания"""
@@ -2490,6 +2666,52 @@ async def sync_from_gsheets_background():
         except Exception as e:
             logger.error(f"Ошибка в фоновой синхронизации из Google Sheets: {e}")
             await asyncio.sleep(300)
+async def check_feedback_background():
+    """Фоновая задача для проверки и отправки обратной связи"""
+    while True:
+        try:
+            await feedback_manager.send_feedback_questions()
+            await asyncio.sleep(1800)  # Проверка каждые 30 минут
+        except Exception as e:
+            logger.error(f"Ошибка в фоновой задаче feedback: {e}")
+            await asyncio.sleep(300)  # Ждем 5 минут при ошибке
+
+
+async def sync_pending_feedback_background():
+    """Фоновая задача для синхронизации неотправленных отзывов"""
+    while True:
+        try:
+            # Получаем несинхронизированные отзывы
+            pending_feedback = feedback_manager.get_pending_feedback_for_gsheets()
+
+            if pending_feedback:
+                logger.info(f"Найдено {len(pending_feedback)} несинхронизированных отзывов")
+
+                for feedback in pending_feedback:
+                    try:
+                        # Синхронизируем каждый отзыв
+                        feedback_manager.sync_feedback_to_gsheets(feedback)
+
+                        # Помечаем как синхронизированный
+                        feedback_manager.mark_feedback_synced(
+                            feedback['user_id'],
+                            feedback['date'],
+                            feedback['subject']
+                        )
+
+                        logger.info(f"Синхронизирован отзыв user_id {feedback['user_id']}")
+
+                    except Exception as e:
+                        logger.error(f"Ошибка синхронизации отзыва: {e}")
+                        continue
+
+                logger.info("Синхронизация отзывов завершена")
+
+            await asyncio.sleep(300)  # Проверка каждые 5 минут
+
+        except Exception as e:
+            logger.error(f"Ошибка в фоновой задаче синхронизации отзывов: {e}")
+            await asyncio.sleep(300)
 
 
 async def main():
@@ -2498,8 +2720,9 @@ async def main():
 
     # Запуск фоновых задач
     asyncio.create_task(cleanup_old_bookings())
-    # asyncio.create_task(sync_with_gsheets())
-    asyncio.create_task(sync_from_gsheets_background())  # Новая задача
+    asyncio.create_task(sync_from_gsheets_background())
+    asyncio.create_task(check_feedback_background())
+    asyncio.create_task(sync_pending_feedback_background())  # Новая задача
 
     # Запуск бота
     await dp.start_polling(bot)
