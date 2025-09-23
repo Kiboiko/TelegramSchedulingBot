@@ -29,6 +29,7 @@ from shedule_app.models import Person, Teacher, Student
 from typing import List, Dict
 from shedule_app.GoogleParser import GoogleSheetsDataLoader
 
+
 # Импорты из новых файлов
 from config import *
 from states import BookingStates
@@ -298,6 +299,142 @@ def check_student_availability_for_slots(
     logger.info(f"ИТОГ: доступно {available_count}/{total_count} слотов")
 
     return result
+
+def generate_time_range_keyboard_with_availability(
+    selected_date=None,
+    start_time=None,
+    end_time=None,
+    availability_map: Dict[time, bool] = None
+):
+    """Генерирует клавиатуру выбора времени с учетом доступности и дня недели"""
+    builder = InlineKeyboardBuilder()
+
+    # Определяем рабочие часы в зависимости от дня недели
+    if selected_date:
+        weekday = selected_date.weekday()
+        if weekday <= 4:  # будни
+            start = datetime.strptime("14:00", "%H:%M")
+            end = datetime.strptime("20:00", "%H:%M")
+        else:  # выходные
+            start = datetime.strptime("10:00", "%H:%M")
+            end = datetime.strptime("15:00", "%H:%M")
+    else:
+        # По умолчанию используем будний день
+        start = datetime.strptime("14:00", "%H:%M")
+        end = datetime.strptime("20:00", "%H:%M")
+
+    current = start
+
+    while current <= end:
+        time_str = current.strftime("%H:%M")
+        time_obj = current.time()
+
+        # Если availability_map = None (для преподавателей), все слоты доступны
+        is_available = True
+        if availability_map is not None:  # Только если есть карта доступности
+            is_available = availability_map.get(time_obj, True)
+
+        # Определяем стиль кнопки на основе доступности
+        if start_time and time_str == start_time:
+            button_text = "🟢 " + time_str
+        elif end_time and time_str == end_time:
+            button_text = "🔴 " + time_str
+        elif (start_time and end_time and
+              datetime.strptime(start_time, "%H:%M").time() < time_obj <
+              datetime.strptime(end_time, "%H:%M").time()):
+            button_text = "🔵 " + time_str
+        else:
+            button_text = time_str
+
+        # Для учеников показываем заблокированные слоты
+        if availability_map is not None and not is_available:
+            button_text = "🔒 " + time_str
+            callback_data = "time_slot_unavailable"
+        else:
+            callback_data = f"time_point_{time_str}"
+
+        builder.add(types.InlineKeyboardButton(
+            text=button_text,
+            callback_data=callback_data
+        ))
+        current += timedelta(minutes=15)  # Шаг 15 минут вместо 30
+
+    builder.adjust(4)
+
+    # Добавляем кнопки управления
+    control_buttons = []
+    if availability_map is not None:  # Статистика только для учеников
+        available_count = sum(1 for available in availability_map.values() if available)
+        total_count = len(availability_map)
+        control_buttons.append(types.InlineKeyboardButton(
+            text=f"Доступно: {available_count}/{total_count}",
+            callback_data="availability_info"
+        ))
+
+    control_buttons.extend([
+        types.InlineKeyboardButton(
+            text="Выбрать начало 🟢",
+            callback_data="select_start_mode"
+        ),
+        types.InlineKeyboardButton(
+            text="Выбирать конец 🔴",
+            callback_data="select_end_mode"
+        )
+    ])
+
+    builder.row(*control_buttons)
+
+    if start_time and end_time:
+        # Для преподавателей всегда доступно подтверждение
+        if availability_map is None:
+            builder.row(
+                types.InlineKeyboardButton(
+                    text="✅ Подтвердить время",
+                    callback_data="confirm_time_range"
+                )
+            )
+        else:
+            # Для учеников проверяем доступность всего интервала
+            is_interval_available = True
+            
+            # Проверяем все временные слоты в выбранном интервале
+            start_obj = datetime.strptime(start_time, "%H:%M").time()
+            end_obj = datetime.strptime(end_time, "%H:%M").time()
+            
+            current_check = start_obj
+            while current_check < end_obj:
+                if current_check not in availability_map or not availability_map[current_check]:
+                    is_interval_available = False
+                    break
+                # Переходим к следующему 15-минутному слоту
+                total_minutes = current_check.hour * 60 + current_check.minute + 15
+                next_hour = total_minutes // 60
+                next_minute = total_minutes % 60
+                current_check = time(next_hour, next_minute)
+            
+            if is_interval_available:
+                builder.row(
+                    types.InlineKeyboardButton(
+                        text="✅ Подтвердить время",
+                        callback_data="confirm_time_range"
+                    )
+                )
+            else:
+                builder.row(
+                    types.InlineKeyboardButton(
+                        text="❌ Интервал содержит недоступные слоты",
+                        callback_data="interval_contains_unavailable"
+                    )
+                )
+
+    builder.row(
+        types.InlineKeyboardButton(
+            text="❌ Отменить",
+            callback_data="cancel_time_selection"
+        )
+    )
+
+    return builder.as_markup()
 
 # def generate_time_range_keyboard_with_availability(
 #     selected_date=None,
