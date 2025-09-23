@@ -43,6 +43,12 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 storage = JSONStorage(file_path=BOOKINGS_FILE)
 
+POSSIBILITIES_FILE = "possibilities.json"
+
+if not os.path.exists(POSSIBILITIES_FILE):
+    with open(POSSIBILITIES_FILE, 'w', encoding='utf-8') as f:
+        json.dump({}, f, ensure_ascii=False, indent=2)
+    logger.info(f"Создан файл {POSSIBILITIES_FILE}")
 # Настройка Google Sheets
 try:
     gsheets = GoogleSheetsManager(
@@ -55,6 +61,70 @@ try:
 except Exception as e:
     logger.error(f"Google Sheets initialization error: {e}")
     gsheets = None
+
+def save_possibility(user_id: int, data: dict):
+    """Сохраняет возможность пользователя в файл"""
+    try:
+        logger.info(f"Сохранение возможности для user_id {user_id}: {data}")
+        # Загружаем существующие данные
+        possibilities = {}
+        if os.path.exists(POSSIBILITIES_FILE):
+            try:
+                with open(POSSIBILITIES_FILE, 'r', encoding='utf-8') as f:
+                    file_content = f.read().strip()
+                    if file_content:  # Проверяем, что файл не пустой
+                        possibilities = json.loads(file_content)
+                    else:
+                        possibilities = {}
+            except json.JSONDecodeError:
+                logger.warning(f"Файл {POSSIBILITIES_FILE} содержит невалидный JSON. Создаем новый.")
+                possibilities = {}
+        
+        # Добавляем/обновляем возможность для пользователя
+        user_key = str(user_id)
+        if user_key not in possibilities:
+            possibilities[user_key] = []
+        
+        # Добавляем новую возможность с timestamp
+        possibility_data = {
+            **data,
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        possibilities[user_key].append(possibility_data)
+        
+        # Сохраняем обратно в файл
+        with open(POSSIBILITIES_FILE, 'w', encoding='utf-8') as f:
+            json.dump(possibilities, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"Успешно сохранена возможность для пользователя {user_id}")
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка при сохранении возможности: {e}")
+        return False
+
+
+def load_user_possibilities(user_id: int) -> List[dict]:
+    """Загружает возможности пользователя из файла"""
+    try:
+        if not os.path.exists(POSSIBILITIES_FILE):
+            return []
+        
+        with open(POSSIBILITIES_FILE, 'r', encoding='utf-8') as f:
+            file_content = f.read().strip()
+            if not file_content:  # Если файл пустой
+                return []
+            
+            possibilities = json.loads(file_content)
+        
+        user_key = str(user_id)
+        return possibilities.get(user_key, [])
+    except json.JSONDecodeError:
+        logger.error(f"Файл {POSSIBILITIES_FILE} содержит невалидный JSON")
+        return []
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке возможностей: {e}")
+        return []
+
 
 
 class RoleCheckMiddleware(BaseMiddleware):
@@ -1146,12 +1216,475 @@ async def generate_main_menu(user_id: int) -> ReplyKeyboardMarkup:
     keyboard_buttons.append([KeyboardButton(text="📋 Мои бронирования")])
     keyboard_buttons.append([KeyboardButton(text="👤 Моя роль")])
     keyboard_buttons.append([KeyboardButton(text="ℹ️ Помощь")])
+    
+    # Новая кнопка для указания возможностей
+    keyboard_buttons.append([KeyboardButton(text="🎯 Указать возможности")])
 
     # Добавляем кнопку составления расписания только для администраторов
     if is_admin(user_id):
         keyboard_buttons.append([KeyboardButton(text="📊 Составить расписание")])
 
     return ReplyKeyboardMarkup(keyboard=keyboard_buttons, resize_keyboard=True)
+
+@dp.message(F.text == "🎯 Указать возможности")
+async def specify_possibilities(message: types.Message, state: FSMContext):
+    """Начало процесса указания возможностей"""
+    user_id = message.from_user.id
+    
+    # Проверяем, есть ли ФИО
+    user_name = storage.get_user_name(user_id)
+    if not user_name:
+        await message.answer("Введите ваше полное ФИО:")
+        await state.set_state(BookingStates.INPUT_NAME)
+        return
+    
+    await state.update_data(user_name=user_name)
+    
+    # Начинаем процесс указания возможностей
+    await message.answer(
+        "🎯 Укажите ваши возможности для занятий\n\n"
+        "Сначала выберите дату:",
+        reply_markup=generate_calendar()
+    )
+    await state.set_state(BookingStates.SELECT_POSSIBILITY_DATE)
+
+@dp.callback_query(BookingStates.SELECT_POSSIBILITY_DATE, F.data.startswith("calendar_day_"))
+async def process_possibility_date(callback: types.CallbackQuery, state: FSMContext):
+    """Обработка выбора даты для возможности"""
+    try:
+        data = callback.data
+        date_str = data.replace("calendar_day_", "")
+        year, month, day = map(int, date_str.split("-"))
+        selected_date = datetime(year, month, day).date()
+        
+        await state.update_data(
+            possibility_date=selected_date.strftime("%Y-%m-%d"),
+            possibility_date_display=selected_date.strftime("%d.%m.%Y"),
+            possibility_time_start=None,
+            possibility_time_end=None,
+            possibility_selecting_mode='start'
+        )
+        
+        # Переходим к выбору времени
+        await callback.message.edit_text(
+            f"📅 Дата: {selected_date.strftime('%d.%m.%Y')}\n\n"
+            "🎯 Выберите временной интервал для ваших возможностей:\n\n"
+            "Как выбрать время:\n"
+            "1. Нажмите 'Выбрать начало 🟢'\n"
+            "2. Выберите время начала\n"
+            "3. Нажмите 'Выбирать конец 🔴'\n"
+            "4. Выберите время окончания\n"
+            "5. Подтвердите выбор",
+            reply_markup=generate_possibility_time_keyboard(selected_date=selected_date)
+        )
+        await state.set_state(BookingStates.SELECT_POSSIBILITY_TIME_RANGE)
+        await callback.answer()
+        
+    except Exception as e:
+        logger.error(f"Ошибка при выборе даты возможности: {e}")
+        await callback.answer("Ошибка при выборе даты", show_alert=True)
+
+def generate_possibility_time_keyboard(selected_date=None, start_time=None, end_time=None):
+    """Генерирует клавиатуру выбора времени для возможностей с маркерами"""
+    builder = InlineKeyboardBuilder()
+
+    # Определяем рабочие часы в зависимости от дня недели
+    if selected_date:
+        # Если selected_date - строка, преобразуем в объект date
+        if isinstance(selected_date, str):
+            try:
+                selected_date = datetime.strptime(selected_date, "%Y-%m-%d").date()
+            except ValueError:
+                # Если не удалось распарсить, используем текущую дату
+                selected_date = datetime.now().date()
+        
+        weekday = selected_date.weekday()
+        if weekday <= 4:  # будни
+            start = datetime.strptime("14:00", "%H:%M")
+            end = datetime.strptime("20:00", "%H:%M")
+        else:  # выходные
+            start = datetime.strptime("10:00", "%H:%M")
+            end = datetime.strptime("15:00", "%H:%M")
+    else:
+        # По умолчанию используем будний день
+        start = datetime.strptime("14:00", "%H:%M")
+        end = datetime.strptime("20:00", "%H:%M")
+
+    current = start
+
+    while current <= end:
+        time_str = current.strftime("%H:%M")
+
+        # Определяем стиль кнопки
+        if start_time and time_str == start_time:
+            button_text = "🟢 " + time_str  # Начало - зеленый
+        elif end_time and time_str == end_time:
+            button_text = "🔴 " + time_str  # Конец - красный
+        elif (start_time and end_time and
+              datetime.strptime(start_time, "%H:%M").time() < current.time() <
+              datetime.strptime(end_time, "%H:%M").time()):
+            button_text = "🔵 " + time_str  # Промежуток - синий
+        else:
+            button_text = time_str  # Обычный вид
+
+        builder.add(types.InlineKeyboardButton(
+            text=button_text,
+            callback_data=f"possibility_time_{time_str}"
+        ))
+        current += timedelta(minutes=15)  # Шаг 15 минут
+
+    builder.adjust(4)
+
+    # Добавляем кнопки управления
+    control_buttons = [
+        types.InlineKeyboardButton(
+            text="Выбрать начало 🟢",
+            callback_data="possibility_select_start"
+        ),
+        types.InlineKeyboardButton(
+            text="Выбирать конец 🔴",
+            callback_data="possibility_select_end"
+        )
+    ]
+
+    builder.row(*control_buttons)
+
+    if start_time and end_time:
+        builder.row(
+            types.InlineKeyboardButton(
+                text="✅ Подтвердить время",
+                callback_data="possibility_confirm_time"
+            )
+        )
+
+    builder.row(
+        types.InlineKeyboardButton(
+            text="❌ Отменить",
+            callback_data="possibility_cancel_time"
+        )
+    )
+
+    return builder.as_markup()
+
+@dp.callback_query(BookingStates.SELECT_POSSIBILITY_TIME_RANGE, F.data.startswith("possibility_time_"))
+async def process_possibility_time_point(callback: types.CallbackQuery, state: FSMContext):
+    """Обработка выбора времени для возможности"""
+    time_str = callback.data.replace("possibility_time_", "")
+    data = await state.get_data()
+    selecting_mode = data.get('possibility_selecting_mode', 'start')
+    
+    # Получаем дату и преобразуем ее в объект date если нужно
+    possibility_date = data.get('possibility_date')
+    if possibility_date and isinstance(possibility_date, str):
+        try:
+            possibility_date = datetime.strptime(possibility_date, "%Y-%m-%d").date()
+        except ValueError:
+            possibility_date = None
+
+    if selecting_mode == 'start':
+        # Выбираем начало и сохраняем в оба поля для совместимости
+        await state.update_data(
+            possibility_time_start=time_str,
+            possibility_start_time=time_str  # Дублируем для совместимости
+        )
+
+        # Сбрасываем конец, если он раньше нового начала
+        if data.get('possibility_time_end'):
+            end_obj = datetime.strptime(data['possibility_time_end'], "%H:%M")
+            start_obj = datetime.strptime(time_str, "%H:%M")
+            if end_obj <= start_obj:
+                await state.update_data(
+                    possibility_time_end=None,
+                    possibility_end_time=None
+                )
+
+        await callback.message.edit_text(
+            f"🟢 Выбрано начало: {time_str}\n"
+            "Теперь нажмите 'Выбирать конец 🔴' и выберите время окончания",
+            reply_markup=generate_possibility_time_keyboard(
+                selected_date=possibility_date,
+                start_time=time_str,
+                end_time=data.get('possibility_time_end')
+            )
+        )
+    else:
+        # Выбираем конец
+        if not data.get('possibility_time_start'):
+            await callback.answer("Сначала выберите время начала!", show_alert=True)
+            return
+
+        start_obj = datetime.strptime(data['possibility_time_start'], "%H:%M")
+        end_obj = datetime.strptime(time_str, "%H:%M")
+
+        if end_obj <= start_obj:
+            await callback.answer("Время окончания должно быть после времени начала!", show_alert=True)
+            return
+
+        # Сохраняем конец в оба поля для совместимости
+        await state.update_data(
+            possibility_time_end=time_str,
+            possibility_end_time=time_str
+        )
+
+        await callback.message.edit_text(
+            f"📋 Текущий выбор времени:\n"
+            f"🟢 Начало: {data['possibility_time_start']}\n"
+            f"🔴 Конец: {time_str}\n\n"
+            "Если выбор корректен, нажмите '✅ Подтвердить время'",
+            reply_markup=generate_possibility_time_keyboard(
+                selected_date=possibility_date,
+                start_time=data['possibility_time_start'],
+                end_time=time_str
+            )
+        )
+
+    await callback.answer()
+
+@dp.callback_query(BookingStates.SELECT_POSSIBILITY_TIME_RANGE, F.data.in_(["possibility_select_start", "possibility_select_end"]))
+async def switch_possibility_selection_mode(callback: types.CallbackQuery, state: FSMContext):
+    """Переключение режима выбора времени для возможностей"""
+    data = await state.get_data()
+    
+    # Получаем дату и преобразуем ее в объект date если нужно
+    possibility_date = data.get('possibility_date')
+    if possibility_date and isinstance(possibility_date, str):
+        try:
+            possibility_date = datetime.strptime(possibility_date, "%Y-%m-%d").date()
+        except ValueError:
+            possibility_date = None
+
+    if callback.data == "possibility_select_start":
+        await state.update_data(possibility_selecting_mode='start')
+        message_text = "Режим выбора НАЧАЛА времени (зеленый маркер)\n"
+    else:
+        await state.update_data(possibility_selecting_mode='end')
+        message_text = "Режим выбора ОКОНЧАНИЯ времени (красный маркер)\n"
+
+    time_start = data.get('possibility_time_start')
+    time_end = data.get('possibility_time_end')
+
+    if time_start:
+        message_text += f"Текущее начало: {time_start}\n"
+    if time_end:
+        message_text += f"Текущий конец: {time_end}\n"
+
+    message_text += "Нажмите на время для установки:"
+
+    await callback.message.edit_text(
+        message_text,
+        reply_markup=generate_possibility_time_keyboard(
+            selected_date=possibility_date,  # Теперь передаем объект date
+            start_time=time_start,
+            end_time=time_end
+        )
+    )
+    await callback.answer()
+
+@dp.callback_query(BookingStates.SELECT_POSSIBILITY_TIME_RANGE, F.data == "possibility_confirm_time")
+async def confirm_possibility_time(callback: types.CallbackQuery, state: FSMContext):
+    """Подтверждение выбранного времени для возможности"""
+    data = await state.get_data()
+    time_start = data.get('possibility_time_start')
+    time_end = data.get('possibility_time_end')
+
+    if not time_start or not time_end:
+        await callback.answer("Сначала выберите время начала и окончания!", show_alert=True)
+        return
+
+    # Проверяем корректность интервала
+    start_obj = datetime.strptime(time_start, "%H:%M")
+    end_obj = datetime.strptime(time_end, "%H:%M")
+
+    if end_obj <= start_obj:
+        await callback.answer("Время окончания должно быть после времени начала!", show_alert=True)
+        return
+
+    # Сохраняем время в правильные поля
+    await state.update_data(
+        possibility_start_time=time_start,
+        possibility_end_time=time_end
+    )
+
+    await callback.message.edit_text(
+        f"⏰ Временной интервал: {time_start} - {time_end}\n\n"
+        "⏱ Введите МИНИМАЛЬНОЕ время занятия в минутах (например, 30):"
+    )
+    await state.set_state(BookingStates.INPUT_MIN_DURATION)
+    await callback.answer()
+
+@dp.callback_query(BookingStates.SELECT_POSSIBILITY_TIME_RANGE, F.data == "possibility_cancel_time")
+async def cancel_possibility_time_selection(callback: types.CallbackQuery, state: FSMContext):
+    """Отмена выбора времени для возможности"""
+    await callback.message.edit_text("❌ Выбор времени отменен")
+    await state.clear()
+
+    user_id = callback.from_user.id
+    await callback.message.answer(
+        "Выберите действие:",
+        reply_markup=await generate_main_menu(user_id)
+    )
+    await callback.answer()
+
+@dp.callback_query(BookingStates.SELECT_POSSIBILITY_START_TIME, F.data.startswith("time_point_"))
+async def process_possibility_start_time(callback: types.CallbackQuery, state: FSMContext):
+    """Обработка выбора времени начала возможности"""
+    time_str = callback.data.replace("time_point_", "")
+    
+    await state.update_data(possibility_start_time=time_str)
+    
+    await callback.message.edit_text(
+        f"⏰ Время начала: {time_str}\n"
+        "Теперь выберите время ОКОНЧАНИЯ возможности:",
+        reply_markup=generate_time_range_keyboard()
+    )
+    await state.set_state(BookingStates.SELECT_POSSIBILITY_END_TIME)
+    await callback.answer()
+
+@dp.callback_query(BookingStates.SELECT_POSSIBILITY_END_TIME, F.data.startswith("time_point_"))
+async def process_possibility_end_time(callback: types.CallbackQuery, state: FSMContext):
+    """Обработка выбора времени окончания возможности"""
+    time_str = callback.data.replace("time_point_", "")
+    
+    # Получаем время начала для проверки
+    data = await state.get_data()
+    start_time = data.get('possibility_start_time')
+    
+    if start_time:
+        start_obj = datetime.strptime(start_time, "%H:%M")
+        end_obj = datetime.strptime(time_str, "%H:%M")
+        
+        if end_obj <= start_obj:
+            await callback.answer("Время окончания должно быть после времени начала!", show_alert=True)
+            return
+    
+    await state.update_data(possibility_end_time=time_str)
+    
+    # Переходим к вводу минимального времени занятия
+    await callback.message.edit_text(
+        f"⏰ Временной интервал: {data.get('possibility_start_time')} - {time_str}\n\n"
+        "⏱ Введите МИНИМАЛЬНОЕ время занятия в минутах (например, 30):"
+    )
+    await state.set_state(BookingStates.INPUT_MIN_DURATION)
+    await callback.answer()
+
+@dp.message(BookingStates.INPUT_MIN_DURATION)
+async def process_min_duration(message: types.Message, state: FSMContext):
+    """Обработка ввода минимальной длительности"""
+    try:
+        min_duration = int(message.text.strip())
+        if min_duration <= 0:
+            await message.answer("Введите положительное число (например, 30):")
+            return
+            
+        await state.update_data(possibility_min_duration=min_duration)
+        
+        await message.answer(
+            f"⏱ Минимальное время: {min_duration} минут\n\n"
+            "⏱ Введите МАКСИМАЛЬНОЕ время занятия в минутах (например, 90):"
+        )
+        await state.set_state(BookingStates.INPUT_MAX_DURATION)
+        
+    except ValueError:
+        await message.answer("Пожалуйста, введите число (например, 30):")
+
+@dp.message(BookingStates.INPUT_MAX_DURATION)
+async def process_max_duration(message: types.Message, state: FSMContext):
+    """Обработка ввода максимальной длительности"""
+    try:
+        max_duration = int(message.text.strip())
+        if max_duration <= 0:
+            await message.answer("Введите положительное число (например, 90):")
+            return
+        
+        data = await state.get_data()
+        min_duration = data.get('possibility_min_duration', 0)
+        
+        if max_duration < min_duration:
+            await message.answer("Максимальное время не может быть меньше минимального. Введите снова:")
+            return
+            
+        await state.update_data(possibility_max_duration=max_duration)
+        
+        await message.answer(
+            f"⏱ Временной диапазон занятия: {min_duration}-{max_duration} минут\n\n"
+            "⏳ Введите за сколько ЧАСОВ до занятия нужно подтверждение (например, 24):"
+        )
+        await state.set_state(BookingStates.INPUT_CONFIRMATION_TIME)
+        
+    except ValueError:
+        await message.answer("Пожалуйста, введите число (например, 90):")
+
+@dp.message(BookingStates.INPUT_CONFIRMATION_TIME)
+async def process_confirmation_time(message: types.Message, state: FSMContext):
+    """Обработка ввода времени подтверждения"""
+    try:
+        confirmation_time = int(message.text.strip())
+        if confirmation_time < 0:
+            await message.answer("Введите неотрицательное число (например, 24):")
+            return
+            
+        # Собираем все данные
+        data = await state.get_data()
+        
+        # Используем оба варианта названий полей для надежности
+        start_time = data.get('possibility_start_time') or data.get('possibility_time_start')
+        end_time = data.get('possibility_end_time') or data.get('possibility_time_end')
+        
+        if not start_time or not end_time:
+            await message.answer("❌ Ошибка: время не выбрано. Начните заново.")
+            await state.clear()
+            return
+        
+        possibility_data = {
+            "user_id": message.from_user.id,
+            "user_name": data.get('user_name', ''),
+            "date": data.get('possibility_date'),
+            "date_display": data.get('possibility_date_display'),
+            "start_time": start_time,
+            "end_time": end_time,
+            "min_duration_minutes": data.get('possibility_min_duration'),
+            "max_duration_minutes": data.get('possibility_max_duration'),
+            "confirmation_hours": confirmation_time
+        }
+        
+        # Сохраняем в файл
+        success = save_possibility(message.from_user.id, possibility_data)
+        
+        if success:
+            await message.answer(
+                "✅ Ваши возможности успешно сохранены!\n\n"
+                f"📅 Дата: {data.get('possibility_date_display')}\n"
+                f"⏰ Время: {start_time} - {end_time}\n"
+                f"⏱ Длительность: {data.get('possibility_min_duration')}-{data.get('possibility_max_duration')} мин\n"
+                f"⏳ Подтверждение за: {confirmation_time} часов\n\n"
+                "Эти данные будут использоваться для планирования занятий.",
+                reply_markup=await generate_main_menu(message.from_user.id)
+            )
+        else:
+            await message.answer(
+                "❌ Произошла ошибка при сохранении. Попробуйте позже.",
+                reply_markup=await generate_main_menu(message.from_user.id)
+            )
+        
+        await state.clear()
+        
+    except ValueError:
+        await message.answer("Пожалуйста, введите число (например, 24):")
+
+@dp.callback_query(BookingStates.SELECT_POSSIBILITY_DATE, F.data.startswith("calendar_change_"))
+async def process_possibility_calendar_change(callback: types.CallbackQuery, state: FSMContext):
+    """Обрабатывает переключение месяцев в календаре для выбора даты возможности"""
+    try:
+        date_str = callback.data.replace("calendar_change_", "")
+        year, month = map(int, date_str.split("-"))
+
+        await callback.message.edit_reply_markup(
+            reply_markup=generate_calendar(year, month)
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error changing calendar month for possibility: {e}")
+        await callback.answer("Не удалось изменить месяц", show_alert=True)
 
 
 @dp.message(CommandStart())
@@ -1164,7 +1697,10 @@ async def cmd_start(message: types.Message, state: FSMContext):
     if user_name:
         await message.answer(
             f"С возвращением, {user_name}!\n"
-            "Используйте кнопки ниже для навигации:",
+            "Используйте кнопки ниже для навигации:\n"
+            "• 📅 Забронировать время - записаться на занятие\n"
+            "• 🎯 Указать возможности - указать когда вы можете проводить занятия\n"
+            "• 📋 Мои бронирования - просмотреть ваши записи",
             reply_markup=menu
         )
     else:
@@ -1703,6 +2239,13 @@ def get_time_range_for_date(selected_date=None):
     Возвращает временной диапазон и шаг в зависимости от дня недели
     """
     if selected_date:
+        # Если selected_date - строка, преобразуем в объект date
+        if isinstance(selected_date, str):
+            try:
+                selected_date = datetime.strptime(selected_date, "%Y-%m-%d").date()
+            except ValueError:
+                selected_date = datetime.now().date()
+        
         weekday = selected_date.weekday()
     else:
         weekday = datetime.now().weekday()
