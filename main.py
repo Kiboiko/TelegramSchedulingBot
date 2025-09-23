@@ -1,6 +1,6 @@
 import sys
 
-sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\shedule_app")
 
 import asyncio
 import json
@@ -41,7 +41,7 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 BOOKINGS_FILE = "bookings.json"
-CREDENTIALS_PATH = r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\credentials.json"
+CREDENTIALS_PATH = r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\credentials.json"
 #SPREADSHEET_ID = "1r1MU8k8umwHx_E4Z-jFHRJ-kdwC43Jw0nwpVeH7T1GU"
 SPREADSHEET_ID = "1gFtQ7UJstu-Uv_BpgCUp24unsVT9oajSyWxU0j0GMpg"
 ADMIN_IDS = [1180878673, 973231400, 1312414595]
@@ -67,25 +67,181 @@ def is_admin(user_id: int) -> bool:
     """Проверяет, является ли пользователь администратором"""
     return user_id in ADMIN_IDS
 
-def _create_empty_time_slots() -> Dict[time, Dict]:
-    """Создает словарь со всеми временными интервалами с 9:00 до 20:00"""
+def _create_empty_time_slots(selected_date=None) -> Dict[time, Dict]:
+    """
+    Создает словарь со временными интервалами в зависимости от дня недели
+    Будни (пн-пт): 14:00-20:00 с шагом 15 минут
+    Выходные (сб-вс): 10:00-15:00 с шагом 15 минут
+    """
     from datetime import time
     
     time_slots = {}
-    current_time = time(9, 0)
-    end_time = time(20, 0)
+    
+    # Определяем день недели (0-пн, 6-вс)
+    if selected_date:
+        weekday = selected_date.weekday()  # 0-пн, 1-вт, ..., 5-сб, 6-вс
+    else:
+        weekday = datetime.now().weekday()
+    
+    # Настройки для будних дней (пн-пт)
+    if weekday <= 4:  # 0-4 = понедельник-пятница
+        start_hour, start_minute = 14, 0
+        end_hour, end_minute = 20, 0
+    else:  # 5-6 = суббота-воскресенье
+        start_hour, start_minute = 10, 0
+        end_hour, end_minute = 15, 0
+    
+    current_time = time(start_hour, start_minute)
+    end_time = time(end_hour, end_minute)
     
     while current_time <= end_time:
         time_slots[current_time] = {
             'distribution': {},
-            'condition_result': True  # Для пустых интервалов условие всегда выполняется
+            'condition_result': True
         }
-        # Добавляем 30 минут для следующего интервала
-        next_time = (current_time.hour * 60 + current_time.minute + 30) // 60
-        next_minute = (current_time.hour * 60 + current_time.minute + 30) % 60
-        current_time = time(next_time, next_minute)
+        # Добавляем 15 минут для следующего интервала
+        total_minutes = current_time.hour * 60 + current_time.minute + 15
+        next_hour = total_minutes // 60
+        next_minute = total_minutes % 60
+        current_time = time(next_hour, next_minute)
     
     return time_slots
+
+def generate_time_range_keyboard_with_availability(
+    selected_date=None,
+    start_time=None,
+    end_time=None,
+    availability_map: Dict[time, bool] = None
+):
+    """Генерирует клавиатуру выбора времени с учетом доступности и дня недели"""
+    builder = InlineKeyboardBuilder()
+
+    # Определяем рабочие часы в зависимости от дня недели
+    if selected_date:
+        weekday = selected_date.weekday()
+        if weekday <= 4:  # будни
+            start = datetime.strptime("14:00", "%H:%M")
+            end = datetime.strptime("20:00", "%H:%M")
+        else:  # выходные
+            start = datetime.strptime("10:00", "%H:%M")
+            end = datetime.strptime("15:00", "%H:%M")
+    else:
+        # По умолчанию используем будний день
+        start = datetime.strptime("14:00", "%H:%M")
+        end = datetime.strptime("20:00", "%H:%M")
+
+    current = start
+
+    while current <= end:
+        time_str = current.strftime("%H:%M")
+        time_obj = current.time()
+
+        # Если availability_map = None (для преподавателей), все слоты доступны
+        is_available = True
+        if availability_map is not None:  # Только если есть карта доступности
+            is_available = availability_map.get(time_obj, True)
+
+        # Определяем стиль кнопки на основе доступности
+        if start_time and time_str == start_time:
+            button_text = "🟢 " + time_str
+        elif end_time and time_str == end_time:
+            button_text = "🔴 " + time_str
+        elif (start_time and end_time and
+              datetime.strptime(start_time, "%H:%M").time() < time_obj <
+              datetime.strptime(end_time, "%H:%M").time()):
+            button_text = "🔵 " + time_str
+        else:
+            button_text = time_str
+
+        # Для учеников показываем заблокированные слоты
+        if availability_map is not None and not is_available:
+            button_text = "🔒 " + time_str
+            callback_data = "time_slot_unavailable"
+        else:
+            callback_data = f"time_point_{time_str}"
+
+        builder.add(types.InlineKeyboardButton(
+            text=button_text,
+            callback_data=callback_data
+        ))
+        current += timedelta(minutes=15)  # Шаг 15 минут вместо 30
+
+    builder.adjust(4)
+
+    # Добавляем кнопки управления
+    control_buttons = []
+    if availability_map is not None:  # Статистика только для учеников
+        available_count = sum(1 for available in availability_map.values() if available)
+        total_count = len(availability_map)
+        control_buttons.append(types.InlineKeyboardButton(
+            text=f"Доступно: {available_count}/{total_count}",
+            callback_data="availability_info"
+        ))
+
+    control_buttons.extend([
+        types.InlineKeyboardButton(
+            text="Выбрать начало 🟢",
+            callback_data="select_start_mode"
+        ),
+        types.InlineKeyboardButton(
+            text="Выбирать конец 🔴",
+            callback_data="select_end_mode"
+        )
+    ])
+
+    builder.row(*control_buttons)
+
+    if start_time and end_time:
+        # Для преподавателей всегда доступно подтверждение
+        if availability_map is None:
+            builder.row(
+                types.InlineKeyboardButton(
+                    text="✅ Подтвердить время",
+                    callback_data="confirm_time_range"
+                )
+            )
+        else:
+            # Для учеников проверяем доступность всего интервала
+            is_interval_available = True
+            
+            # Проверяем все временные слоты в выбранном интервале
+            start_obj = datetime.strptime(start_time, "%H:%M").time()
+            end_obj = datetime.strptime(end_time, "%H:%M").time()
+            
+            current_check = start_obj
+            while current_check < end_obj:
+                if current_check not in availability_map or not availability_map[current_check]:
+                    is_interval_available = False
+                    break
+                # Переходим к следующему 15-минутному слоту
+                total_minutes = current_check.hour * 60 + current_check.minute + 15
+                next_hour = total_minutes // 60
+                next_minute = total_minutes % 60
+                current_check = time(next_hour, next_minute)
+            
+            if is_interval_available:
+                builder.row(
+                    types.InlineKeyboardButton(
+                        text="✅ Подтвердить время",
+                        callback_data="confirm_time_range"
+                    )
+                )
+            else:
+                builder.row(
+                    types.InlineKeyboardButton(
+                        text="❌ Интервал содержит недоступные слоты",
+                        callback_data="interval_contains_unavailable"
+                    )
+                )
+
+    builder.row(
+        types.InlineKeyboardButton(
+            text="❌ Отменить",
+            callback_data="cancel_time_selection"
+        )
+    )
+
+    return builder.as_markup()
 
 class BookingStates(StatesGroup):
     SELECT_ROLE = State()
@@ -160,10 +316,10 @@ dp.update.middleware(RoleCheckMiddleware())
 
 def get_subject_distribution_by_time(loader, target_date: str, condition_check: bool = True) -> Dict[time, Dict]:
     """
-    Получает распределение тем занятий по получасовым интервалам для указанной даты
+    Получает распределение тем занятий по 15-минутным интервалам для указанной даты
+    с учетом дня недели
     """
-    from datetime import time
-    from typing import Dict
+    from datetime import time, datetime
     
     # Загружаем данные студентов
     student_sheet = loader._get_sheet_data("Ученики бот")
@@ -171,19 +327,25 @@ def get_subject_distribution_by_time(loader, target_date: str, condition_check: 
         logger.error("Лист 'Ученики' не найден")
         return _create_empty_time_slots()
     
+    # Парсим дату для определения дня недели
+    try:
+        date_obj = datetime.strptime(target_date, "%d.%m.%Y").date()
+    except ValueError:
+        date_obj = datetime.now().date()
+    
     # Находим колонки для указанной даты
     date_columns = loader._find_date_columns(student_sheet, target_date)
     if date_columns == (-1, -1):
         logger.error(f"Дата {target_date} не найдена в листе учеников")
-        return _create_empty_time_slots()
+        return _create_empty_time_slots(date_obj)
     
     start_col, end_col = date_columns
     
     # Загружаем план обучения
     loader._load_study_plan_cache()
     
-    # Создаем все временные интервалы с 9:00 до 20:00 с шагом 30 минут
-    time_slots = _create_empty_time_slots()
+    # Создаем временные интервалы в зависимости от дня недели
+    time_slots = _create_empty_time_slots(date_obj)
     
     # Обрабатываем каждого студента
     for row in student_sheet[1:]:  # Пропускаем заголовок
@@ -230,16 +392,22 @@ def get_subject_distribution_by_time(loader, target_date: str, condition_check: 
                 lesson_start = time(start_hour, start_minute)
                 lesson_end = time(end_hour, end_minute)
                 
-                # Находим все получасовые интервалы, попадающие в занятие
-                current_interval = time(9, 0)
-                while current_interval <= time(20, 0):
-                    interval_end = _add_minutes_to_time(current_interval, 30)
+                # Находим все 15-минутные интервалы, попадающие в занятие
+                current_interval = min(time_slots.keys())  # Начинаем с первого доступного времени
+                while current_interval <= max(time_slots.keys()):
+                    # Вычисляем конец интервала (15 минут)
+                    total_minutes = current_interval.hour * 60 + current_interval.minute + 15
+                    interval_end_hour = total_minutes // 60
+                    interval_end_minute = total_minutes % 60
+                    interval_end = time(interval_end_hour, interval_end_minute)
+                    
                     if (current_interval >= lesson_start and interval_end <= lesson_end):
                         # Этот интервал полностью внутри занятия
                         if topic not in time_slots[current_interval]['distribution']:
                             time_slots[current_interval]['distribution'][topic] = 0
                         time_slots[current_interval]['distribution'][topic] += 1
                     
+                    # Переходим к следующему интервалу
                     current_interval = interval_end
                     
         except (ValueError, IndexError) as e:
@@ -266,7 +434,7 @@ def check_student_availability_for_slots(
     target_date: date,
     start_time: time,
     end_time: time,
-    interval_minutes: int = 30
+    interval_minutes: int = 15
 ) -> Dict[time, bool]:
     result = {}
     current_time = start_time
@@ -346,127 +514,127 @@ def check_student_availability_for_slots(
     
     return result
 
-def generate_time_range_keyboard_with_availability(
-    selected_date=None,
-    start_time=None,
-    end_time=None,
-    availability_map: Dict[time, bool] = None
-):
-    """Генерирует клавиатуру выбора времени с учетом доступности"""
-    builder = InlineKeyboardBuilder()
+# def generate_time_range_keyboard_with_availability(
+#     selected_date=None,
+#     start_time=None,
+#     end_time=None,
+#     availability_map: Dict[time, bool] = None
+# ):
+#     """Генерирует клавиатуру выбора времени с учетом доступности"""
+#     builder = InlineKeyboardBuilder()
 
-    # Определяем рабочие часы (9:00 - 20:00)
-    start = datetime.strptime("09:00", "%H:%M")
-    end = datetime.strptime("20:00", "%H:%M")
-    current = start
+#     # Определяем рабочие часы (9:00 - 20:00)
+#     start = datetime.strptime("09:00", "%H:%M")
+#     end = datetime.strptime("20:00", "%H:%M")
+#     current = start
 
-    while current <= end:
-        time_str = current.strftime("%H:%M")
-        time_obj = current.time()
+#     while current <= end:
+#         time_str = current.strftime("%H:%M")
+#         time_obj = current.time()
 
-        # Если availability_map = None (для преподавателей), все слоты доступны
-        is_available = True
-        if availability_map is not None:  # Только если есть карта доступности
-            is_available = availability_map.get(time_obj, True)
+#         # Если availability_map = None (для преподавателей), все слоты доступны
+#         is_available = True
+#         if availability_map is not None:  # Только если есть карта доступности
+#             is_available = availability_map.get(time_obj, True)
 
-        # Определяем стиль кнопки на основе доступности
-        if start_time and time_str == start_time:
-            button_text = "🟢 " + time_str
-        elif end_time and time_str == end_time:
-            button_text = "🔴 " + time_str
-        elif (start_time and end_time and
-              datetime.strptime(start_time, "%H:%M").time() < time_obj <
-              datetime.strptime(end_time, "%H:%M").time()):
-            button_text = "🔵 " + time_str
-        else:
-            button_text = time_str
+#         # Определяем стиль кнопки на основе доступности
+#         if start_time and time_str == start_time:
+#             button_text = "🟢 " + time_str
+#         elif end_time and time_str == end_time:
+#             button_text = "🔴 " + time_str
+#         elif (start_time and end_time and
+#               datetime.strptime(start_time, "%H:%M").time() < time_obj <
+#               datetime.strptime(end_time, "%H:%M").time()):
+#             button_text = "🔵 " + time_str
+#         else:
+#             button_text = time_str
 
-        # Для учеников показываем заблокированные слоты
-        if availability_map is not None and not is_available:
-            button_text = "🔒 " + time_str
-            callback_data = "time_slot_unavailable"
-        else:
-            callback_data = f"time_point_{time_str}"
+#         # Для учеников показываем заблокированные слоты
+#         if availability_map is not None and not is_available:
+#             button_text = "🔒 " + time_str
+#             callback_data = "time_slot_unavailable"
+#         else:
+#             callback_data = f"time_point_{time_str}"
 
-        builder.add(types.InlineKeyboardButton(
-            text=button_text,
-            callback_data=callback_data
-        ))
-        current += timedelta(minutes=30)
+#         builder.add(types.InlineKeyboardButton(
+#             text=button_text,
+#             callback_data=callback_data
+#         ))
+#         current += timedelta(minutes=30)
 
-    builder.adjust(4)
+#     builder.adjust(4)
 
-    # Добавляем кнопки управления
-    control_buttons = []
-    if availability_map is not None:  # Статистика только для учеников
-        available_count = sum(1 for available in availability_map.values() if available)
-        total_count = len(availability_map)
-        control_buttons.append(types.InlineKeyboardButton(
-            text=f"Доступно: {available_count}/{total_count}",
-            callback_data="availability_info"
-        ))
+#     # Добавляем кнопки управления
+#     control_buttons = []
+#     if availability_map is not None:  # Статистика только для учеников
+#         available_count = sum(1 for available in availability_map.values() if available)
+#         total_count = len(availability_map)
+#         control_buttons.append(types.InlineKeyboardButton(
+#             text=f"Доступно: {available_count}/{total_count}",
+#             callback_data="availability_info"
+#         ))
 
-    control_buttons.extend([
-        types.InlineKeyboardButton(
-            text="Выбрать начало 🟢",
-            callback_data="select_start_mode"
-        ),
-        types.InlineKeyboardButton(
-            text="Выбирать конец 🔴",
-            callback_data="select_end_mode"
-        )
-    ])
+#     control_buttons.extend([
+#         types.InlineKeyboardButton(
+#             text="Выбрать начало 🟢",
+#             callback_data="select_start_mode"
+#         ),
+#         types.InlineKeyboardButton(
+#             text="Выбирать конец 🔴",
+#             callback_data="select_end_mode"
+#         )
+#     ])
 
-    builder.row(*control_buttons)
+#     builder.row(*control_buttons)
 
-    if start_time and end_time:
-        # Для преподавателей всегда доступно подтверждение
-        if availability_map is None:
-            builder.row(
-                types.InlineKeyboardButton(
-                    text="✅ Подтвердить время",
-                    callback_data="confirm_time_range"
-                )
-            )
-        else:
-            # Для учеников проверяем доступность всего интервала
-            is_interval_available = True
+#     if start_time and end_time:
+#         # Для преподавателей всегда доступно подтверждение
+#         if availability_map is None:
+#             builder.row(
+#                 types.InlineKeyboardButton(
+#                     text="✅ Подтвердить время",
+#                     callback_data="confirm_time_range"
+#                 )
+#             )
+#         else:
+#             # Для учеников проверяем доступность всего интервала
+#             is_interval_available = True
             
-            # Проверяем все временные слоты в выбранном интервале
-            start_obj = datetime.strptime(start_time, "%H:%M").time()
-            end_obj = datetime.strptime(end_time, "%H:%M").time()
+#             # Проверяем все временные слоты в выбранном интервале
+#             start_obj = datetime.strptime(start_time, "%H:%M").time()
+#             end_obj = datetime.strptime(end_time, "%H:%M").time()
             
-            current_check = start_obj
-            while current_check < end_obj:
-                if current_check not in availability_map or not availability_map[current_check]:
-                    is_interval_available = False
-                    break
-                # Переходим к следующему получасовому слоту
-                current_check = School.add_minutes_to_time(current_check, 30)
+#             current_check = start_obj
+#             while current_check < end_obj:
+#                 if current_check not in availability_map or not availability_map[current_check]:
+#                     is_interval_available = False
+#                     break
+#                 # Переходим к следующему получасовому слоту
+#                 current_check = School.add_minutes_to_time(current_check, 30)
             
-            if is_interval_available:
-                builder.row(
-                    types.InlineKeyboardButton(
-                        text="✅ Подтвердить время",
-                        callback_data="confirm_time_range"
-                    )
-                )
-            else:
-                builder.row(
-                    types.InlineKeyboardButton(
-                        text="❌ Интервал содержит недоступные слоты",
-                        callback_data="interval_contains_unavailable"
-                    )
-                )
+#             if is_interval_available:
+#                 builder.row(
+#                     types.InlineKeyboardButton(
+#                         text="✅ Подтвердить время",
+#                         callback_data="confirm_time_range"
+#                     )
+#                 )
+#             else:
+#                 builder.row(
+#                     types.InlineKeyboardButton(
+#                         text="❌ Интервал содержит недоступные слоты",
+#                         callback_data="interval_contains_unavailable"
+#                     )
+#                 )
 
-    builder.row(
-        types.InlineKeyboardButton(
-            text="❌ Отменить",
-            callback_data="cancel_time_selection"
-        )
-    )
+#     builder.row(
+#         types.InlineKeyboardButton(
+#             text="❌ Отменить",
+#             callback_data="cancel_time_selection"
+#         )
+#     )
 
-    return builder.as_markup()
+#     return builder.as_markup()
 
 @dp.callback_query(BookingStates.SELECT_TIME_RANGE, F.data == "interval_contains_unavailable")
 async def handle_interval_contains_unavailable(callback: types.CallbackQuery, state: FSMContext):
@@ -1682,7 +1850,24 @@ async def process_student_subject(callback: types.CallbackQuery, state: FSMConte
     )
     await state.set_state(BookingStates.SELECT_DATE)
     await callback.answer()
-
+    
+def get_time_range_for_date(selected_date=None):
+    """
+    Возвращает временной диапазон и шаг в зависимости от дня недели
+    """
+    if selected_date:
+        weekday = selected_date.weekday()
+    else:
+        weekday = datetime.now().weekday()
+    
+    if weekday <= 4:  # будни (пн-пт)
+        start_time = time(14, 0)
+        end_time = time(20, 0)
+    else:  # выходные (сб-вс)
+        start_time = time(10, 0)
+        end_time = time(15, 0)
+    
+    return start_time, end_time, 15  # шаг 15 минут
 
 @dp.callback_query(BookingStates.SELECT_DATE, F.data.startswith("calendar_day_"))
 async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
@@ -1699,9 +1884,6 @@ async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
         state_data = await state.get_data()
         role = state_data.get('user_role')
         subject = state_data.get('subject') if role == 'student' else None
-
-        # Проверяем существующие брони
-        
 
         # Для учеников: проверяем доступность временных слотов
         availability_map = None
@@ -1722,10 +1904,13 @@ async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
                 
                 # Получаем всех студентов и преподавателей из Google Sheets
                 all_teachers, all_students = loader.load_data()
-                distribution = get_subject_distribution_by_time(loader, formatted_date)
-                logger.info(temp_student)
+                
+                # Получаем временной диапазон для выбранной даты
+                start_time_range, end_time_range, time_step = get_time_range_for_date(selected_date)
+                
                 # Логируем загруженные данные
                 logger.info(f"Используется: {len(all_teachers)} преподавателей, {len(all_students)} студентов")
+                logger.info(f"Временной диапазон: {start_time_range}-{end_time_range} (шаг: {time_step} мин)")
                 
                 # Показываем сообщение о загрузке
                 await callback.message.edit_text(
@@ -1740,9 +1925,9 @@ async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
                     all_students=all_students,
                     teachers=all_teachers,
                     target_date=selected_date,
-                    start_time=time(9, 0),
-                    end_time=time(20, 0),
-                    interval_minutes=30
+                    start_time=start_time_range,
+                    end_time=end_time_range,
+                    interval_minutes=time_step
                 )
                 
             except Exception as e:
@@ -1761,15 +1946,20 @@ async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
             availability_map=availability_map
         )
 
-        message_text = f"📅 Выбрана дата: {day}.{month}.{year}\n"
+        # Формируем текст сообщения с информацией о дне недели
+        weekday_names = ["понедельник", "вторник", "среду", "четверг", "пятницу", "субботу", "воскресенье"]
+        weekday_name = weekday_names[selected_date.weekday()]
+        start_time_range, end_time_range, time_step = get_time_range_for_date(selected_date)
+        
+        message_text = f"📅 Выбрана дата: {day}.{month}.{year} ({weekday_name})\n"
+        message_text += f"⏰ Доступное время: {start_time_range.strftime('%H:%M')}-{end_time_range.strftime('%H:%M')}\n"
+        message_text += f"📊 Шаг времени: {time_step} минут\n"
         
         if role == 'student' and availability_map:
             available_count = sum(1 for available in availability_map.values() if available)
             total_count = len(availability_map)
             message_text += f"✅ Доступно слотов: {available_count}/{total_count}\n"
-            message_text += "🔒 - время недоступно для бронирования\n"
-            message_text += "🟢 - выберите начало занятия\n"
-            message_text += "🔴 - выберите окончание занятия\n\n"
+            message_text += "🔒 - время недоступно для бронирования\n\n"
 
         message_text += "Как выбрать время:\n"
         message_text += "1. Нажмите 'Выбрать начало 🟢'\n"
