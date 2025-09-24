@@ -25,10 +25,11 @@ class Person:
 
 class Student(Person):
     def __init__(self, name: str, start_of_study_time: str, end_of_study_time: str, 
-                 subject_id: int, need_for_attention: int):
+                 subject_id: int, need_for_attention: int, current_topic: str = None):
         super().__init__(name, start_of_study_time, end_of_study_time)
         self.subject_id = subject_id
         self.need_for_attention = need_for_attention
+        self.current_topic = current_topic  # Текущая тема занятия
     
     def __str__(self):
         return f"Класс: Ученик\nИмя: {self.name}\n" \

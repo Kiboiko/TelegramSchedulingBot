@@ -1700,7 +1700,8 @@ async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
         if role == 'student' and subject:
             try:
                 loader = GoogleSheetsDataLoader(CREDENTIALS_PATH, SPREADSHEET_ID, formatted_date)
-                topic = loader.get_student_topic_by_user_id(str(user_id), formatted_date)
+                topic = loader.get_student_topic_by_user_id(str(user_id), formatted_date, str(subject))
+            
                 if not topic:
                     topic = str(subject)
                 # Создаем временного студента для проверки
