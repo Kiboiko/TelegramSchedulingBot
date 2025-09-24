@@ -205,10 +205,14 @@ class GoogleSheetsDataLoader:
     def _load_subject_map(self) -> Dict[str, int]:
         subject_map = {}
         sheet = self._get_sheet_data("Предметы бот")
+
+        logger.info("=== ПАРСИНГ ЛИСТА 'Предметы бот' ===")
         if not sheet:
+            logger.warning("Лист 'Предметы бот' не найден или пуст")
             return subject_map
 
-        for row in sheet[1:]:
+        for i, row in enumerate(sheet):
+            logger.info(f"Строка {i}: {row}")
             if len(row) < 2:
                 continue
 
@@ -216,9 +220,12 @@ class GoogleSheetsDataLoader:
             try:
                 subject_id = int(row[1])
                 subject_map[subject_name] = subject_id
+                logger.info(f"Добавлено в subject_map: '{subject_name}' -> {subject_id}")
             except ValueError:
+                logger.warning(f"Не удалось преобразовать ID в числе для строки {i}: {row[1]}")
                 continue
 
+        logger.info(f"Итоговый subject_map: {subject_map}")
         return subject_map
 
     def _load_study_plan_cache(self):
