@@ -24,9 +24,12 @@ WORKING_HOURS = {
     "start": time(9, 0),
     "end": time(20, 0)
 }
+# config.py (дополнение)
 FEEDBACK_CONFIG = {
-    "feedback_sheet": "обратная связь ученики",
-    "feedback_file": "feedback.json",
+    "feedback_sheet_students": "обратная связь ученики",
+    "feedback_sheet_teachers": "обратная связь преподаватели",  # НОВОЕ
+    "feedback_file_students": "feedback.json",
+    "feedback_file_teachers": "feedback_teachers.json",  # НОВОЕ
     "feedback_questions": {
         "good": "Хорошо",
         "could_be_better": "Могло быть лучше",
@@ -35,7 +38,7 @@ FEEDBACK_CONFIG = {
     "admin_phone": "+79001372727"
 }
 
-# Добавить время проверки обратной связи (каждые 30 минут)
+# Интервал проверки отзывов для обоих типов пользователей
 FEEDBACK_CHECK_INTERVAL = 1800  # 30 минут в секундах
 
 def is_admin(user_id: int) -> bool:
