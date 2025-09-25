@@ -1,7 +1,7 @@
 # main.py
 import sys
 
-sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\shedule_app")
 
 import asyncio
 import json
@@ -1044,13 +1044,17 @@ async def select_end_mode_handler(callback: types.CallbackQuery, state: FSMConte
 
     await state.update_data(selecting_mode='end')
 
+    # Получаем выбранную дату для правильного определения временного диапазона
+    selected_date = data.get('selected_date')
+
     await callback.message.edit_text(
         f"Текущее начало: {data['time_start']}\n"
         "Выберите время окончания (красный маркер):",
-        reply_markup=generate_time_range_keyboard(
-            selected_date=data.get('selected_date'),
+        reply_markup=generate_time_range_keyboard_with_availability(
+            selected_date=selected_date,  # Передаем дату для правильного диапазона
             start_time=data['time_start'],
-            end_time=data.get('time_end')
+            end_time=data.get('time_end'),
+            availability_map=data.get('availability_map')
         )
     )
     await callback.answer()
@@ -2299,6 +2303,7 @@ async def process_time_point(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     selecting_mode = data.get('selecting_mode', 'start')
     availability_map = data.get('availability_map')
+    selected_date = data.get('selected_date')
 
     # Проверяем доступность слота
     if availability_map is not None:  # Только для учеников проверяем доступность
@@ -2327,7 +2332,7 @@ async def process_time_point(callback: types.CallbackQuery, state: FSMContext):
             "Теперь нажмите 'Выбрать конец 🔴' и выберите время окончания\n"
             "Выбирайте только доступные времена (без 🔒)",
             reply_markup=generate_time_range_keyboard_with_availability(
-                selected_date=data.get('selected_date'),
+                selected_date=selected_date,
                 start_time=time_str,
                 end_time=data.get('time_end'),
                 availability_map=availability_map
@@ -2355,7 +2360,7 @@ async def process_time_point(callback: types.CallbackQuery, state: FSMContext):
             "Если выбор корректен, нажмите '✅ Подтвердить время'\n"
             "Или измените начало/конец с помощью кнопок выше",
             reply_markup=generate_time_range_keyboard_with_availability(
-                selected_date=data.get('selected_date'),
+                selected_date=selected_date,
                 start_time=data['time_start'],
                 end_time=time_str,
                 availability_map=availability_map
@@ -2369,6 +2374,7 @@ async def process_time_point(callback: types.CallbackQuery, state: FSMContext):
 async def switch_selection_mode(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     availability_map = data.get('availability_map')
+    selected_date = data.get('selected_date')  # Получаем дату
 
     if callback.data == "select_start_mode":
         await state.update_data(selecting_mode='start')
@@ -2399,14 +2405,13 @@ async def switch_selection_mode(callback: types.CallbackQuery, state: FSMContext
     await callback.message.edit_text(
         message_text,
         reply_markup=generate_time_range_keyboard_with_availability(
-            selected_date=data.get('selected_date'),
+            selected_date=selected_date,  # Передаем дату
             start_time=time_start,
             end_time=time_end,
             availability_map=availability_map
         )
     )
     await callback.answer()
-
 
 @dp.callback_query(BookingStates.SELECT_TIME_RANGE, F.data == "confirm_time_range")
 async def confirm_time_range(callback: types.CallbackQuery, state: FSMContext):
