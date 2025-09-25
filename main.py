@@ -1228,25 +1228,282 @@ async def generate_main_menu(user_id: int) -> ReplyKeyboardMarkup:
 
 @dp.message(F.text == "🎯 Указать возможности")
 async def specify_possibilities(message: types.Message, state: FSMContext):
-    """Начало процесса указания возможностей"""
+    """Начало процесса указания возможностей с проверками доступности"""
     user_id = message.from_user.id
-    
+    logger.info(f"specify_possibilities вызвана для user_id: {user_id}")
+    await state.update_data(user_id=user_id)
     # Проверяем, есть ли ФИО
     user_name = storage.get_user_name(user_id)
     if not user_name:
         await message.answer("Введите ваше полное ФИО:")
-        await state.set_state(BookingStates.INPUT_NAME)
+        await state.set_state(BookingStates.INPUT_NAME_FOR_POSSIBILITY)
         return
     
     await state.update_data(user_name=user_name)
     
-    # Начинаем процесс указания возможностей
-    await message.answer(
-        "🎯 Укажите ваши возможности для занятий\n\n"
-        "Сначала выберите дату:",
+    # Получаем доступные роли пользователя из storage
+    user_roles = storage.get_user_roles(user_id)
+    if not user_roles:
+        await message.answer(
+            "⏳ Обратитесь к администратору для получения ролей \n Телефон администратора: +79001372727",
+            reply_markup=await generate_main_menu(user_id)
+        )
+        return
+    
+    # Проверяем доступность ролей для указания возможностей (аналогично бронированиям)
+    available_possibility_roles = []
+    
+    if 'teacher' in user_roles:
+        teacher_subjects = storage.get_teacher_subjects(user_id)
+        if teacher_subjects:  # Только если есть предметы
+            available_possibility_roles.append('teacher')
+    
+    if 'student' in user_roles:
+        available_subjects = storage.get_available_subjects_for_student(user_id)
+        if available_subjects:  # Только если есть доступные предметы
+            available_possibility_roles.append('student')
+    
+    if 'parent' in user_roles:
+        children_ids = storage.get_parent_children(user_id)
+        if children_ids:  # Только если есть привязанные дети
+            available_possibility_roles.append('parent')
+    
+    if not available_possibility_roles:
+        await message.answer(
+            "❌ У вас нет подходящих данных для указания возможностей.\n"
+            "Возможные причины:\n"
+            "• Для преподавателя: не назначены предметы\n"
+            "• Для ученика: нет доступных предметов\n"
+            "• Для родителя: нет привязанных детей\n\n"
+            "Обратитесь к администратору для настройки.\n Телефон администратора: +79001372727",
+            reply_markup=await generate_main_menu(user_id)
+        )
+        return
+    
+    await state.update_data(available_possibility_roles=available_possibility_roles)
+    
+    # Если только одна доступная роль, автоматически выбираем ее
+    if len(available_possibility_roles) == 1:
+        role = available_possibility_roles[0]
+        await process_possibility_role_selection(message, state, role)
+    else:
+        # Если несколько ролей, показываем выбор
+        builder = InlineKeyboardBuilder()
+        
+        if 'teacher' in available_possibility_roles:
+            builder.button(text="👨‍🏫 Как преподаватель", callback_data="possibility_role_teacher")
+        
+        if 'student' in available_possibility_roles:
+            builder.button(text="👨‍🎓 Как ученик", callback_data="possibility_role_student")
+        
+        if 'parent' in available_possibility_roles:
+            builder.button(text="👨‍👩‍👧‍👦 Как родитель", callback_data="possibility_role_parent")
+        
+        builder.row(
+            types.InlineKeyboardButton(
+                text="❌ Отмена",
+                callback_data="possibility_cancel"
+            )
+        )
+        
+        await message.answer(
+            "🎯 Выберите роль для указания возможностей:",
+            reply_markup=builder.as_markup()
+        )
+        await state.set_state(BookingStates.SELECT_POSSIBILITY_ROLE)
+
+@dp.message(BookingStates.INPUT_NAME_FOR_POSSIBILITY)
+async def process_name_for_possibility(message: types.Message, state: FSMContext):
+    """Обработка ввода имени для указания возможностей"""
+    user_id = message.from_user.id
+    user_name = message.text.strip()
+
+    if len(user_name.split()) < 2:
+        await message.answer("Пожалуйста, введите полное ФИО (минимум имя и фамилию)")
+        return
+
+    # Сохраняем имя
+    storage.save_user_name(user_id, user_name)
+    await state.update_data(user_name=user_name)
+
+    # Продолжаем процесс указания возможностей
+    await specify_possibilities(message, state)
+
+@dp.callback_query(F.data.startswith("possibility_role_"))
+async def process_possibility_role_selection_callback(callback: types.CallbackQuery, state: FSMContext):
+    """Обработка выбора роли для возможностей через callback"""
+    role = callback.data.replace("possibility_role_", "")
+    await process_possibility_role_selection(callback.message, state, role)
+    await callback.answer()
+
+async def process_possibility_role_selection(message: types.Message, state: FSMContext, role: str):
+    """Обработка выбора роли для возможностей с проверками доступности"""
+    data = await state.get_data()
+    user_id = data.get('user_id') or message.from_user.id
+    logger.info(f"Функция вызвана для user_id: {user_id}, тип: {type(user_id)}")
+    await state.update_data(possibility_role=role)
+    
+    if role == 'teacher':
+        # Для преподавателя получаем предметы (аналогично бронированию)
+        teacher_subjects = storage.get_teacher_subjects(user_id)
+        if not teacher_subjects:
+            await message.answer(
+                "У вас нет назначенных предметов. Обратитесь к администратору.",
+                reply_markup=await generate_main_menu(user_id)
+            )
+            return
+
+        # ДЕБАГ: Обработка объединенных предметов (как в бронировании)
+        logger.info(f"Teacher {user_id} subjects: {teacher_subjects} (type: {type(teacher_subjects)})")
+        
+        if (teacher_subjects and
+                isinstance(teacher_subjects, list) and
+                len(teacher_subjects) == 1 and
+                teacher_subjects[0].isdigit() and
+                len(teacher_subjects[0]) > 1):
+            combined_subject = teacher_subjects[0]
+            teacher_subjects = [digit for digit in combined_subject]
+            logger.info(f"Fixed combined subjects: {teacher_subjects}")
+
+        await state.update_data(possibility_subjects=teacher_subjects)
+        subject_names = [SUBJECTS.get(subj_id, f"Предмет {subj_id}") for subj_id in teacher_subjects]
+
+        await message.answer(
+            f"🎯 Вы указали возможности как преподаватель\n"
+            f"📚 Ваши предметы: {', '.join(subject_names)}\n"
+            "Теперь выберите дату:",
+            reply_markup=generate_calendar()
+        )
+        await state.set_state(BookingStates.SELECT_POSSIBILITY_DATE)
+
+    elif role == 'student':
+        # Для ученика получаем доступные предметы (аналогично бронированию)
+        available_subjects = storage.get_available_subjects_for_student(user_id)
+        if not available_subjects:
+            await message.answer(
+                "У вас нет доступных предметов. Обратитесь к администратору.",
+                reply_markup=await generate_main_menu(user_id)
+            )
+            return
+
+        await message.answer(
+            "🎯 Вы указали возможности как ученик\n"
+            "Выберите предмет для которого указываете возможности:",
+            reply_markup=generate_subjects_keyboard(available_subjects=available_subjects)
+        )
+        await state.set_state(BookingStates.SELECT_POSSIBILITY_SUBJECT)
+
+    elif role == 'parent':
+        # Для родителя получаем детей (аналогично бронированию)
+        children_ids = storage.get_parent_children(user_id)
+        if not children_ids:
+            await message.answer(
+                "У вас нет привязанных детей. Обратитесь к администратору.",
+                reply_markup=await generate_main_menu(user_id)
+            )
+            return
+
+        builder = InlineKeyboardBuilder()
+        for child_id in children_ids:
+            child_info = storage.get_child_info(child_id)
+            child_name = child_info.get('user_name', f'Ученик {child_id}')
+            builder.button(
+                text=f"👶 {child_name}",
+                callback_data=f"possibility_select_child_{child_id}"
+            )
+
+        builder.button(text="❌ Отмена", callback_data="possibility_cancel_child_selection")
+        builder.adjust(1)
+
+        await message.answer(
+            "🎯 Вы указали возможности как родитель\n"
+            "Выберите ребенка для которого указываете возможности:",
+            reply_markup=builder.as_markup()
+        )
+        await state.set_state(BookingStates.PARENT_SELECT_POSSIBILITY_CHILD)
+
+@dp.callback_query(BookingStates.SELECT_POSSIBILITY_SUBJECT, F.data.startswith("subject_"))
+async def process_possibility_subject(callback: types.CallbackQuery, state: FSMContext):
+    """Обработка выбора предмета для возможностей ученика"""
+    subject_id = callback.data.split("_")[1]
+    
+    # Проверяем, доступен ли предмет для пользователя
+    user_id = callback.from_user.id
+    state_data = await state.get_data()
+    role = state_data.get('possibility_role')
+    
+    if role == 'student':
+        available_subjects = storage.get_available_subjects_for_student(user_id)
+    elif role == 'parent':
+        child_id = state_data.get('possibility_child_id')
+        available_subjects = storage.get_available_subjects_for_student(child_id) if child_id else []
+    else:
+        available_subjects = []
+    
+    if subject_id not in available_subjects:
+        await callback.answer(
+            "❌ Этот предмет недоступен для выбора",
+            show_alert=True
+        )
+        return
+    
+    await state.update_data(possibility_subject=subject_id)
+    
+    await callback.message.edit_text(
+        f"🎯 Выбран предмет: {SUBJECTS[subject_id]}\n"
+        "Теперь выберите дату:",
         reply_markup=generate_calendar()
     )
     await state.set_state(BookingStates.SELECT_POSSIBILITY_DATE)
+    await callback.answer()
+
+@dp.callback_query(BookingStates.PARENT_SELECT_POSSIBILITY_CHILD, F.data.startswith("possibility_select_child_"))
+async def process_possibility_child_selection(callback: types.CallbackQuery, state: FSMContext):
+    """Обработка выбора ребенка для возможностей родителя с проверкой доступности"""
+    child_id = int(callback.data.replace("possibility_select_child_", ""))
+    child_info = storage.get_child_info(child_id)
+
+    if not child_info:
+        await callback.answer("Ошибка: информация о ребенке не найдена", show_alert=True)
+        return
+
+    # Проверяем доступные предметы для ребенка (аналогично бронированию)
+    available_subjects = storage.get_available_subjects_for_student(child_id)
+
+    if not available_subjects:
+        await callback.answer(
+            "У ребенка нет доступных предметов. Обратитесь к администратору.",
+            show_alert=True
+        )
+        return
+
+    await state.update_data(
+        possibility_child_id=child_id,
+        possibility_child_name=child_info.get('user_name', ''),
+        possibility_role='student'  # Для возможностей используем роль ученика
+    )
+
+    await callback.message.edit_text(
+        f"🎯 Выбран ребенок: {child_info.get('user_name', '')}\n"
+        "Выберите предмет для которого указываете возможности:",
+        reply_markup=generate_subjects_keyboard(available_subjects=available_subjects)
+    )
+    await state.set_state(BookingStates.SELECT_POSSIBILITY_SUBJECT)
+    await callback.answer()
+
+@dp.callback_query(BookingStates.PARENT_SELECT_POSSIBILITY_CHILD, F.data == "possibility_cancel_child_selection")
+async def cancel_possibility_child_selection(callback: types.CallbackQuery, state: FSMContext):
+    """Отмена выбора ребенка для возможностей"""
+    await callback.message.edit_text("❌ Выбор ребенка отменен")
+    await state.clear()
+
+    user_id = callback.from_user.id
+    await callback.message.answer(
+        "Выберите действие:",
+        reply_markup=await generate_main_menu(user_id)
+    )
+    await callback.answer()
+
 
 @dp.callback_query(BookingStates.SELECT_POSSIBILITY_DATE, F.data.startswith("calendar_day_"))
 async def process_possibility_date(callback: types.CallbackQuery, state: FSMContext):
@@ -1265,16 +1522,37 @@ async def process_possibility_date(callback: types.CallbackQuery, state: FSMCont
             possibility_selecting_mode='start'
         )
         
-        # Переходим к выбору времени
+        # Формируем информационное сообщение в зависимости от роли
+        state_data = await state.get_data()
+        role = state_data.get('possibility_role')
+        
+        message_text = f"📅 Дата: {selected_date.strftime('%d.%m.%Y')}\n"
+        
+        if role == 'teacher':
+            subjects = state_data.get('possibility_subjects', [])
+            subject_names = [SUBJECTS.get(subj, f"Предмет {subj}") for subj in subjects]
+            message_text += f"👨‍🏫 Роль: преподаватель\n"
+            message_text += f"📚 Предметы: {', '.join(subject_names)}\n"
+        elif role == 'student':
+            subject = state_data.get('possibility_subject', '')
+            message_text += f"👨‍🎓 Роль: ученик\n"
+            message_text += f"📚 Предмет: {SUBJECTS.get(subject, subject)}\n"
+        else:  # parent
+            child_name = state_data.get('possibility_child_name', '')
+            subject = state_data.get('possibility_subject', '')
+            message_text += f"👨‍👩‍👧‍👦 Роль: родитель (для {child_name})\n"
+            message_text += f"📚 Предмет: {SUBJECTS.get(subject, subject)}\n"
+        
+        message_text += "\n🎯 Выберите временной интервал для ваших возможностей:\n\n"
+        message_text += "Как выбрать время:\n"
+        message_text += "1. Нажмите 'Выбрать начало 🟢'\n"
+        message_text += "2. Выберите время начала\n"
+        message_text += "3. Нажмите 'Выбирать конец 🔴'\n"
+        message_text += "4. Выберите время окончания\n"
+        message_text += "5. Подтвердите выбор"
+        
         await callback.message.edit_text(
-            f"📅 Дата: {selected_date.strftime('%d.%m.%Y')}\n\n"
-            "🎯 Выберите временной интервал для ваших возможностей:\n\n"
-            "Как выбрать время:\n"
-            "1. Нажмите 'Выбрать начало 🟢'\n"
-            "2. Выберите время начала\n"
-            "3. Нажмите 'Выбирать конец 🔴'\n"
-            "4. Выберите время окончания\n"
-            "5. Подтвердите выбор",
+            message_text,
             reply_markup=generate_possibility_time_keyboard(selected_date=selected_date)
         )
         await state.set_state(BookingStates.SELECT_POSSIBILITY_TIME_RANGE)
@@ -1505,10 +1783,29 @@ async def confirm_possibility_time(callback: types.CallbackQuery, state: FSMCont
         possibility_end_time=time_end
     )
 
-    await callback.message.edit_text(
-        f"⏰ Временной интервал: {time_start} - {time_end}\n\n"
-        "⏱ Введите МИНИМАЛЬНОЕ время занятия в минутах (например, 30):"
-    )
+    # Формируем информационное сообщение
+    role = data.get('possibility_role')
+    message_text = f"⏰ Временной интервал: {time_start} - {time_end}\n\n"
+    
+    if role == 'teacher':
+        subjects = data.get('possibility_subjects', [])
+        subject_names = [SUBJECTS.get(subj, f"Предмет {subj}") for subj in subjects]
+        message_text += f"👨‍🏫 Преподаватель: {data.get('user_name', '')}\n"
+        message_text += f"📚 Предметы: {', '.join(subject_names)}\n"
+    elif role == 'student':
+        subject = data.get('possibility_subject', '')
+        message_text += f"👨‍🎓 Ученик: {data.get('user_name', '')}\n"
+        message_text += f"📚 Предмет: {SUBJECTS.get(subject, subject)}\n"
+    else:  # parent
+        child_name = data.get('possibility_child_name', '')
+        subject = data.get('possibility_subject', '')
+        message_text += f"👨‍👩‍👧‍👦 Родитель: {data.get('user_name', '')}\n"
+        message_text += f"👶 Ребенок: {child_name}\n"
+        message_text += f"📚 Предмет: {SUBJECTS.get(subject, subject)}\n"
+    
+    message_text += "\n⏱ Введите МИНИМАЛЬНОЕ время занятия в минутах (например, 30):"
+
+    await callback.message.edit_text(message_text)
     await state.set_state(BookingStates.INPUT_MIN_DURATION)
     await callback.answer()
 
@@ -1635,31 +1932,64 @@ async def process_confirmation_time(message: types.Message, state: FSMContext):
             await state.clear()
             return
         
+        # Формируем данные возможности в зависимости от роли
         possibility_data = {
             "user_id": message.from_user.id,
             "user_name": data.get('user_name', ''),
+            "role": data.get('possibility_role'),
             "date": data.get('possibility_date'),
             "date_display": data.get('possibility_date_display'),
             "start_time": start_time,
             "end_time": end_time,
             "min_duration_minutes": data.get('possibility_min_duration'),
             "max_duration_minutes": data.get('possibility_max_duration'),
-            "confirmation_hours": confirmation_time
+            "confirmation_hours": confirmation_time,
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
+        
+        # Добавляем специфичные данные в зависимости от роли
+        if data.get('possibility_role') == 'teacher':
+            possibility_data["subjects"] = data.get('possibility_subjects', [])
+        elif data.get('possibility_role') == 'student':
+            possibility_data["subject"] = data.get('possibility_subject', '')
+        else:  # parent
+            possibility_data["child_id"] = data.get('possibility_child_id')
+            possibility_data["child_name"] = data.get('possibility_child_name', '')
+            possibility_data["subject"] = data.get('possibility_subject', '')
         
         # Сохраняем в файл
         success = save_possibility(message.from_user.id, possibility_data)
         
         if success:
-            await message.answer(
-                "✅ Ваши возможности успешно сохранены!\n\n"
-                f"📅 Дата: {data.get('possibility_date_display')}\n"
-                f"⏰ Время: {start_time} - {end_time}\n"
-                f"⏱ Длительность: {data.get('possibility_min_duration')}-{data.get('possibility_max_duration')} мин\n"
-                f"⏳ Подтверждение за: {confirmation_time} часов\n\n"
-                "Эти данные будут использоваться для планирования занятий.",
-                reply_markup=await generate_main_menu(message.from_user.id)
-            )
+            # Формируем информационное сообщение о сохранении
+            role_text = {
+                'teacher': 'преподавателя',
+                'student': 'ученика', 
+                'parent': 'родителя'
+            }.get(data.get('possibility_role'), 'пользователя')
+            
+            message_text = f"✅ Возможности {role_text} успешно сохранены!\n\n"
+            message_text += f"📅 Дата: {data.get('possibility_date_display')}\n"
+            message_text += f"⏰ Время: {start_time} - {end_time}\n"
+            message_text += f"⏱ Длительность: {data.get('possibility_min_duration')}-{data.get('possibility_max_duration')} мин\n"
+            message_text += f"⏳ Подтверждение за: {confirmation_time} часов\n"
+            
+            if data.get('possibility_role') == 'teacher':
+                subjects = data.get('possibility_subjects', [])
+                subject_names = [SUBJECTS.get(subj, f"Предмет {subj}") for subj in subjects]
+                message_text += f"📚 Предметы: {', '.join(subject_names)}\n"
+            elif data.get('possibility_role') == 'student':
+                subject = data.get('possibility_subject', '')
+                message_text += f"📚 Предмет: {SUBJECTS.get(subject, subject)}\n"
+            else:  # parent
+                child_name = data.get('possibility_child_name', '')
+                subject = data.get('possibility_subject', '')
+                message_text += f"👶 Ребенок: {child_name}\n"
+                message_text += f"📚 Предмет: {SUBJECTS.get(subject, subject)}\n"
+            
+            message_text += "\nЭти данные будут использоваться для планирования занятий."
+            
+            await message.answer(message_text, reply_markup=await generate_main_menu(message.from_user.id))
         else:
             await message.answer(
                 "❌ Произошла ошибка при сохранении. Попробуйте позже.",
@@ -1670,6 +2000,19 @@ async def process_confirmation_time(message: types.Message, state: FSMContext):
         
     except ValueError:
         await message.answer("Пожалуйста, введите число (например, 24):")
+
+@dp.callback_query(BookingStates.SELECT_POSSIBILITY_ROLE, F.data == "possibility_cancel")
+async def cancel_possibility_role_selection(callback: types.CallbackQuery, state: FSMContext):
+    """Отмена выбора роли для возможностей"""
+    await callback.message.edit_text("❌ Указание возможностей отменено")
+    await state.clear()
+
+    user_id = callback.from_user.id
+    await callback.message.answer(
+        "Выберите действие:",
+        reply_markup=await generate_main_menu(user_id)
+    )
+    await callback.answer()
 
 @dp.callback_query(BookingStates.SELECT_POSSIBILITY_DATE, F.data.startswith("calendar_change_"))
 async def process_possibility_calendar_change(callback: types.CallbackQuery, state: FSMContext):
