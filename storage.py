@@ -443,3 +443,15 @@ class JSONStorage:
         if not hasattr(self, 'gsheets') or not self.gsheets:
             return False
         return self.gsheets.update_student_booking_cell(user_id, subject_id, date, start_time, end_time)
+    
+    def load_all_bookings(self) -> List[Dict[str, Any]]:
+        """Загружает все бронирования без фильтрации по дате"""
+        try:
+            with open(self.file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return data
+        except (FileNotFoundError, json.JSONDecodeError):
+            return []
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке всех данных: {e}")
+            return []

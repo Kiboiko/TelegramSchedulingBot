@@ -638,7 +638,7 @@ def load_bookings():
 
             if booking_datetime < current_time:
                 continue
-
+            
             booking['date'] = booking_date
             valid_bookings.append(booking)
 
@@ -1356,6 +1356,7 @@ async def generate_main_menu(user_id: int) -> ReplyKeyboardMarkup:
         keyboard_buttons.append([KeyboardButton(text="📅 Забронировать время")])
 
     keyboard_buttons.append([KeyboardButton(text="📋 Мои бронирования")])
+    keyboard_buttons.append([KeyboardButton(text="📚 Прошедшие бронирования")])
     keyboard_buttons.append([KeyboardButton(text="👤 Моя роль")])
     keyboard_buttons.append([KeyboardButton(text="ℹ️ Помощь")])
 
@@ -1621,6 +1622,328 @@ async def start_booking(message: types.Message, state: FSMContext):
         )
         await state.set_state(BookingStates.SELECT_ROLE)
 
+def load_past_bookings():
+    """Загружает прошедшие бронирования"""
+    try:
+        data = storage.load_all_bookings()  # Нужно создать эту функцию в storage.py
+        past_bookings = []
+        current_time = datetime.now()
+
+        for booking in data:
+            if 'date' not in booking or 'end_time' not in booking:
+                continue
+
+            try:
+                if isinstance(booking['date'], str):
+                    booking_date = datetime.strptime(booking['date'], "%Y-%m-%d").date()
+                else:
+                    continue
+
+                time_end = datetime.strptime(booking.get('end_time', "00:00"), "%H:%M").time()
+                booking_datetime = datetime.combine(booking_date, time_end)
+
+                # Добавляем только прошедшие бронирования
+                if booking_datetime < current_time:
+                    booking['date'] = booking_date
+                    past_bookings.append(booking)
+
+            except ValueError:
+                continue
+
+        return past_bookings
+    except Exception as e:
+        logger.error(f"Ошибка загрузки прошедших бронирований: {e}")
+        return []
+    
+def generate_past_booking_info(booking_id):
+    """Клавиатура для прошедшего бронирования (только просмотр)"""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        types.InlineKeyboardButton(text="🔙 Назад к списку", callback_data="back_to_past_bookings"),
+        types.InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu_from_past"),
+    )
+    return builder.as_markup()
+
+@dp.message(F.text == "📚 Прошедшие бронирования")
+async def show_past_bookings(message: types.Message):
+    """Показывает прошедшие бронирования"""
+    keyboard = generate_past_bookings_list(message.from_user.id)
+    if not keyboard:
+        await message.answer("У вас нет прошедших бронирований")
+        return
+
+    await message.answer("📚 Ваши прошедшие бронирования (отсортированы по дате, новые сверху):", reply_markup=keyboard)
+
+
+@dp.callback_query(F.data.startswith("past_booking_info_"))
+async def show_past_booking_info(callback: types.CallbackQuery):
+    """Показывает информацию о прошедшем бронировании"""
+    try:
+        booking_id_str = callback.data.replace("past_booking_info_", "")
+        if not booking_id_str:
+            await callback.answer("❌ Не удалось определить ID бронирования", show_alert=True)
+            return
+
+        booking_id = int(booking_id_str)
+        
+        # Используем существующую функцию загрузки, но фильтруем прошедшие
+        all_bookings = storage.load()
+        current_time = datetime.now()
+        
+        booking = None
+        for b in all_bookings:
+            if b.get("id") == booking_id:
+                # Проверяем, что бронирование действительно прошедшее
+                try:
+                    if isinstance(b['date'], str):
+                        booking_date = datetime.strptime(b['date'], "%Y-%m-%d").date()
+                    else:
+                        continue
+
+                    time_end = datetime.strptime(b.get('end_time', "00:00"), "%H:%M").time()
+                    booking_datetime = datetime.combine(booking_date, time_end)
+
+                    if booking_datetime < current_time:
+                        booking = b
+                        break
+                except ValueError:
+                    continue
+
+        if not booking:
+            await callback.answer("Бронирование не найдено или еще не прошло", show_alert=True)
+            return
+
+        # Формируем текст сообщения (аналогично активным бронированиям)
+        role_text = "👨🎓 Ученик" if booking.get('user_role') == 'student' else "👨🏫 Преподаватель"
+
+        # Обрабатываем дату
+        booking_date = booking.get('date')
+        if isinstance(booking_date, str):
+            try:
+                booking_date = datetime.strptime(booking_date, "%Y-%m-%d").strftime("%d.%m.%Y")
+            except ValueError:
+                booking_date = "Неизвестно"
+
+        message_text = (
+            f"📋 Информация о прошедшем занятии:\n\n"
+            f"🔹 {role_text}\n"
+        )
+
+        # Добавляем информацию о ребенке, если это бронь ребенка
+        if booking.get('parent_id'):
+            parent_name = booking.get('parent_name', 'Родитель')
+            message_text += f"👨‍👩‍👧‍👦 Записано родителем: {parent_name}\n"
+
+        message_text += (
+            f"👤 Имя: {booking.get('user_name', 'Неизвестно')}\n"
+            f"📅 Дата: {booking_date}\n"
+            f"⏰ Время: {booking.get('start_time', '?')} - {booking.get('end_time', '?')}\n"
+        )
+
+        # Добавляем информацию о предметах
+        if booking.get('user_role') == 'teacher':
+            subjects = booking.get('subjects', [])
+            subjects_text = ", ".join([SUBJECTS.get(subj, subj) for subj in subjects])
+            message_text += f"📚 Предметы: {subjects_text}\n"
+        else:
+            subject = booking.get('subject', 'Неизвестно')
+            message_text += f"📚 Предмет: {SUBJECTS.get(subject, subject)}\n"
+
+        # Добавляем тип бронирования
+        message_text += f"🏷 Тип: {booking.get('booking_type', 'Тип1')}\n"
+        message_text += f"\n✅ Занятие завершено"
+
+        # Отправляем сообщение с кнопками только для навигации
+        await callback.message.edit_text(
+            message_text,
+            reply_markup=generate_past_booking_info(booking_id)
+        )
+        await callback.answer()
+
+    except ValueError:
+        await callback.answer("❌ Неверный формат ID бронирования", show_alert=True)
+    except Exception as e:
+        logger.error(f"Ошибка в show_past_booking_info: {e}")
+        await callback.answer("❌ Произошла ошибка", show_alert=True)
+
+
+@dp.callback_query(F.data == "back_to_past_bookings")
+async def back_to_past_bookings(callback: types.CallbackQuery):
+    """Возврат к списку прошедших бронирований"""
+    user_id = callback.from_user.id
+    keyboard = generate_past_bookings_list(user_id)
+    
+    if keyboard:
+        await callback.message.edit_text(
+            "📚 Ваши прошедшие бронирования:",
+            reply_markup=keyboard
+        )
+    else:
+        await callback.message.edit_text("У вас нет прошедших бронирований")
+        await callback.answer()
+
+
+@dp.callback_query(F.data == "back_to_menu_from_past")
+async def back_to_menu_from_past(callback: types.CallbackQuery):
+    """Возврат в меню из раздела прошедших бронирований"""
+    user_id = callback.from_user.id
+    menu = await generate_main_menu(user_id)
+
+    await callback.message.edit_text(
+        "Главное меню:",
+        reply_markup=None
+    )
+    await callback.message.answer(
+        "Выберите действие:",
+        reply_markup=menu
+    )
+    await callback.answer()
+
+def generate_past_bookings_list(user_id: int):
+    """Генерирует клавиатуру с прошедшими бронированиями"""
+    bookings = load_past_bookings()  # Новая функция для загрузки прошедших бронирований
+    
+    user_roles = storage.get_user_roles(user_id)
+
+    # Для родителя показываем бронирования всех его детей
+    children_ids = []
+    if 'parent' in user_roles:
+        children_ids = storage.get_parent_children(user_id)
+
+    # Разделяем бронирования по категориям
+    teacher_bookings = []
+    student_bookings = []
+    children_bookings = []
+
+    for booking in bookings:
+        if booking.get('user_id') == user_id:
+            if booking.get('user_role') == 'teacher':
+                teacher_bookings.append(booking)
+            else:
+                student_bookings.append(booking)
+        elif booking.get('user_id') in children_ids:
+            children_bookings.append(booking)
+
+    if not any([teacher_bookings, student_bookings, children_bookings]):
+        return None
+
+    builder = InlineKeyboardBuilder()
+
+    # Бронирования преподавателя
+    if teacher_bookings:
+        builder.row(types.InlineKeyboardButton(
+            text="👨‍🏫 ПРОШЕДШИЕ БРОНИРОВАНИЯ (ПРЕПОДАВАТЕЛЬ)",
+            callback_data="ignore"
+        ))
+
+        for booking in sorted(teacher_bookings, key=lambda x: (x.get("date"), x.get("start_time")), reverse=True):
+            date_str = booking.get('date', '')
+            if isinstance(date_str, str) and len(date_str) == 10:  # YYYY-MM-DD format
+                try:
+                    date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+                    formatted_date = date_obj.strftime("%d.%m.%Y")
+                except ValueError:
+                    formatted_date = date_str
+            else:
+                formatted_date = date_str
+
+            button_text = (
+                f"📅 {formatted_date} "
+                f"⏰ {booking.get('start_time', '?')}-{booking.get('end_time', '?')}"
+            )
+
+            builder.row(types.InlineKeyboardButton(
+                text=button_text,
+                callback_data=f"past_booking_info_{booking.get('id')}"
+            ))
+
+    # Бронирования ученика
+    if student_bookings:
+        builder.row(types.InlineKeyboardButton(
+            text="👨‍🎓 ПРОШЕДШИЕ БРОНИРОВАНИЯ (УЧЕНИК)",
+            callback_data="ignore"
+        ))
+
+        for booking in sorted(student_bookings, key=lambda x: (x.get("date"), x.get("start_time")), reverse=True):
+            date_str = booking.get('date', '')
+            if isinstance(date_str, str) and len(date_str) == 10:
+                try:
+                    date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+                    formatted_date = date_obj.strftime("%d.%m.%Y")
+                except ValueError:
+                    formatted_date = date_str
+            else:
+                formatted_date = date_str
+
+            subject = booking.get('subject', '')
+            subject_short = get_subject_short_name(subject)
+
+            button_text = (
+                f"📅 {formatted_date} "
+                f"⏰ {booking.get('start_time', '?')}-{booking.get('end_time', '?')} "
+                f"📚 {subject_short}"
+            )
+
+            builder.row(types.InlineKeyboardButton(
+                text=button_text,
+                callback_data=f"past_booking_info_{booking.get('id')}"
+            ))
+
+    # Бронирования детей (для родителей)
+    if children_bookings:
+        builder.row(types.InlineKeyboardButton(
+            text="👶 ПРОШЕДШИЕ БРОНИРОВАНИЯ ДЕТЕЙ",
+            callback_data="ignore"
+        ))
+
+        # Группируем по детям
+        children_bookings_by_child = {}
+        for booking in children_bookings:
+            child_id = booking.get('user_id')
+            if child_id not in children_bookings_by_child:
+                children_bookings_by_child[child_id] = []
+            children_bookings_by_child[child_id].append(booking)
+
+        for child_id, child_bookings in children_bookings_by_child.items():
+            child_info = storage.get_child_info(child_id)
+            child_name = child_info.get('user_name', f'Ребенок {child_id}')
+
+            builder.row(types.InlineKeyboardButton(
+                text=f"👶 {child_name}",
+                callback_data="ignore"
+            ))
+
+            for booking in sorted(child_bookings, key=lambda x: (x.get("date"), x.get("start_time")), reverse=True):
+                date_str = booking.get('date', '')
+                if isinstance(date_str, str) and len(date_str) == 10:
+                    try:
+                        date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+                        formatted_date = date_obj.strftime("%d.%m.%Y")
+                    except ValueError:
+                        formatted_date = date_str
+                else:
+                    formatted_date = date_str
+
+                subject = booking.get('subject', '')
+                subject_short = get_subject_short_name(subject)
+
+                button_text = (
+                    f"   📅 {formatted_date} "
+                    f"⏰ {booking.get('start_time', '?')}-{booking.get('end_time', '?')} "
+                    f"📚 {subject_short}"
+                )
+
+                builder.row(types.InlineKeyboardButton(
+                    text=button_text,
+                    callback_data=f"past_booking_info_{booking.get('id')}"
+                ))
+
+    builder.row(types.InlineKeyboardButton(
+        text="🔙 Назад в меню",
+        callback_data="back_to_menu_from_past"
+    ))
+
+    return builder.as_markup()
 
 @dp.message(BookingStates.INPUT_NAME)
 async def process_name(message: types.Message, state: FSMContext):
