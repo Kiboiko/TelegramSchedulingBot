@@ -142,7 +142,7 @@ class FeedbackTeacherManager:
                 ])
 
                 message_text = (
-                    f"Привет! Как прошло ваше занятие?\n"
+                    f"Привет! Как прошла ваша смена?\n"
                     f"📅 {formatted_date} ({weekday})\n"
                     f"⏰ {start_time}-{end_time}\n"
                     f"📚 {subjects_text}"
