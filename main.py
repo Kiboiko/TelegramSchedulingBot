@@ -319,7 +319,7 @@ def generate_time_range_keyboard_with_availability(
             start = datetime.strptime("14:00", "%H:%M")
             end = datetime.strptime("20:00", "%H:%M")
         else:  # выходные
-            start = datetime.strptime("10:00", "%H:%M")
+            start = datetime.strptime("9:00", "%H:%M")
             end = datetime.strptime("15:00", "%H:%M")
     else:
         # По умолчанию используем будний день
@@ -2098,7 +2098,7 @@ def get_time_range_for_date(selected_date=None):
         start_time = time(14, 0)
         end_time = time(20, 0)
     else:  # выходные (сб-вс)
-        start_time = time(10, 0)
+        start_time = time(9, 0)
         end_time = time(15, 0)
     
     return start_time, end_time, 15  # шаг 15 минут
