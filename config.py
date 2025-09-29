@@ -8,7 +8,7 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 BOOKINGS_FILE = "bookings.json"
-CREDENTIALS_PATH = r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\credentials.json"
+CREDENTIALS_PATH = r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\credentials.json"
 SPREADSHEET_ID = "1gFtQ7UJstu-Uv_BpgCUp24unsVT9oajSyWxU0j0GMpg"
 ADMIN_IDS = [1180878673, 973231400, 1312414595]
 BOOKING_TYPES = ["Тип1"]
@@ -27,15 +27,16 @@ WORKING_HOURS = {
 # config.py (дополнение)
 FEEDBACK_CONFIG = {
     "feedback_sheet_students": "обратная связь ученики",
-    "feedback_sheet_teachers": "обратная связь преподаватели",  # НОВОЕ
+    "feedback_sheet_teachers": "обратная связь преподаватели",
     "feedback_file_students": "feedback.json",
-    "feedback_file_teachers": "feedback_teachers.json",  # НОВОЕ
+    "feedback_file_teachers": "feedback_teachers.json",
     "feedback_questions": {
         "good": "Хорошо",
         "could_be_better": "Могло быть лучше",
         "bad": "Ужасно"
     },
-    "admin_phone": "+79001372727"
+    "admin_phone": "+79001372727",
+    "good_feedback_delay": 7  # НОВАЯ КОНСТАНТА - через сколько занятий отправлять следующий отзыв после "Хорошо"
 }
 
 # Интервал проверки отзывов для обоих типов пользователей

@@ -1,7 +1,7 @@
 # main.py
 import sys
 
-sys.path.append(r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
 
 import asyncio
 import json
@@ -35,7 +35,7 @@ from config import *
 from states import BookingStates
 from feedback import FeedbackManager, FeedbackStates
 from feedback_teachers import FeedbackTeacherManager, FeedbackTeacherStates
-
+from config import FEEDBACK_CONFIG
 # Настройка логирования
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -60,6 +60,8 @@ except Exception as e:
 
 feedback_manager = FeedbackManager(storage, gsheets, bot)
 feedback_teacher_manager = FeedbackTeacherManager(storage, gsheets, bot)
+feedback_manager.good_feedback_delay = FEEDBACK_CONFIG["good_feedback_delay"]
+feedback_teacher_manager.good_feedback_delay = FEEDBACK_CONFIG["good_feedback_delay"]
 class RoleCheckMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         # Пропускаем команду /start, /help и ввод имени
