@@ -21,6 +21,7 @@ class FeedbackTeacherManager:
         self.gsheets = gsheets_manager
         self.bot = bot
         self.feedback_file = "feedback_teachers.json"
+        self.good_feedback_delay = 7  # Берем из конфига
 
     def load_feedback_data(self) -> List[Dict[str, Any]]:
         """Загружает данные обратной связи преподавателей из JSON"""
@@ -30,6 +31,55 @@ class FeedbackTeacherManager:
         except (FileNotFoundError, json.JSONDecodeError):
             return []
 
+    def get_lesson_count_since_last_good_feedback(self, user_id: int) -> int:
+        """Получает количество занятий с последнего отзыва 'Хорошо' для преподавателя"""
+        feedback_data = self.load_feedback_data()
+
+        # Находим последний отзыв "Хорошо" для этого преподавателя
+        last_good_feedbacks = [
+            f for f in feedback_data
+            if (f.get('user_id') == user_id and
+                f.get('rating') == 'good' and
+                f.get('status') == 'completed')
+        ]
+
+        if not last_good_feedbacks:
+            return 0  # Не было отзывов "Хорошо" - отправляем сразу
+
+        # Берем самый последний отзыв "Хорошо"
+        last_good_feedback = max(last_good_feedbacks, key=lambda x: x.get('responded_at', ''))
+
+        # Получаем все занятия после этого отзыва
+        all_bookings = self.storage.load()
+        user_bookings = [
+            b for b in all_bookings
+            if (b.get('user_id') == user_id and
+                b.get('user_role') == 'teacher')
+        ]
+
+        # Фильтруем занятия, которые были после последнего отзыва "Хорошо"
+        last_feedback_date = datetime.fromisoformat(last_good_feedback['responded_at']).date()
+        subsequent_lessons = [
+            b for b in user_bookings
+            if datetime.strptime(b['date'], "%Y-%m-%d").date() > last_feedback_date
+        ]
+
+        return len(subsequent_lessons)
+
+    def should_send_feedback(self, user_id: int, date: str) -> bool:
+        """Определяет, нужно ли отправлять отзыв для этого занятия преподавателю"""
+        # Проверяем, не отправляли ли уже отзыв для этого занятия
+        if self.check_feedback_sent(user_id, date):
+            return False
+
+        # Получаем количество занятий с последнего "Хорошо"
+        lesson_count = self.get_lesson_count_since_last_good_feedback(user_id)
+
+        # Если было "Хорошо" и прошло меньше занятий, чем delay - не отправляем
+        if lesson_count > 0 and lesson_count < self.good_feedback_delay:
+            return False
+
+        return True
     def save_feedback_data(self, data: List[Dict[str, Any]]):
         """Сохраняет данные обратной связи преподавателей в JSON"""
         try:
@@ -39,37 +89,29 @@ class FeedbackTeacherManager:
             logger.error(f"Ошибка сохранения feedback_teachers: {e}")
 
     def get_todays_finished_lessons(self) -> List[Dict[str, Any]]:
-        """Получает список завершенных занятий преподавателей на сегодня"""
+        """Получает список завершенных занятий преподавателей на сегодня с учетом счетчика"""
         try:
-            # Получаем текущую дату
             today = datetime.now().date()
             today_str = today.strftime("%Y-%m-%d")
-
-            # Загружаем все бронирования
             bookings = self.storage.load()
-
             finished_lessons = []
 
             for booking in bookings:
                 if (booking.get('user_role') == 'teacher' and
                         booking.get('date') == today_str):
 
-                    # Проверяем, закончилось ли занятие
                     end_time_str = booking.get('end_time', '')
                     if end_time_str:
                         try:
                             end_time = datetime.strptime(end_time_str, "%H:%M").time()
                             current_time = datetime.now().time()
 
-                            # Если занятие уже закончилось
                             if current_time > end_time:
-                                # Проверяем, не отправляли ли уже обратную связь
-                                feedback_sent = self.check_feedback_sent(
+                                # ИСПРАВЛЕНИЕ: используем новую логику проверки
+                                if self.should_send_feedback(
                                     booking.get('user_id'),
                                     today_str
-                                )
-
-                                if not feedback_sent:
+                                ):
                                     finished_lessons.append(booking)
 
                         except ValueError:
@@ -142,7 +184,7 @@ class FeedbackTeacherManager:
                 ])
 
                 message_text = (
-                    f"Привет! Как прошло ваше занятие?\n"
+                    f"Привет! Как прошло ваша смена?\n"
                     f"📅 {formatted_date} ({weekday})\n"
                     f"⏰ {start_time}-{end_time}\n"
                     f"📚 {subjects_text}"
