@@ -37,3 +37,4 @@ bookings.json
 # Логи и базы данных
 *.log
 *.sqlite
+.env

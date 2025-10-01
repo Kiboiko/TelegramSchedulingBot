@@ -1,7 +1,7 @@
 # main.py
 import sys
 
-sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\shedule_app")
 
 import asyncio
 import json
@@ -28,7 +28,7 @@ from shedule_app.HelperMethods import School
 from shedule_app.models import Person, Teacher, Student
 from typing import List, Dict
 from shedule_app.GoogleParser import GoogleSheetsDataLoader
-
+from bookings_management.booking_management import BookingManager
 
 # Импорты из новых файлов
 from config import *
@@ -101,6 +101,7 @@ class RoleCheckMiddleware(BaseMiddleware):
 
 # Добавление middleware
 dp.update.middleware(RoleCheckMiddleware())
+booking_manager = BookingManager(storage, gsheets)
 
 
 def get_subject_distribution_by_time(loader, target_date: str, condition_check: bool = True) -> Dict[time, Dict]:
@@ -609,35 +610,35 @@ def generate_booking_types():
     return builder.as_markup()
 
 
-def load_bookings():
-    """Загружает бронирования из файла и удаляет прошедшие"""
-    data = storage.load()
-    valid_bookings = []
-    current_time = datetime.now()
+# def load_bookings():
+#     """Загружает бронирования из файла и удаляет прошедшие"""
+#     data = storage.load()
+#     valid_bookings = []
+#     current_time = datetime.now()
 
-    for booking in data:
-        if 'date' not in booking:
-            continue
+#     for booking in data:
+#         if 'date' not in booking:
+#             continue
 
-        try:
-            if isinstance(booking['date'], str):
-                booking_date = datetime.strptime(booking['date'], "%Y-%m-%d").date()
-            else:
-                continue
+#         try:
+#             if isinstance(booking['date'], str):
+#                 booking_date = datetime.strptime(booking['date'], "%Y-%m-%d").date()
+#             else:
+#                 continue
 
-            time_end = datetime.strptime(booking.get('end_time', "00:00"), "%H:%M").time()
-            booking_datetime = datetime.combine(booking_date, time_end)
+#             time_end = datetime.strptime(booking.get('end_time', "00:00"), "%H:%M").time()
+#             booking_datetime = datetime.combine(booking_date, time_end)
 
-            if booking_datetime < current_time:
-                continue
+#             if booking_datetime < current_time:
+#                 continue
             
-            booking['date'] = booking_date
-            valid_bookings.append(booking)
+#             booking['date'] = booking_date
+#             valid_bookings.append(booking)
 
-        except ValueError:
-            continue
+#         except ValueError:
+#             continue
 
-    return valid_bookings
+#     return valid_bookings
 
 
 def generate_calendar(year=None, month=None):
@@ -1062,159 +1063,159 @@ def generate_confirmation():
     return builder.as_markup()
 
 
-def generate_booking_list(user_id: int):
-    bookings = load_bookings()
-    user_roles = storage.get_user_roles(user_id)
+# def generate_booking_list(user_id: int):
+#     bookings = load_bookings()
+#     user_roles = storage.get_user_roles(user_id)
 
-    # Для родителя показываем бронирования всех его детей
-    children_ids = []
-    if 'parent' in user_roles:
-        children_ids = storage.get_parent_children(user_id)
+#     # Для родителя показываем бронирования всех его детей
+#     children_ids = []
+#     if 'parent' in user_roles:
+#         children_ids = storage.get_parent_children(user_id)
 
-    # Разделяем бронирования по категориям
-    teacher_bookings = []
-    student_bookings = []
-    children_bookings = []
+#     # Разделяем бронирования по категориям
+#     teacher_bookings = []
+#     student_bookings = []
+#     children_bookings = []
 
-    for booking in bookings:
-        if booking.get('user_id') == user_id:
-            if booking.get('user_role') == 'teacher':
-                teacher_bookings.append(booking)
-            else:
-                student_bookings.append(booking)
-        elif booking.get('user_id') in children_ids:
-            children_bookings.append(booking)
+#     for booking in bookings:
+#         if booking.get('user_id') == user_id:
+#             if booking.get('user_role') == 'teacher':
+#                 teacher_bookings.append(booking)
+#             else:
+#                 student_bookings.append(booking)
+#         elif booking.get('user_id') in children_ids:
+#             children_bookings.append(booking)
 
-    if not any([teacher_bookings, student_bookings, children_bookings]):
-        return None
+#     if not any([teacher_bookings, student_bookings, children_bookings]):
+#         return None
 
-    builder = InlineKeyboardBuilder()
+#     builder = InlineKeyboardBuilder()
 
-    # Бронирования преподавателя
-    if teacher_bookings:
-        builder.row(types.InlineKeyboardButton(
-            text="👨‍🏫 МОИ БРОНИРОВАНИЯ (ПРЕПОДАВАТЕЛЬ)",
-            callback_data="ignore"
-        ))
+#     # Бронирования преподавателя
+#     if teacher_bookings:
+#         builder.row(types.InlineKeyboardButton(
+#             text="👨‍🏫 МОИ БРОНИРОВАНИЯ (ПРЕПОДАВАТЕЛЬ)",
+#             callback_data="ignore"
+#         ))
 
-        for booking in sorted(teacher_bookings, key=lambda x: (x.get("date"), x.get("start_time"))):
-            date_str = booking.get('date', '')
-            if isinstance(date_str, str) and len(date_str) == 10:  # YYYY-MM-DD format
-                try:
-                    date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-                    formatted_date = date_obj.strftime("%d.%m")
-                except ValueError:
-                    formatted_date = date_str
-            else:
-                formatted_date = date_str
+#         for booking in sorted(teacher_bookings, key=lambda x: (x.get("date"), x.get("start_time"))):
+#             date_str = booking.get('date', '')
+#             if isinstance(date_str, str) and len(date_str) == 10:  # YYYY-MM-DD format
+#                 try:
+#                     date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+#                     formatted_date = date_obj.strftime("%d.%m")
+#                 except ValueError:
+#                     formatted_date = date_str
+#             else:
+#                 formatted_date = date_str
 
-            button_text = (
-                f"📅 {formatted_date} "
-                f"⏰ {booking.get('start_time', '?')}-{booking.get('end_time', '?')}"
-            )
+#             button_text = (
+#                 f"📅 {formatted_date} "
+#                 f"⏰ {booking.get('start_time', '?')}-{booking.get('end_time', '?')}"
+#             )
 
-            builder.row(types.InlineKeyboardButton(
-                text=button_text,
-                callback_data=f"booking_info_{booking.get('id')}"
-            ))
+#             builder.row(types.InlineKeyboardButton(
+#                 text=button_text,
+#                 callback_data=f"booking_info_{booking.get('id')}"
+#             ))
 
-    # Бронирования ученика
-    if student_bookings:
-        builder.row(types.InlineKeyboardButton(
-            text="👨‍🎓 МОИ БРОНИРОВАНИЯ (УЧЕНИК)",
-            callback_data="ignore"
-        ))
+#     # Бронирования ученика
+#     if student_bookings:
+#         builder.row(types.InlineKeyboardButton(
+#             text="👨‍🎓 МОИ БРОНИРОВАНИЯ (УЧЕНИК)",
+#             callback_data="ignore"
+#         ))
 
-        for booking in sorted(student_bookings, key=lambda x: (x.get("date"), x.get("start_time"))):
-            date_str = booking.get('date', '')
-            if isinstance(date_str, str) and len(date_str) == 10:
-                try:
-                    date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-                    formatted_date = date_obj.strftime("%d.%m")
-                except ValueError:
-                    formatted_date = date_str
-            else:
-                formatted_date = date_str
+#         for booking in sorted(student_bookings, key=lambda x: (x.get("date"), x.get("start_time"))):
+#             date_str = booking.get('date', '')
+#             if isinstance(date_str, str) and len(date_str) == 10:
+#                 try:
+#                     date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+#                     formatted_date = date_obj.strftime("%d.%m")
+#                 except ValueError:
+#                     formatted_date = date_str
+#             else:
+#                 formatted_date = date_str
 
-            subject = booking.get('subject', '')
-            subject_short = get_subject_short_name(subject)
+#             subject = booking.get('subject', '')
+#             subject_short = get_subject_short_name(subject)
 
-            button_text = (
-                f"📅 {formatted_date} "
-                f"⏰ {booking.get('start_time', '?')}-{booking.get('end_time', '?')} "
-                f"📚 {subject_short}"
-            )
+#             button_text = (
+#                 f"📅 {formatted_date} "
+#                 f"⏰ {booking.get('start_time', '?')}-{booking.get('end_time', '?')} "
+#                 f"📚 {subject_short}"
+#             )
 
-            builder.row(types.InlineKeyboardButton(
-                text=button_text,
-                callback_data=f"booking_info_{booking.get('id')}"
-            ))
+#             builder.row(types.InlineKeyboardButton(
+#                 text=button_text,
+#                 callback_data=f"booking_info_{booking.get('id')}"
+#             ))
 
-    # Бронирования детей (для родителей)
-    if children_bookings:
-        builder.row(types.InlineKeyboardButton(
-            text="👶 БРОНИРОВАНИЯ МОИХ ДЕТЕЙ",
-            callback_data="ignore"
-        ))
+#     # Бронирования детей (для родителей)
+#     if children_bookings:
+#         builder.row(types.InlineKeyboardButton(
+#             text="👶 БРОНИРОВАНИЯ МОИХ ДЕТЕЙ",
+#             callback_data="ignore"
+#         ))
 
-        # Группируем по детям
-        children_bookings_by_child = {}
-        for booking in children_bookings:
-            child_id = booking.get('user_id')
-            if child_id not in children_bookings_by_child:
-                children_bookings_by_child[child_id] = []
-            children_bookings_by_child[child_id].append(booking)
+#         # Группируем по детям
+#         children_bookings_by_child = {}
+#         for booking in children_bookings:
+#             child_id = booking.get('user_id')
+#             if child_id not in children_bookings_by_child:
+#                 children_bookings_by_child[child_id] = []
+#             children_bookings_by_child[child_id].append(booking)
 
-        for child_id, child_bookings in children_bookings_by_child.items():
-            child_info = storage.get_child_info(child_id)
-            child_name = child_info.get('user_name', f'Ребенок {child_id}')
+#         for child_id, child_bookings in children_bookings_by_child.items():
+#             child_info = storage.get_child_info(child_id)
+#             child_name = child_info.get('user_name', f'Ребенок {child_id}')
 
-            builder.row(types.InlineKeyboardButton(
-                text=f"👶 {child_name}",
-                callback_data="ignore"
-            ))
+#             builder.row(types.InlineKeyboardButton(
+#                 text=f"👶 {child_name}",
+#                 callback_data="ignore"
+#             ))
 
-            for booking in sorted(child_bookings, key=lambda x: (x.get("date"), x.get("start_time"))):
-                date_str = booking.get('date', '')
-                if isinstance(date_str, str) and len(date_str) == 10:
-                    try:
-                        date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-                        formatted_date = date_obj.strftime("%d.%m")
-                    except ValueError:
-                        formatted_date = date_str
-                else:
-                    formatted_date = date_str
+#             for booking in sorted(child_bookings, key=lambda x: (x.get("date"), x.get("start_time"))):
+#                 date_str = booking.get('date', '')
+#                 if isinstance(date_str, str) and len(date_str) == 10:
+#                     try:
+#                         date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+#                         formatted_date = date_obj.strftime("%d.%m")
+#                     except ValueError:
+#                         formatted_date = date_str
+#                 else:
+#                     formatted_date = date_str
 
-                subject = booking.get('subject', '')
-                subject_short = get_subject_short_name(subject)
+#                 subject = booking.get('subject', '')
+#                 subject_short = get_subject_short_name(subject)
 
-                button_text = (
-                    f"   📅 {formatted_date} "
-                    f"⏰ {booking.get('start_time', '?')}-{booking.get('end_time', '?')} "
-                    f"📚 {subject_short}"
-                )
+#                 button_text = (
+#                     f"   📅 {formatted_date} "
+#                     f"⏰ {booking.get('start_time', '?')}-{booking.get('end_time', '?')} "
+#                     f"📚 {subject_short}"
+#                 )
 
-                builder.row(types.InlineKeyboardButton(
-                    text=button_text,
-                    callback_data=f"booking_info_{booking.get('id')}"
-                ))
+#                 builder.row(types.InlineKeyboardButton(
+#                     text=button_text,
+#                     callback_data=f"booking_info_{booking.get('id')}"
+#                 ))
 
-    builder.row(types.InlineKeyboardButton(
-        text="🔙 Назад в меню",
-        callback_data="back_to_menu"
-    ))
+#     builder.row(types.InlineKeyboardButton(
+#         text="🔙 Назад в меню",
+#         callback_data="back_to_menu"
+#     ))
 
-    return builder.as_markup()
+#     return builder.as_markup()
 
 
-def generate_booking_actions(booking_id):
-    """Клавиатура действий с бронированием"""
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        types.InlineKeyboardButton(text="❌ Отменить бронь", callback_data=f"cancel_booking_{booking_id}"),
-        types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_bookings"),
-    )
-    return builder.as_markup()
+# def generate_booking_actions(booking_id):
+#     """Клавиатура действий с бронированием"""
+#     builder = InlineKeyboardBuilder()
+#     builder.row(
+#         types.InlineKeyboardButton(text="❌ Отменить бронь", callback_data=f"cancel_booking_{booking_id}"),
+#         types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_bookings"),
+#     )
+#     return builder.as_markup()
 
 
 def generate_schedule_for_date(target_date: str) -> str:
@@ -1646,30 +1647,22 @@ def load_past_bookings():
     except Exception as e:
         logger.error(f"Ошибка загрузки прошедших бронирований: {e}")
         return []
-    
-def generate_past_booking_info(booking_id):
-    """Клавиатура для прошедшего бронирования (только просмотр)"""
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        types.InlineKeyboardButton(text="🔙 Назад к списку", callback_data="back_to_past_bookings"),
-        types.InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu_from_past"),
-    )
-    return builder.as_markup()
+
 
 @dp.message(F.text == "📚 Прошедшие бронирования")
 async def show_past_bookings(message: types.Message):
     """Показывает прошедшие бронирования"""
-    keyboard = generate_past_bookings_list(message.from_user.id)
+    keyboard = booking_manager.generate_past_bookings_list(message.from_user.id)
     if not keyboard:
         await message.answer("У вас нет прошедших бронирований")
         return
 
-    await message.answer("📚 Ваши прошедшие бронирования (отсортированы по дате, новые сверху):", reply_markup=keyboard)
+    await message.answer("📚 Ваши прошедшие бронирования:", 
+                        reply_markup=keyboard.as_markup() if hasattr(keyboard, 'as_markup') else keyboard)
 
 
 @dp.callback_query(F.data.startswith("past_booking_info_"))
 async def show_past_booking_info(callback: types.CallbackQuery):
-    """Показывает информацию о прошедшем бронировании"""
     try:
         booking_id_str = callback.data.replace("past_booking_info_", "")
         if not booking_id_str:
@@ -1677,75 +1670,16 @@ async def show_past_booking_info(callback: types.CallbackQuery):
             return
 
         booking_id = int(booking_id_str)
-        
-        # Используем существующую функцию загрузки, но фильтруем прошедшие
-        all_bookings = storage.load()
-        current_time = datetime.now()
-        
-        booking = None
-        for b in all_bookings:
-            if b.get("id") == booking_id:
-                # Проверяем, что бронирование действительно прошедшее
-                try:
-                    if isinstance(b['date'], str):
-                        booking_date = datetime.strptime(b['date'], "%Y-%m-%d").date()
-                    else:
-                        continue
-
-                    time_end = datetime.strptime(b.get('end_time', "00:00"), "%H:%M").time()
-                    booking_datetime = datetime.combine(booking_date, time_end)
-
-                    if booking_datetime < current_time:
-                        booking = b
-                        break
-                except ValueError:
-                    continue
+        booking = booking_manager.find_past_booking_by_id(booking_id)
 
         if not booking:
             await callback.answer("Бронирование не найдено или еще не прошло", show_alert=True)
             return
 
-        # Формируем текст сообщения (аналогично активным бронированиям)
-        role_text = "👨🎓 Ученик" if booking.get('user_role') == 'student' else "👨🏫 Преподаватель"
+        message_text = booking_manager.get_past_booking_info_text(booking)
 
-        # Обрабатываем дату
-        booking_date = booking.get('date')
-        if isinstance(booking_date, str):
-            try:
-                booking_date = datetime.strptime(booking_date, "%Y-%m-%d").strftime("%d.%m.%Y")
-            except ValueError:
-                booking_date = "Неизвестно"
-
-        message_text = (
-            f"📋 Информация о прошедшем занятии:\n\n"
-            f"🔹 {role_text}\n"
-        )
-
-        # Добавляем информацию о ребенке, если это бронь ребенка
-        if booking.get('parent_id'):
-            parent_name = booking.get('parent_name', 'Родитель')
-            message_text += f"👨‍👩‍👧‍👦 Записано родителем: {parent_name}\n"
-
-        message_text += (
-            f"👤 Имя: {booking.get('user_name', 'Неизвестно')}\n"
-            f"📅 Дата: {booking_date}\n"
-            f"⏰ Время: {booking.get('start_time', '?')} - {booking.get('end_time', '?')}\n"
-        )
-
-        # Добавляем информацию о предметах
-        if booking.get('user_role') == 'teacher':
-            subjects = booking.get('subjects', [])
-            subjects_text = ", ".join([SUBJECTS.get(subj, subj) for subj in subjects])
-            message_text += f"📚 Предметы: {subjects_text}\n"
-        else:
-            subject = booking.get('subject', 'Неизвестно')
-            message_text += f"📚 Предмет: {SUBJECTS.get(subject, subject)}\n"
-
-        # Добавляем тип бронирования
-        message_text += f"🏷 Тип: {booking.get('booking_type', 'Тип1')}\n"
-        message_text += f"\n✅ Занятие завершено"
-
-        # Отправляем сообщение с кнопками только для навигации
+        # Импортируем клавиатуру из отдельного файла
+        from bookings_management.booking_keyboards import generate_past_booking_info
         await callback.message.edit_text(
             message_text,
             reply_markup=generate_past_booking_info(booking_id)
@@ -1763,7 +1697,7 @@ async def show_past_booking_info(callback: types.CallbackQuery):
 async def back_to_past_bookings(callback: types.CallbackQuery):
     """Возврат к списку прошедших бронирований"""
     user_id = callback.from_user.id
-    keyboard = generate_past_bookings_list(user_id)
+    keyboard = booking_manager.generate_past_bookings_list(user_id)
     
     if keyboard:
         await callback.message.edit_text(
@@ -1791,151 +1725,6 @@ async def back_to_menu_from_past(callback: types.CallbackQuery):
     )
     await callback.answer()
 
-def generate_past_bookings_list(user_id: int):
-    """Генерирует клавиатуру с прошедшими бронированиями"""
-    bookings = load_past_bookings()  # Новая функция для загрузки прошедших бронирований
-    
-    user_roles = storage.get_user_roles(user_id)
-
-    # Для родителя показываем бронирования всех его детей
-    children_ids = []
-    if 'parent' in user_roles:
-        children_ids = storage.get_parent_children(user_id)
-
-    # Разделяем бронирования по категориям
-    teacher_bookings = []
-    student_bookings = []
-    children_bookings = []
-
-    for booking in bookings:
-        if booking.get('user_id') == user_id:
-            if booking.get('user_role') == 'teacher':
-                teacher_bookings.append(booking)
-            else:
-                student_bookings.append(booking)
-        elif booking.get('user_id') in children_ids:
-            children_bookings.append(booking)
-
-    if not any([teacher_bookings, student_bookings, children_bookings]):
-        return None
-
-    builder = InlineKeyboardBuilder()
-
-    # Бронирования преподавателя
-    if teacher_bookings:
-        builder.row(types.InlineKeyboardButton(
-            text="👨‍🏫 ПРОШЕДШИЕ БРОНИРОВАНИЯ (ПРЕПОДАВАТЕЛЬ)",
-            callback_data="ignore"
-        ))
-
-        for booking in sorted(teacher_bookings, key=lambda x: (x.get("date"), x.get("start_time")), reverse=True):
-            date_str = booking.get('date', '')
-            if isinstance(date_str, str) and len(date_str) == 10:  # YYYY-MM-DD format
-                try:
-                    date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-                    formatted_date = date_obj.strftime("%d.%m.%Y")
-                except ValueError:
-                    formatted_date = date_str
-            else:
-                formatted_date = date_str
-
-            button_text = (
-                f"📅 {formatted_date} "
-                f"⏰ {booking.get('start_time', '?')}-{booking.get('end_time', '?')}"
-            )
-
-            builder.row(types.InlineKeyboardButton(
-                text=button_text,
-                callback_data=f"past_booking_info_{booking.get('id')}"
-            ))
-
-    # Бронирования ученика
-    if student_bookings:
-        builder.row(types.InlineKeyboardButton(
-            text="👨‍🎓 ПРОШЕДШИЕ БРОНИРОВАНИЯ (УЧЕНИК)",
-            callback_data="ignore"
-        ))
-
-        for booking in sorted(student_bookings, key=lambda x: (x.get("date"), x.get("start_time")), reverse=True):
-            date_str = booking.get('date', '')
-            if isinstance(date_str, str) and len(date_str) == 10:
-                try:
-                    date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-                    formatted_date = date_obj.strftime("%d.%m.%Y")
-                except ValueError:
-                    formatted_date = date_str
-            else:
-                formatted_date = date_str
-
-            subject = booking.get('subject', '')
-            subject_short = get_subject_short_name(subject)
-
-            button_text = (
-                f"📅 {formatted_date} "
-                f"⏰ {booking.get('start_time', '?')}-{booking.get('end_time', '?')} "
-                f"📚 {subject_short}"
-            )
-
-            builder.row(types.InlineKeyboardButton(
-                text=button_text,
-                callback_data=f"past_booking_info_{booking.get('id')}"
-            ))
-
-    # Бронирования детей (для родителей)
-    if children_bookings:
-        builder.row(types.InlineKeyboardButton(
-            text="👶 ПРОШЕДШИЕ БРОНИРОВАНИЯ ДЕТЕЙ",
-            callback_data="ignore"
-        ))
-
-        # Группируем по детям
-        children_bookings_by_child = {}
-        for booking in children_bookings:
-            child_id = booking.get('user_id')
-            if child_id not in children_bookings_by_child:
-                children_bookings_by_child[child_id] = []
-            children_bookings_by_child[child_id].append(booking)
-
-        for child_id, child_bookings in children_bookings_by_child.items():
-            child_info = storage.get_child_info(child_id)
-            child_name = child_info.get('user_name', f'Ребенок {child_id}')
-
-            builder.row(types.InlineKeyboardButton(
-                text=f"👶 {child_name}",
-                callback_data="ignore"
-            ))
-
-            for booking in sorted(child_bookings, key=lambda x: (x.get("date"), x.get("start_time")), reverse=True):
-                date_str = booking.get('date', '')
-                if isinstance(date_str, str) and len(date_str) == 10:
-                    try:
-                        date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-                        formatted_date = date_obj.strftime("%d.%m.%Y")
-                    except ValueError:
-                        formatted_date = date_str
-                else:
-                    formatted_date = date_str
-
-                subject = booking.get('subject', '')
-                subject_short = get_subject_short_name(subject)
-
-                button_text = (
-                    f"   📅 {formatted_date} "
-                    f"⏰ {booking.get('start_time', '?')}-{booking.get('end_time', '?')} "
-                    f"📚 {subject_short}"
-                )
-
-                builder.row(types.InlineKeyboardButton(
-                    text=button_text,
-                    callback_data=f"past_booking_info_{booking.get('id')}"
-                ))
-
-    builder.row(types.InlineKeyboardButton(
-        text="🔙 Назад в меню",
-        callback_data="back_to_menu_from_past"
-    ))
-
-    return builder.as_markup()
 
 @dp.message(BookingStates.INPUT_NAME)
 async def process_name(message: types.Message, state: FSMContext):
@@ -2927,12 +2716,13 @@ async def process_confirmation(callback: types.CallbackQuery, state: FSMContext)
 @dp.message(F.text == "📋 Мои бронирования")
 @dp.message(Command("my_bookings"))
 async def show_bookings(message: types.Message):
-    keyboard = generate_booking_list(message.from_user.id)
+    keyboard = booking_manager.generate_booking_list(message.from_user.id)
     if not keyboard:
         await message.answer("У вас нет активных бронирований")
         return
 
-    await message.answer("Ваши бронирования (отсортированы по дате и времени):", reply_markup=keyboard)
+    await message.answer("Ваши бронирования (отсортированы по дате и времени):", 
+                        reply_markup=keyboard.as_markup() if hasattr(keyboard, 'as_markup') else keyboard)
 
 
 @dp.message(Command("my_role"))
@@ -2953,7 +2743,7 @@ async def show_role(message: types.Message):
 
 @dp.message(F.text == "❌ Отменить бронь")
 async def start_cancel_booking(message: types.Message):
-    keyboard = generate_booking_list(message.from_user.id)
+    keyboard = booking_manager.generate_booking_list(message.from_user.id)
     if not keyboard:
         await message.answer("У вас нет активных бронирований для отмены")
         return
@@ -2970,53 +2760,16 @@ async def show_booking_info(callback: types.CallbackQuery):
             return
 
         booking_id = int(booking_id_str)
-        bookings = load_bookings()
-        booking = next((b for b in bookings if b.get("id") == booking_id), None)
+        booking = booking_manager.find_booking_by_id(booking_id)
 
         if not booking:
             await callback.answer("Бронирование не найдено", show_alert=True)
             return
 
-        # Формируем текст сообщения
-        role_text = "👨🎓 Ученик" if booking.get('user_role') == 'student' else "👨🏫 Преподаватель"
-
-        # Обрабатываем дату
-        booking_date = booking.get('date')
-        if isinstance(booking_date, str):
-            try:
-                booking_date = datetime.strptime(booking_date, "%Y-%m-%d").strftime("%d.%m.%Y")
-            except ValueError:
-                booking_date = "Неизвестно"
-
-        message_text = (
-            f"📋 Информация о бронировании:\n\n"
-            f"🔹 {role_text}\n"
-        )
-
-        # Добавляем информацию о ребенке, если это бронь ребенка
-        if booking.get('parent_id'):
-            parent_name = booking.get('parent_name', 'Родитель')
-            message_text += f"👨‍👩‍👧‍👦 Записано родителем: {parent_name}\n"
-
-        message_text += (
-            f"👤 Имя: {booking.get('user_name', 'Неизвестно')}\n"
-            f"📅 Дата: {booking_date}\n"
-            f"⏰ Время: {booking.get('start_time', '?')} - {booking.get('end_time', '?')}\n"
-        )
-
-        # Добавляем информацию о предметах
-        if booking.get('user_role') == 'teacher':
-            subjects = booking.get('subjects', [])
-            subjects_text = ", ".join([SUBJECTS.get(subj, subj) for subj in subjects])
-            message_text += f"📚 Предметы: {subjects_text}\n"
-        else:
-            subject = booking.get('subject', 'Неизвестно')
-            message_text += f"📚 Предмет: {SUBJECTS.get(subject, subject)}\n"
-
-        # Добавляем тип бронирования
-        message_text += f"🏷 Тип: {booking.get('booking_type', 'Тип1')}\n"
-
-        # Отправляем сообщение с кнопками действий
+        message_text = booking_manager.get_booking_info_text(booking)
+        
+        # Импортируем клавиатуру из отдельного файла
+        from bookings_management.booking_keyboards import generate_booking_actions
         await callback.message.edit_text(
             message_text,
             reply_markup=generate_booking_actions(booking_id)
@@ -3033,12 +2786,11 @@ async def show_booking_info(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("cancel_booking_"))
 async def cancel_booking(callback: types.CallbackQuery):
     booking_id = int(callback.data.replace("cancel_booking_", ""))
-    if storage.cancel_booking(booking_id):
+    if booking_manager.cancel_booking_by_id(booking_id):
         await callback.message.edit_text(f"✅ Бронирование ID {booking_id} успешно отменено")
     else:
         await callback.message.edit_text("❌ Не удалось отменить бронирование")
     await callback.answer()
-
 
 @dp.callback_query(BookingStates.SELECT_ROLE, F.data == "role_parent")
 async def process_role_parent_selection(callback: types.CallbackQuery, state: FSMContext):
@@ -3141,7 +2893,7 @@ async def back_handler(callback: types.CallbackQuery):
             reply_markup=menu
         )
     else:
-        keyboard = generate_booking_list(user_id)
+        keyboard = booking_manager.generate_booking_list(user_id)
         await callback.message.edit_text(
             "Ваши бронирования:",
             reply_markup=keyboard
