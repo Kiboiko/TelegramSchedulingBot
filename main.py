@@ -30,7 +30,7 @@ from typing import List, Dict
 from shedule_app.GoogleParser import GoogleSheetsDataLoader
 from bookings_management.booking_management import BookingManager
 from background_tasks import BackgroundTasks
-
+from menu_handlers import register_menu_handlers
 # Импорты из новых файлов
 from config import *
 from states import BookingStates
@@ -106,6 +106,7 @@ class RoleCheckMiddleware(BaseMiddleware):
 # Добавление middleware
 dp.update.middleware(RoleCheckMiddleware())
 booking_manager = BookingManager(storage, gsheets)
+register_menu_handlers(dp, booking_manager)
 background_tasks = BackgroundTasks(storage, gsheets, feedback_manager, feedback_teacher_manager)
 
 
@@ -816,33 +817,33 @@ no_roles_menu = ReplyKeyboardMarkup(
 )
 
 
-async def generate_main_menu(user_id: int) -> ReplyKeyboardMarkup:
-    """Генерирует главное меню в зависимости от ролей и прав"""
-    roles = storage.get_user_roles(user_id)
+# async def generate_main_menu(user_id: int) -> ReplyKeyboardMarkup:
+#     """Генерирует главное меню в зависимости от ролей и прав"""
+#     roles = storage.get_user_roles(user_id)
 
-    if not roles:
-        return no_roles_menu
+#     if not roles:
+#         return no_roles_menu
 
-    keyboard_buttons = []
+#     keyboard_buttons = []
 
-    # Проверяем, может ли пользователь бронировать
-    can_book = any(role in roles for role in ['teacher', 'parent']) or (
-            'student' in roles and 'parent' in roles
-    )
+#     # Проверяем, может ли пользователь бронировать
+#     can_book = any(role in roles for role in ['teacher', 'parent']) or (
+#             'student' in roles and 'parent' in roles
+#     )
 
-    if can_book:
-        keyboard_buttons.append([KeyboardButton(text="📅 Забронировать время")])
+#     if can_book:
+#         keyboard_buttons.append([KeyboardButton(text="📅 Забронировать время")])
 
-    keyboard_buttons.append([KeyboardButton(text="📋 Мои бронирования")])
-    keyboard_buttons.append([KeyboardButton(text="📚 Прошедшие бронирования")])
-    keyboard_buttons.append([KeyboardButton(text="👤 Моя роль")])
-    keyboard_buttons.append([KeyboardButton(text="ℹ️ Помощь")])
+#     keyboard_buttons.append([KeyboardButton(text="📋 Мои бронирования")])
+#     keyboard_buttons.append([KeyboardButton(text="📚 Прошедшие бронирования")])
+#     keyboard_buttons.append([KeyboardButton(text="👤 Моя роль")])
+#     keyboard_buttons.append([KeyboardButton(text="ℹ️ Помощь")])
 
-    # Добавляем кнопку составления расписания только для администраторов
-    if is_admin(user_id):
-        keyboard_buttons.append([KeyboardButton(text="📊 Составить расписание")])
+#     # Добавляем кнопку составления расписания только для администраторов
+#     if is_admin(user_id):
+#         keyboard_buttons.append([KeyboardButton(text="📊 Составить расписание")])
 
-    return ReplyKeyboardMarkup(keyboard=keyboard_buttons, resize_keyboard=True)
+#     return ReplyKeyboardMarkup(keyboard=keyboard_buttons, resize_keyboard=True)
 
 
 @dp.message(CommandStart())
