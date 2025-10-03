@@ -49,9 +49,9 @@ FINANCE_CONFIG = {
 }
 
 REMINDER_CONFIG = {
-    "reminder_day": 4,  # Четверг (0-понедельник, 6-воскресенье)
-    "reminder_hour": 19,  # 18:00
-    "reminder_minute": 27,
+    "reminder_day": 3,  # Четверг (0-понедельник, 6-воскресенье)
+    "reminder_hour": 18,  # 18:00
+    "reminder_minute": 0,
     "reminder_message": "НАПОМИНАНИЕ! Проставьте свои возможности на следующую неделю"
 }
 
