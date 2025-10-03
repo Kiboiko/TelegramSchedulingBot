@@ -48,7 +48,11 @@ class CallbackHandlers:
         "feedback_submit_details": "handle_feedback_submit",
         "feedback_teacher_": "handle_teacher_feedback",
         "feedback_teacher_submit_details": "handle_teacher_feedback_submit",
-        
+
+        # Финансы
+        "finance_back_to_dates": "handle_finance_back_to_dates",
+        "finance_back_to_subjects": "handle_finance_back_to_subjects",
+
         # Расписание
         "confirm_schedule": "handle_confirm_schedule",
         "cancel_schedule": "handle_cancel_schedule"
@@ -300,3 +304,15 @@ class CallbackHandlers:
         """Отменяет выбор времени"""
         from main import cancel_time_selection_handler
         await cancel_time_selection_handler(callback, state)
+
+    @staticmethod
+    async def handle_finance_back_to_dates(callback: types.CallbackQuery, state: FSMContext):
+        """Обрабатывает возврат к выбору даты для финансов"""
+        from main import finance_back_to_dates
+        await finance_back_to_dates(callback, state)
+
+    @staticmethod
+    async def handle_finance_back_to_subjects(callback: types.CallbackQuery, state: FSMContext):
+        """Обрабатывает возврат к выбору предмета для финансов"""
+        from main import finance_back_to_subjects
+        await finance_back_to_subjects(callback, state)

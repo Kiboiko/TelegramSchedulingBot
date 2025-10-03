@@ -1,3 +1,4 @@
+import time
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta
@@ -9,20 +10,26 @@ logger = logging.getLogger(__name__)
 
 
 class GoogleSheetsManager:
-    SUBJECTS = {
-        "1": "Математика",
-        "2": "Физика",
-        "3": "Информатика",
-        "4": "Русский язык"
-    }
-
     def __init__(self, credentials_file: str, spreadsheet_id: str):
         self.credentials_file = credentials_file
         self.spreadsheet_id = spreadsheet_id
         self.client = None
         self.spreadsheet = None
         self.qual_map = {}
+        self._cache = {}  # Добавляем кэш
+        self._cache_timeout = 60  # Кэш на 60 секунд
 
+    def _get_cached_data(self, key):
+        """Получает данные из кэша"""
+        if key in self._cache:
+            data, timestamp = self._cache[key]
+            if time.time() - timestamp < self._cache_timeout:
+                return data
+        return None
+
+    def _set_cached_data(self, key, data):
+        """Сохраняет данные в кэш"""
+        self._cache[key] = (data, time.time())
     def connect(self):
         """Устанавливает соединение с Google Sheets API"""
         try:
@@ -62,9 +69,24 @@ class GoogleSheetsManager:
     def format_date(self, date_str: str) -> str:
         """Форматирует дату из YYYY-MM-DD в DD.MM.YYYY"""
         try:
-            date_obj = datetime.strptime(date_str, '%Y-%m-%d')
-            return date_obj.strftime('%d.%m.%Y')
-        except ValueError:
+            # Пробуем разные форматы на входе
+            input_formats = ['%Y-%m-%d', '%d.%m.%Y', '%d.%m.%y']
+            date_obj = None
+
+            for fmt in input_formats:
+                try:
+                    date_obj = datetime.strptime(date_str, fmt)
+                    break
+                except ValueError:
+                    continue
+
+            if date_obj:
+                return date_obj.strftime('%d.%m.%Y')
+            else:
+                logger.error(f"Не удалось распарсить дату: {date_str}")
+                return date_str
+        except Exception as e:
+            logger.error(f"Ошибка форматирования даты {date_str}: {e}")
             return date_str
 
     def clear_sheet(self, sheet_name: str):
@@ -193,6 +215,262 @@ class GoogleSheetsManager:
             dates.append(self.format_date(current_date.strftime('%Y-%m-%d')))
             current_date += timedelta(days=1)
         return dates
+
+    # gsheets_manager.py (добавьте в класс GoogleSheetsManager)
+
+    def get_student_finances(self, user_id: int, subject_id: str, selected_date: str) -> Dict[str, float]:
+        """Получает финансовую информацию для ученика по предмету и дате"""
+        try:
+            # Используем кэш
+            cache_key = f"finances_{user_id}_{subject_id}_{selected_date}"
+            cached_result = self._get_cached_data(cache_key)
+            if cached_result:
+                logger.info(f"Используем кэшированные финансовые данные для {cache_key}")
+                return cached_result
+
+            worksheet = self._get_or_create_worksheet("Ученики бот")
+            data = worksheet.get_all_values()
+
+            if len(data) < 2:
+                logger.error("В таблице 'Ученики бот' недостаточно данных")
+                result = {"replenished": 0.0, "withdrawn": 0.0, "tariff": 0.0}
+                self._set_cached_data(cache_key, result)
+                return result
+
+            # Находим строку ученика с указанным subject_id
+            target_row = -1
+            for row_idx, row in enumerate(data[1:], start=2):
+                if (len(row) > 0 and str(row[0]).strip() == str(user_id) and
+                        len(row) > 2 and str(row[2]).strip() == str(subject_id)):
+                    target_row = row_idx
+                    logger.info(f"Найдена строка ученика: строка {target_row}")
+                    break
+
+            if target_row == -1:
+                logger.error(f"Не найдена строка для user_id {user_id} и subject_id {subject_id}")
+                result = {"replenished": 0.0, "withdrawn": 0.0, "tariff": 0.0}
+                self._set_cached_data(cache_key, result)
+                return result
+
+            # Получаем тариф ученика (столбец N, индекс 13)
+            tariff = 0.0
+            if len(data[target_row - 1]) > 13 and data[target_row - 1][13]:
+                try:
+                    tariff_str = str(data[target_row - 1][13]).replace(',', '.').strip()
+                    # Обрабатываем неразрывные пробелы и другие символы
+                    tariff_str = tariff_str.replace('\xa0', '').replace(' ', '')
+                    tariff = float(tariff_str) if tariff_str else 0.0
+                    logger.info(f"Тариф ученика: {tariff}")
+                except ValueError as e:
+                    logger.error(f"Ошибка преобразования тарифа: {e}")
+                    tariff = 0.0
+
+            # Форматируем выбранную дату для поиска
+            formatted_date = self.format_date(selected_date)
+            logger.info(f"Ищем финансовые данные для даты: {formatted_date}")
+
+            # Получаем заголовки
+            headers = [str(h).strip().lower() for h in data[0]]
+
+            # 1. Сначала проверяем, было ли занятие в выбранную дату
+            withdrawn = 0.0
+            schedule_found = False
+
+            # Ищем столбцы расписания (первые 245 столбцов)
+            for i in range(min(245, len(headers))):
+                header = headers[i]
+                if formatted_date.lower() in header:
+                    # Проверяем время занятия
+                    if len(data[target_row - 1]) > i + 1:
+                        start_time = data[target_row - 1][i] if i < len(data[target_row - 1]) else ""
+                        end_time = data[target_row - 1][i + 1] if i + 1 < len(data[target_row - 1]) else ""
+
+                        if start_time and end_time and str(start_time).strip() and str(end_time).strip():
+                            withdrawn = tariff
+                            schedule_found = True
+                            logger.info(f"Найдено занятие: {start_time}-{end_time}, списание: {withdrawn} руб.")
+                            break
+
+            if not schedule_found:
+                logger.info(f"Занятие на {formatted_date} не найдено")
+
+            # 2. Ищем финансовые данные (столбцы начиная с JG)
+            replenished = 0.0
+            finance_found = False
+
+            # Ищем финансовые столбцы для выбранной даты (начиная с столбца 245)
+            for i in range(245, len(headers)):
+                header = headers[i]
+                if formatted_date.lower() in header:
+                    # Нашли финансовый столбец для нужной даты
+                    # Это ПЕРВАЯ колонка с датой - в ней должно быть пополнение
+                    if len(data[target_row - 1]) > i:
+                        replenishment_str = data[target_row - 1][i]
+                        logger.info(
+                            f"Найден финансовый столбец {i} для даты {formatted_date}: значение='{replenishment_str}'")
+
+                        if replenishment_str and str(replenishment_str).strip():
+                            try:
+                                # ОБРАБАТЫВАЕМ НЕРАЗРЫВНЫЕ ПРОБЕЛЫ И РАЗНЫЕ ФОРМАТЫ ЧИСЕЛ
+                                clean_str = str(replenishment_str)
+
+                                # Заменяем неразрывные пробелы, обычные пробелы, запятые
+                                clean_str = clean_str.replace('\xa0', '')  # неразрывный пробел
+                                clean_str = clean_str.replace(' ', '')  # обычный пробел
+                                clean_str = clean_str.replace(',', '.')  # запятая как разделитель дробей
+
+                                # Убираем все нецифровые символы, кроме точки и минуса
+                                # Но оставляем точку как разделитель дробей
+                                import re
+                                clean_str = re.sub(r'[^\d.-]', '', clean_str)
+
+                                # Если после очистки строка пустая, значит было 0
+                                if not clean_str:
+                                    replenished = 0.0
+                                    finance_found = True
+                                    logger.info("После очистки строка пустая - пополнение = 0")
+                                else:
+                                    replenished = float(clean_str)
+                                    finance_found = True
+                                    logger.info(f"Пополнение найдено: {replenished} руб.")
+
+                                break
+                            except ValueError as e:
+                                logger.error(
+                                    f"Ошибка преобразования пополнения '{replenishment_str}' (очищенное: '{clean_str}'): {e}")
+                        else:
+                            logger.info(f"Ячейка пополнения пустая: '{replenishment_str}'")
+                    else:
+                        logger.warning(f"Строка слишком короткая для столбца {i}")
+
+                    break  # Выходим после нахождения первого совпадения даты
+
+            if not finance_found:
+                logger.info(f"Финансовые данные для {formatted_date} не найдены или равны 0")
+
+            result = {
+                "replenished": replenished,
+                "withdrawn": withdrawn,
+                "tariff": tariff
+            }
+
+            logger.info(f"Итоговые данные: {result}")
+            self._set_cached_data(cache_key, result)
+            return result
+
+        except Exception as e:
+            logger.error(f"Ошибка получения финансов для user_id {user_id}: {e}")
+            logger.error(f"Трассировка: {traceback.format_exc()}")
+            result = {"replenished": 0.0, "withdrawn": 0.0, "tariff": 0.0}
+            self._set_cached_data(cache_key, result)
+            return result
+
+    def debug_finance_columns(self, target_date: str):
+        """Отладочный метод для просмотра структуры финансовых столбцов"""
+        try:
+            worksheet = self._get_or_create_worksheet("Ученики бот")
+            data = worksheet.get_all_values()
+
+            if len(data) < 1:
+                return
+
+            headers = [str(h).strip() for h in data[0]]
+            formatted_date = self.format_date(target_date)
+
+            logger.info(f"=== ОТЛАДКА СТОЛБЦОВ ДЛЯ ДАТЫ {formatted_date} ===")
+
+            # Ищем все столбцы с этой датой
+            date_columns = []
+            for i, header in enumerate(headers):
+                if formatted_date.lower() in header.lower():
+                    date_columns.append((i, header))
+
+            logger.info(f"Найдено столбцов с датой {formatted_date}: {len(date_columns)}")
+            for col_idx, header in date_columns:
+                logger.info(f"Столбец {col_idx}: '{header}'")
+
+                # Покажем значения из первых 3 строк для этого столбца
+                for row_idx in range(1, min(4, len(data))):
+                    if len(data[row_idx]) > col_idx:
+                        value = data[row_idx][col_idx]
+                        logger.info(f"  Строка {row_idx + 1}: '{value}'")
+
+            # Покажем структуру вокруг финансовых столбцов
+            logger.info("=== СТРУКТУРА ФИНАНСОВЫХ СТОЛБЦОВ (240-250) ===")
+            for i in range(240, min(251, len(headers))):
+                header = headers[i] if i < len(headers) else "N/A"
+                logger.info(f"Столбец {i}: '{header}'")
+
+        except Exception as e:
+            logger.error(f"Ошибка при отладке столбцов: {e}")
+    def get_available_finance_dates(self, user_id: int, subject_id: str) -> List[str]:
+        """Получает доступные даты для просмотра финансов"""
+        try:
+            # Используем кэш
+            cache_key = f"finance_dates_{user_id}_{subject_id}"
+            cached_result = self._get_cached_data(cache_key)
+            if cached_result:
+                return cached_result
+
+            worksheet = self._get_or_create_worksheet("Ученики бот")
+            data = worksheet.get_all_values()
+
+            if len(data) < 2:
+                return []
+
+            # Находим строку ученика
+            target_row = -1
+            for row_idx, row in enumerate(data[1:], start=2):
+                if (len(row) > 0 and str(row[0]).strip() == str(user_id) and
+                        len(row) > 2 and str(row[2]).strip() == str(subject_id)):
+                    target_row = row_idx
+                    break
+
+            if target_row == -1:
+                return []
+
+            # Получаем только заголовки финансовых столбцов (начиная с JG)
+            headers = [str(h).strip().lower() for h in data[0]]
+
+            available_dates = []
+
+            # Только финансовые столбцы (начиная с 245)
+            for i in range(245, min(len(headers), 500)):  # Ограничиваем поиск 500 столбцами
+                if i < len(headers) and headers[i]:
+                    # Извлекаем дату из заголовка
+                    date_header = headers[i].split()[0] if ' ' in headers[i] else headers[i]
+
+                    try:
+                        # Пробуем разные форматы дат
+                        date_formats = ["%d.%m.%Y", "%d.%m", "%d.%m.%y"]
+                        date_obj = None
+
+                        for date_format in date_formats:
+                            try:
+                                date_obj = datetime.strptime(date_header, date_format)
+                                if date_format == "%d.%m":
+                                    date_obj = date_obj.replace(year=datetime.now().year)
+                                break
+                            except ValueError:
+                                continue
+
+                        if date_obj:
+                            formatted_date = date_obj.strftime("%Y-%m-%d")
+                            available_dates.append(formatted_date)
+
+                    except ValueError:
+                        continue
+
+            # Убираем дубликаты и сортируем
+            available_dates = sorted(list(set(available_dates)))
+            logger.info(f"Доступные финансовые даты: {len(available_dates)} дат")
+
+            self._set_cached_data(cache_key, available_dates)
+            return available_dates
+
+        except Exception as e:
+            logger.error(f"Ошибка получения доступных дат финансов: {e}")
+            return []
 
     def _ensure_sheet_structure(self, worksheet, formatted_dates: List[str], is_teacher: bool):
         """Создает структуру листа заново"""

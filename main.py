@@ -1,7 +1,7 @@
 # main.py
 import sys
 
-sys.path.append(r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
 
 import asyncio
 import json
@@ -36,6 +36,9 @@ from states import BookingStates
 from feedback import FeedbackManager, FeedbackStates
 from feedback_teachers import FeedbackTeacherManager, FeedbackTeacherStates
 from config import FEEDBACK_CONFIG
+from datetime import datetime
+from aiogram.fsm.state import State, StatesGroup
+from states import BookingStates, FinanceStates
 # Настройка логирования
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -62,6 +65,8 @@ feedback_manager = FeedbackManager(storage, gsheets, bot)
 feedback_teacher_manager = FeedbackTeacherManager(storage, gsheets, bot)
 feedback_manager.good_feedback_delay = FEEDBACK_CONFIG["good_feedback_delay"]
 feedback_teacher_manager.good_feedback_delay = FEEDBACK_CONFIG["good_feedback_delay"]
+
+
 class RoleCheckMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         # Пропускаем команду /start, /help и ввод имени
@@ -488,17 +493,103 @@ def generate_booking_types():
     builder.adjust(2)
     return builder.as_markup()
 
-def generate_calendar(year=None, month=None):
-    """Генерирует календарь с корректной обработкой переключения месяцев"""
+# def generate_calendar(year=None, month=None):
+#     """Генерирует календарь с корректной обработкой переключения месяцев"""
+#     now = datetime.now()
+#     if year is None:
+#         year = now.year
+#     if month is None:
+#         month = now.month
+#
+#     # Определяем минимальную дату (1 сентября текущего года)
+#     min_date = datetime(year=now.year, month=9, day=1).date()
+#     if now.date() > min_date:
+#         min_date = now.date()
+#
+#     builder = InlineKeyboardBuilder()
+#
+#     # Заголовок с месяцем и годом
+#     month_name = datetime(year, month, 1).strftime("%B %Y")
+#     builder.row(types.InlineKeyboardButton(
+#         text=month_name,
+#         callback_data="ignore_month_header"
+#     ))
+#
+#     # Дни недели
+#     week_days = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+#     builder.row(*[
+#         types.InlineKeyboardButton(text=day, callback_data="ignore_weekday")
+#         for day in week_days
+#     ])
+#
+#     # Генерация дней месяца
+#     first_day = datetime(year, month, 1)
+#     start_weekday = first_day.weekday()  # 0-6 (пн-вс)
+#     days_in_month = (datetime(year, month + 1, 1) - first_day).days if month < 12 else 31
+#
+#     buttons = []
+#     # Пустые кнопки для дней предыдущего месяца
+#     for _ in range(start_weekday):
+#         buttons.append(types.InlineKeyboardButton(
+#             text=" ",
+#             callback_data="ignore_empty_day"
+#         ))
+#
+#     # Кнопки дней текущего месяца
+#     for day in range(1, days_in_month + 1):
+#         current_date = datetime(year, month, day).date()
+#         if current_date < min_date:
+#             buttons.append(types.InlineKeyboardButton(
+#                 text=" ",
+#                 callback_data="ignore_past_day"
+#             ))
+#         else:
+#             buttons.append(types.InlineKeyboardButton(
+#                 text=str(day),
+#                 callback_data=f"calendar_day_{year}-{month}-{day}"
+#             ))
+#
+#         # Перенос строки после каждого воскресенья
+#         if (day + start_weekday) % 7 == 0 or day == days_in_month:
+#             builder.row(*buttons)
+#             buttons = []
+#
+#     # Кнопки навигации
+#     prev_month = month - 1 if month > 1 else 12
+#     prev_year = year if month > 1 else year - 1
+#     next_month = month + 1 if month < 12 else 1
+#     next_year = year if month < 12 else year + 1
+#
+#     # ИСПРАВЛЕНИЕ: Всегда показываем кнопку "назад", если есть предыдущий месяц
+#     # независимо от того, есть ли в нем доступные даты
+#     nav_buttons = []
+#
+#     # Всегда показываем кнопку "назад" для навигации
+#     nav_buttons.append(types.InlineKeyboardButton(
+#         text="⬅️",
+#         callback_data=f"calendar_change_{prev_year}-{prev_month}"
+#     ))
+#
+#     # Всегда показываем кнопку "вперед"
+#     nav_buttons.append(types.InlineKeyboardButton(
+#         text="➡️",
+#         callback_data=f"calendar_change_{next_year}-{next_month}"
+#     ))
+#
+#     builder.row(*nav_buttons)
+#
+#     return builder.as_markup()
+def generate_calendar(year=None, month=None, show_past_dates=True):
+    """Генерирует календарь с возможностью показа прошедших дат"""
     now = datetime.now()
     if year is None:
         year = now.year
     if month is None:
         month = now.month
 
-    # Определяем минимальную дату (1 сентября текущего года)
+    # Для финансов показываем все даты, включая прошедшие
     min_date = datetime(year=now.year, month=9, day=1).date()
-    if now.date() > min_date:
+    if not show_past_dates and now.date() > min_date:
         min_date = now.date()
 
     builder = InlineKeyboardBuilder()
@@ -533,7 +624,9 @@ def generate_calendar(year=None, month=None):
     # Кнопки дней текущего месяца
     for day in range(1, days_in_month + 1):
         current_date = datetime(year, month, day).date()
-        if current_date < min_date:
+
+        # Для финансов показываем все даты, для бронирований - только будущие
+        if not show_past_dates and current_date < min_date:
             buttons.append(types.InlineKeyboardButton(
                 text=" ",
                 callback_data="ignore_past_day"
@@ -555,17 +648,11 @@ def generate_calendar(year=None, month=None):
     next_month = month + 1 if month < 12 else 1
     next_year = year if month < 12 else year + 1
 
-    # ИСПРАВЛЕНИЕ: Всегда показываем кнопку "назад", если есть предыдущий месяц
-    # независимо от того, есть ли в нем доступные даты
     nav_buttons = []
-
-    # Всегда показываем кнопку "назад" для навигации
     nav_buttons.append(types.InlineKeyboardButton(
         text="⬅️",
         callback_data=f"calendar_change_{prev_year}-{prev_month}"
     ))
-
-    # Всегда показываем кнопку "вперед"
     nav_buttons.append(types.InlineKeyboardButton(
         text="➡️",
         callback_data=f"calendar_change_{next_year}-{next_month}"
@@ -574,7 +661,6 @@ def generate_calendar(year=None, month=None):
     builder.row(*nav_buttons)
 
     return builder.as_markup()
-
 
 @dp.callback_query(
     BookingStates.SELECT_DATE,
@@ -1096,6 +1182,252 @@ async def show_my_role(message: types.Message):
             "Ваши роли еще не назначены. Обратитесь к администратору. \n Телефон администратора: +79001372727")
 
 
+async def generate_main_menu(user_id: int) -> ReplyKeyboardMarkup:
+    """Генерирует главное меню в зависимости от ролей и прав"""
+    roles = storage.get_user_roles(user_id)
+
+    if not roles:
+        return no_roles_menu
+
+    keyboard_buttons = []
+
+    # Проверяем, может ли пользователь бронировать
+    can_book = any(role in roles for role in ['teacher', 'parent']) or (
+            'student' in roles and 'parent' in roles
+    )
+
+    if can_book:
+        keyboard_buttons.append([KeyboardButton(text="📅 Забронировать время")])
+
+    # Добавляем кнопку финансов только для учеников
+    if 'student' in roles:
+        keyboard_buttons.append([KeyboardButton(text="💰 Финансы")])
+
+    keyboard_buttons.append([KeyboardButton(text="📋 Мои бронирования")])
+    keyboard_buttons.append([KeyboardButton(text="📚 Прошедшие бронирования")])
+    keyboard_buttons.append([KeyboardButton(text="👤 Моя роль")])
+    keyboard_buttons.append([KeyboardButton(text="ℹ️ Помощь")])
+
+    # Добавляем кнопку составления расписания только для администраторов
+    if is_admin(user_id):
+        keyboard_buttons.append([KeyboardButton(text="📊 Составить расписание")])
+
+    return ReplyKeyboardMarkup(keyboard=keyboard_buttons, resize_keyboard=True)
+
+
+# main.py (добавьте обработчик кнопки "Финансы")
+@dp.message(F.text == "💰 Финансы")
+async def start_finances(message: types.Message, state: FSMContext):
+    """Начало процесса просмотра финансов"""
+    user_id = message.from_user.id
+
+    # Проверяем, что пользователь - ученик
+    user_roles = storage.get_user_roles(user_id)
+    if 'student' not in user_roles:
+        await message.answer("❌ Эта функция доступна только ученикам")
+        return
+
+    # Получаем доступные предметы ученика
+    available_subjects = storage.get_available_subjects_for_student(user_id)
+
+    if not available_subjects:
+        await message.answer(
+            "❌ У вас нет доступных предметов для просмотра финансов.\n"
+            "Обратитесь к администратору.\n Телефон администратора: +79001372727"
+        )
+        return
+
+    await state.update_data(available_subjects=available_subjects)
+
+    await message.answer(
+        "💰 Просмотр финансов\n\n"
+        "Выберите предмет для просмотра финансовой информации:",
+        reply_markup=generate_subjects_keyboard(available_subjects=available_subjects)
+    )
+    await state.set_state(FinanceStates.SELECT_SUBJECT)
+
+
+@dp.callback_query(FinanceStates.SELECT_DATE, F.data.startswith("calendar_change_"))
+async def process_finance_calendar_change(callback: types.CallbackQuery, state: FSMContext):
+    """Обрабатывает переключение месяцев в календаре для финансов"""
+    try:
+        date_str = callback.data.replace("calendar_change_", "")
+        year, month = map(int, date_str.split("-"))
+
+        await callback.message.edit_reply_markup(
+            reply_markup=generate_calendar(year, month)
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error changing calendar month for finances: {e}")
+        await callback.answer("Не удалось изменить месяц", show_alert=True)
+
+
+@dp.callback_query(FinanceStates.SELECT_DATE, F.data.startswith("ignore_"))
+async def ignore_finance_callback(callback: types.CallbackQuery):
+    """Обрабатывает игнорируемые callback'и для финансов"""
+    await callback.answer()
+
+# main.py (добавьте обработчик выбора предмета для финансов)
+@dp.callback_query(FinanceStates.SELECT_SUBJECT, F.data.startswith("subject_"))
+async def process_finance_subject(callback: types.CallbackQuery, state: FSMContext):
+    """Обрабатывает выбор предмета для финансов"""
+    subject_id = callback.data.split("_")[1]
+    user_id = callback.from_user.id
+
+    await state.update_data(finance_subject=subject_id)
+
+    # Получаем доступные даты для финансов
+    available_dates = []
+    if gsheets:
+        available_dates = gsheets.get_available_finance_dates(user_id, subject_id)
+
+    if not available_dates:
+        await callback.message.edit_text(
+            f"❌ Для предмета {SUBJECTS.get(subject_id, 'Неизвестный')} нет финансовых данных\n"
+            "Или даты еще не настроены администратором."
+        )
+        await state.clear()
+        return
+
+    await state.update_data(available_finance_dates=available_dates)
+
+    # Показываем календарь для выбора даты (с прошедшими датами)
+    await callback.message.edit_text(
+        f"📚 Предмет: {SUBJECTS.get(subject_id, 'Неизвестный')}\n"
+        "📅 Выберите дату для просмотра финансов:",
+        reply_markup=generate_calendar(show_past_dates=True)  # Показываем прошедшие даты
+    )
+    await state.set_state(FinanceStates.SELECT_DATE)
+    await callback.answer()
+
+
+@dp.callback_query(FinanceStates.SELECT_DATE, F.data.startswith("calendar_day_"))
+async def process_finance_date(callback: types.CallbackQuery, state: FSMContext):
+    """Обрабатывает выбор даты для финансов"""
+    try:
+        data = callback.data
+        date_str = data.replace("calendar_day_", "")
+        year, month, day = map(int, date_str.split("-"))
+        selected_date = datetime(year, month, day).date()
+        formatted_date = selected_date.strftime("%Y-%m-%d")
+
+        state_data = await state.get_data()
+        user_id = callback.from_user.id
+        subject_id = state_data.get('finance_subject')
+        available_dates = state_data.get('available_finance_dates', [])
+
+        # Проверяем, что выбранная дата доступна
+        if formatted_date not in available_dates:
+            await callback.answer(
+                f"❌ На {day}.{month}.{year} нет финансовых данных\n"
+                "Выберите другую дату из доступных",
+                show_alert=True
+            )
+            return
+
+        await state.update_data(selected_finance_date=formatted_date)
+
+        # Получаем финансовую информацию
+        finances = {}
+        if gsheets:
+            finances = gsheets.get_student_finances(user_id, subject_id, formatted_date)
+
+        # Логируем для отладки
+        logger.info(f"Финансовые данные для user_id {user_id}, subject {subject_id}, date {formatted_date}: {finances}")
+
+        # Формируем ответ
+        subject_name = SUBJECTS.get(subject_id, 'Неизвестный предмет')
+        replenished = finances.get('replenished', 0.0)
+        withdrawn = finances.get('withdrawn', 0.0)
+        tariff = finances.get('tariff', 0.0)
+
+        message_text = (
+            f"💰 Финансовая информация\n\n"
+            f"📚 Предмет: {subject_name}\n"
+            f"📅 Дата: {day}.{month}.{year}\n"
+            f"💵 Тариф: {tariff} руб.\n\n"
+            f"📈 Пополнено: +{replenished} руб.\n"
+            f"📉 Списано: -{withdrawn} руб.\n"
+        )
+
+        # Добавляем информацию о наличии занятия
+        if withdrawn > 0:
+            message_text += f"✅ В этот день было занятие\n"
+        else:
+            message_text += f"❌ В этот день не было занятий\n"
+
+        # Добавляем итоговое изменение
+        net_change = replenished - withdrawn
+        if net_change > 0:
+            message_text += f"📊 Итоговое изменение: +{net_change} руб."
+        elif net_change < 0:
+            message_text += f"📊 Итоговое изменение: {net_change} руб."
+        else:
+            message_text += f"📊 Итоговое изменение: 0 руб."
+
+        # Создаем клавиатуру для возврата
+        builder = InlineKeyboardBuilder()
+        builder.row(
+            types.InlineKeyboardButton(
+                text="🔙 Выбрать другую дату",
+                callback_data="finance_back_to_dates"
+            )
+        )
+        builder.row(
+            types.InlineKeyboardButton(
+                text="🔙 Выбрать другой предмет",
+                callback_data="finance_back_to_subjects"
+            )
+        )
+        builder.row(
+            types.InlineKeyboardButton(
+                text="🏠 В главное меню",
+                callback_data="back_to_menu"
+            )
+        )
+
+        await callback.message.edit_text(
+            message_text,
+            reply_markup=builder.as_markup()
+        )
+        await state.set_state(FinanceStates.SHOW_FINANCES)
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Ошибка обработки даты финансов: {e}")
+        await callback.answer("❌ Ошибка при обработке даты", show_alert=True)
+
+# main.py (добавьте обработчики навигации для финансов)
+@dp.callback_query(FinanceStates.SHOW_FINANCES, F.data == "finance_back_to_dates")
+async def finance_back_to_dates(callback: types.CallbackQuery, state: FSMContext):
+    """Возврат к выбору даты для финансов"""
+    state_data = await state.get_data()
+    subject_id = state_data.get('finance_subject')
+    subject_name = SUBJECTS.get(subject_id, 'Неизвестный')
+
+    await callback.message.edit_text(
+        f"📚 Предмет: {subject_name}\n"
+        "📅 Выберите дату для просмотра финансов:",
+        reply_markup=generate_calendar()
+    )
+    await state.set_state(FinanceStates.SELECT_DATE)
+    await callback.answer()
+
+
+@dp.callback_query(FinanceStates.SHOW_FINANCES, F.data == "finance_back_to_subjects")
+async def finance_back_to_subjects(callback: types.CallbackQuery, state: FSMContext):
+    """Возврат к выбору предмета для финансов"""
+    state_data = await state.get_data()
+    available_subjects = state_data.get('available_subjects', [])
+
+    await callback.message.edit_text(
+        "💰 Просмотр финансов\n\n"
+        "Выберите предмет для просмотра финансовой информации:",
+        reply_markup=generate_subjects_keyboard(available_subjects=available_subjects)
+    )
+    await state.set_state(FinanceStates.SELECT_SUBJECT)
+    await callback.answer()
 @dp.message(F.text == "ℹ️ Помощь")
 async def show_help(message: types.Message):
     await cmd_help(message)
