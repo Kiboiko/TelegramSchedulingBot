@@ -808,13 +808,13 @@ additional_menu = ReplyKeyboardMarkup(
 )
 
 # Комбинированное меню для пользователей без ролей
-no_roles_menu = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="❓ Обратиться к администратору")],
-        [KeyboardButton(text="🔄 Проверить наличие ролей")],
-    ],
-    resize_keyboard=True
-)
+# no_roles_menu = ReplyKeyboardMarkup(
+#     keyboard=[
+#         [KeyboardButton(text="❓ Обратиться к администратору")],
+#         [KeyboardButton(text="🔄 Проверить наличие ролей")],
+#     ],
+#     resize_keyboard=True
+# )
 
 
 # async def generate_main_menu(user_id: int) -> ReplyKeyboardMarkup:
@@ -846,76 +846,76 @@ no_roles_menu = ReplyKeyboardMarkup(
 #     return ReplyKeyboardMarkup(keyboard=keyboard_buttons, resize_keyboard=True)
 
 
-@dp.message(CommandStart())
-async def cmd_start(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
-    user_name = storage.get_user_name(user_id)
+# @dp.message(CommandStart())
+# async def cmd_start(message: types.Message, state: FSMContext):
+#     user_id = message.from_user.id
+#     user_name = storage.get_user_name(user_id)
 
-    menu = await generate_main_menu(user_id)
+#     menu = await generate_main_menu(user_id)
 
-    if user_name:
-        await message.answer(
-            f"С возвращением, {user_name}!\n"
-            "Используйте кнопки ниже для навигации:",
-            reply_markup=menu
-        )
-    else:
-        await message.answer(
-            "Добро пожаловать в систему бронирования!\n"
-            "Введите ваши имя и фамилию для регистрации:",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        await state.set_state(BookingStates.INPUT_NAME)
-
-
-@dp.message(F.text == "🔄 Проверить наличие ролей")
-async def check_roles(message: types.Message, state: FSMContext):
-    """Обработчик кнопки проверки ролей - выполняет команду /start"""
-    await cmd_start(message, state)
+#     if user_name:
+#         await message.answer(
+#             f"С возвращением, {user_name}!\n"
+#             "Используйте кнопки ниже для навигации:",
+#             reply_markup=menu
+#         )
+#     else:
+#         await message.answer(
+#             "Добро пожаловать в систему бронирования!\n"
+#             "Введите ваши имя и фамилию для регистрации:",
+#             reply_markup=ReplyKeyboardRemove()
+#         )
+#         await state.set_state(BookingStates.INPUT_NAME)
 
 
-@dp.message(F.text == "👤 Моя роль")
-async def show_my_role(message: types.Message):
-    roles = storage.get_user_roles(message.from_user.id)
-    if roles:
-        role_translations = {
-            "teacher": "преподаватель",
-            "student": "ученик",
-            "parent": "родитель"
-        }
-        role_text = ", ".join([role_translations.get(role, role) for role in roles])
-        await message.answer(f"Ваши роли: {role_text}")
-    else:
-        await message.answer(
-            "Ваши роли еще не назначены. Обратитесь к администратору. \n Телефон администратора: +79001372727")
+# @dp.message(F.text == "🔄 Проверить наличие ролей")
+# async def check_roles(message: types.Message, state: FSMContext):
+#     """Обработчик кнопки проверки ролей - выполняет команду /start"""
+#     await cmd_start(message, state)
 
 
-@dp.message(F.text == "ℹ️ Помощь")
-async def show_help(message: types.Message):
-    await cmd_help(message)
+# @dp.message(F.text == "👤 Моя роль")
+# async def show_my_role(message: types.Message):
+#     roles = storage.get_user_roles(message.from_user.id)
+#     if roles:
+#         role_translations = {
+#             "teacher": "преподаватель",
+#             "student": "ученик",
+#             "parent": "родитель"
+#         }
+#         role_text = ", ".join([role_translations.get(role, role) for role in roles])
+#         await message.answer(f"Ваши роли: {role_text}")
+#     else:
+#         await message.answer(
+#             "Ваши роли еще не назначены. Обратитесь к администратору. \n Телефон администратора: +79001372727")
 
 
-@dp.message(Command("help"))
-async def cmd_help(message: types.Message):
-    await message.answer(
-        "📞 Для получения помощи обратитесь к администратору\n"
-        "Телефон администратора: +79001372727.\n\n"
-        "Доступные команды:\n"
-        "/start - начать работу с ботом\n"
-        "/help - показать эту справку\n"
-        "/book - забронировать время\n"
-        "/my_bookings - посмотреть свои бронирования\n"
-        "/my_role - узнать свою роль"
-    )
+# @dp.message(F.text == "ℹ️ Помощь")
+# async def show_help(message: types.Message):
+#     await cmd_help(message)
 
 
-@dp.message(F.text == "❓ Обратиться к администратору")
-async def contact_admin(message: types.Message):
-    await message.answer(
-        "📞 Для получения доступа к системе бронирования\n"
-        "обратитесь к администратору \n Телефон администратора: +79001372727.\n\n"
-        "После назначения ролей вы сможете пользоваться всеми функциями бота."
-    )
+# @dp.message(Command("help"))
+# async def cmd_help(message: types.Message):
+#     await message.answer(
+#         "📞 Для получения помощи обратитесь к администратору\n"
+#         "Телефон администратора: +79001372727.\n\n"
+#         "Доступные команды:\n"
+#         "/start - начать работу с ботом\n"
+#         "/help - показать эту справку\n"
+#         "/book - забронировать время\n"
+#         "/my_bookings - посмотреть свои бронирования\n"
+#         "/my_role - узнать свою роль"
+#     )
+
+
+# @dp.message(F.text == "❓ Обратиться к администратору")
+# async def contact_admin(message: types.Message):
+#     await message.answer(
+#         "📞 Для получения доступа к системе бронирования\n"
+#         "обратитесь к администратору \n Телефон администратора: +79001372727.\n\n"
+#         "После назначения ролей вы сможете пользоваться всеми функциями бота."
+#     )
 
 
 @dp.message(F.text == "📊 Составить расписание")
