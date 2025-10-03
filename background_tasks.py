@@ -2,17 +2,40 @@ import asyncio
 import logging
 from typing import List, Dict, Any
 from datetime import datetime
+import asyncio
+import logging
+from datetime import datetime
+from teacher_reminder import TeacherReminderManager
 
 logger = logging.getLogger(__name__)
 
 
 class BackgroundTasks:
-    def __init__(self, storage, gsheets, feedback_manager, feedback_teacher_manager):
+    def __init__(self, storage, gsheets, feedback_manager, feedback_teacher_manager, bot):
         self.storage = storage
         self.gsheets = gsheets
         self.feedback_manager = feedback_manager
         self.feedback_teacher_manager = feedback_teacher_manager
+        self.bot = bot
+        self.teacher_reminder_manager = TeacherReminderManager(storage, gsheets, bot)
 
+    async def reminder_check_task(self):
+        """Задача для проверки и отправки напоминаний преподавателям"""
+        logger.info("Задача проверки напоминаний запущена")
+
+        while True:
+            try:
+                # Проверяем каждую минуту
+                if self.teacher_reminder_manager.should_send_reminder():
+                    logger.info("Время отправки напоминаний преподавателям")
+                    await self.teacher_reminder_manager.send_reminders()
+
+                # Ждем 60 секунд до следующей проверки
+                await asyncio.sleep(60)
+
+            except Exception as e:
+                logger.error(f"Ошибка в задаче проверки напоминаний: {e}")
+                await asyncio.sleep(300)  # Ждем 5 минут при ошибке
     async def cleanup_old_bookings(self):
         """Периодически очищает старые бронирования"""
         while True:
@@ -176,6 +199,7 @@ class BackgroundTasks:
             self.check_feedback_background(),
             self.sync_pending_feedback_background(),
             self.check_teacher_feedback_background(),
-            self.sync_pending_teacher_feedback_background()
+            self.sync_pending_teacher_feedback_background(),
+            self.reminder_check_task()
         ]
         return tasks

@@ -39,6 +39,7 @@ from config import FEEDBACK_CONFIG
 from datetime import datetime
 from aiogram.fsm.state import State, StatesGroup
 from states import BookingStates, FinanceStates
+from teacher_reminder import TeacherReminderManager
 # Настройка логирования
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -65,7 +66,7 @@ feedback_manager = FeedbackManager(storage, gsheets, bot)
 feedback_teacher_manager = FeedbackTeacherManager(storage, gsheets, bot)
 feedback_manager.good_feedback_delay = FEEDBACK_CONFIG["good_feedback_delay"]
 feedback_teacher_manager.good_feedback_delay = FEEDBACK_CONFIG["good_feedback_delay"]
-
+teacher_reminder_manager = TeacherReminderManager(storage, gsheets, bot)
 
 class RoleCheckMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
@@ -107,7 +108,7 @@ class RoleCheckMiddleware(BaseMiddleware):
 # Добавление middleware
 dp.update.middleware(RoleCheckMiddleware())
 booking_manager = BookingManager(storage, gsheets)
-background_tasks = BackgroundTasks(storage, gsheets, feedback_manager, feedback_teacher_manager)
+background_tasks = BackgroundTasks(storage, gsheets, feedback_manager, feedback_teacher_manager, bot)
 
 
 def get_subject_distribution_by_time(loader, target_date: str, condition_check: bool = True) -> Dict[time, Dict]:
