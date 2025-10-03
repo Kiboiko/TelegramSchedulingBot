@@ -30,12 +30,16 @@ from typing import List, Dict
 from shedule_app.GoogleParser import GoogleSheetsDataLoader
 from bookings_management.booking_management import BookingManager
 from background_tasks import BackgroundTasks
+
 # Импорты из новых файлов
 from config import *
 from states import BookingStates
 from feedback import FeedbackManager, FeedbackStates
 from feedback_teachers import FeedbackTeacherManager, FeedbackTeacherStates
 from config import FEEDBACK_CONFIG
+
+from calendar_utils import generate_calendar,get_time_range_for_date
+from time_utils import generate_time_range_keyboard_with_availability,calculate_lesson_duration
 # Настройка логирования
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -307,131 +311,7 @@ def check_student_availability_for_slots(
 
     return result
 
-def generate_time_range_keyboard_with_availability(
-    selected_date=None,
-    start_time=None,
-    end_time=None,
-    availability_map: Dict[time, bool] = None
-):
-    """Генерирует клавиатуру выбора времени с учетом доступности и дня недели"""
-    builder = InlineKeyboardBuilder()
 
-    # Определяем рабочие часы в зависимости от дня недели
-    if selected_date:
-        weekday = selected_date.weekday()
-        if weekday <= 4:  # будни
-            start = datetime.strptime("14:00", "%H:%M")
-            end = datetime.strptime("20:00", "%H:%M")
-        else:  # выходные
-            start = datetime.strptime("9:00", "%H:%M")
-            end = datetime.strptime("15:00", "%H:%M")
-    else:
-        # По умолчанию используем будний день
-        start = datetime.strptime("14:00", "%H:%M")
-        end = datetime.strptime("20:00", "%H:%M")
-
-    current = start
-
-    while current <= end:
-        time_str = current.strftime("%H:%M")
-        time_obj = current.time()
-
-        # Если availability_map = None (для преподавателей), все слоты доступны
-        is_available = True
-        if availability_map is not None:  # Только если есть карта доступности
-            is_available = availability_map.get(time_obj, True)
-
-        # Определяем стиль кнопки на основе доступности
-        if start_time and time_str == start_time:
-            button_text = "🟢 " + time_str
-        elif end_time and time_str == end_time:
-            button_text = "🔴 " + time_str
-        elif (start_time and end_time and
-              datetime.strptime(start_time, "%H:%M").time() < time_obj <
-              datetime.strptime(end_time, "%H:%M").time()):
-            button_text = "🔵 " + time_str
-        else:
-            button_text = time_str
-
-        # Для учеников показываем заблокированные слоты
-        if availability_map is not None and not is_available:
-            button_text = "🔒 " + time_str
-            callback_data = "time_slot_unavailable"
-        else:
-            callback_data = f"time_point_{time_str}"
-
-        builder.add(types.InlineKeyboardButton(
-            text=button_text,
-            callback_data=callback_data
-        ))
-        current += timedelta(minutes=15)  # Шаг 15 минут
-
-    builder.adjust(4)
-
-    # Добавляем кнопку информации о доступности только для учеников
-    control_buttons = []
-    if availability_map is not None:  # Статистика только для учеников
-        available_count = sum(1 for available in availability_map.values() if available)
-        total_count = len(availability_map)
-        control_buttons.append(types.InlineKeyboardButton(
-            text=f"Доступно: {available_count}/{total_count}",
-            callback_data="availability_info"
-        ))
-
-    if control_buttons:
-        builder.row(*control_buttons)
-
-    if start_time and end_time:
-        # Для преподавателей всегда доступно подтверждение
-        if availability_map is None:
-            builder.row(
-                types.InlineKeyboardButton(
-                    text="✅ Подтвердить время",
-                    callback_data="confirm_time_range"
-                )
-            )
-        else:
-            # Для учеников проверяем доступность всего интервала
-            is_interval_available = True
-            
-            # Проверяем все временные слоты в выбранном интервале
-            start_obj = datetime.strptime(start_time, "%H:%M").time()
-            end_obj = datetime.strptime(end_time, "%H:%M").time()
-            
-            current_check = start_obj
-            while current_check < end_obj:
-                if current_check not in availability_map or not availability_map[current_check]:
-                    is_interval_available = False
-                    break
-                # Переходим к следующему 15-минутному слоту
-                total_minutes = current_check.hour * 60 + current_check.minute + 15
-                next_hour = total_minutes // 60
-                next_minute = total_minutes % 60
-                current_check = time(next_hour, next_minute)
-            
-            if is_interval_available:
-                builder.row(
-                    types.InlineKeyboardButton(
-                        text="✅ Подтвердить время",
-                        callback_data="confirm_time_range"
-                    )
-                )
-            else:
-                builder.row(
-                    types.InlineKeyboardButton(
-                        text="❌ Интервал содержит недоступные слоты",
-                        callback_data="interval_contains_unavailable"
-                    )
-                )
-
-    builder.row(
-        types.InlineKeyboardButton(
-            text="❌ Отменить",
-            callback_data="cancel_time_selection"
-        )
-    )
-
-    return builder.as_markup()
 
 
 @dp.callback_query(BookingStates.SELECT_TIME_RANGE, F.data == "interval_contains_unavailable")
@@ -486,93 +366,6 @@ def generate_booking_types():
             callback_data=f"booking_type_{booking_type}"
         ))
     builder.adjust(2)
-    return builder.as_markup()
-
-def generate_calendar(year=None, month=None):
-    """Генерирует календарь с корректной обработкой переключения месяцев"""
-    now = datetime.now()
-    if year is None:
-        year = now.year
-    if month is None:
-        month = now.month
-
-    # Определяем минимальную дату (1 сентября текущего года)
-    min_date = datetime(year=now.year, month=9, day=1).date()
-    if now.date() > min_date:
-        min_date = now.date()
-
-    builder = InlineKeyboardBuilder()
-
-    # Заголовок с месяцем и годом
-    month_name = datetime(year, month, 1).strftime("%B %Y")
-    builder.row(types.InlineKeyboardButton(
-        text=month_name,
-        callback_data="ignore_month_header"
-    ))
-
-    # Дни недели
-    week_days = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
-    builder.row(*[
-        types.InlineKeyboardButton(text=day, callback_data="ignore_weekday")
-        for day in week_days
-    ])
-
-    # Генерация дней месяца
-    first_day = datetime(year, month, 1)
-    start_weekday = first_day.weekday()  # 0-6 (пн-вс)
-    days_in_month = (datetime(year, month + 1, 1) - first_day).days if month < 12 else 31
-
-    buttons = []
-    # Пустые кнопки для дней предыдущего месяца
-    for _ in range(start_weekday):
-        buttons.append(types.InlineKeyboardButton(
-            text=" ",
-            callback_data="ignore_empty_day"
-        ))
-
-    # Кнопки дней текущего месяца
-    for day in range(1, days_in_month + 1):
-        current_date = datetime(year, month, day).date()
-        if current_date < min_date:
-            buttons.append(types.InlineKeyboardButton(
-                text=" ",
-                callback_data="ignore_past_day"
-            ))
-        else:
-            buttons.append(types.InlineKeyboardButton(
-                text=str(day),
-                callback_data=f"calendar_day_{year}-{month}-{day}"
-            ))
-
-        # Перенос строки после каждого воскресенья
-        if (day + start_weekday) % 7 == 0 or day == days_in_month:
-            builder.row(*buttons)
-            buttons = []
-
-    # Кнопки навигации
-    prev_month = month - 1 if month > 1 else 12
-    prev_year = year if month > 1 else year - 1
-    next_month = month + 1 if month < 12 else 1
-    next_year = year if month < 12 else year + 1
-
-    # ИСПРАВЛЕНИЕ: Всегда показываем кнопку "назад", если есть предыдущий месяц
-    # независимо от того, есть ли в нем доступные даты
-    nav_buttons = []
-
-    # Всегда показываем кнопку "назад" для навигации
-    nav_buttons.append(types.InlineKeyboardButton(
-        text="⬅️",
-        callback_data=f"calendar_change_{prev_year}-{prev_month}"
-    ))
-
-    # Всегда показываем кнопку "вперед"
-    nav_buttons.append(types.InlineKeyboardButton(
-        text="➡️",
-        callback_data=f"calendar_change_{next_year}-{next_month}"
-    ))
-
-    builder.row(*nav_buttons)
-
     return builder.as_markup()
 
 
@@ -1881,23 +1674,7 @@ async def process_student_subject(callback: types.CallbackQuery, state: FSMConte
     await state.set_state(BookingStates.SELECT_DATE)
     await callback.answer()
     
-def get_time_range_for_date(selected_date=None):
-    """
-    Возвращает временной диапазон и шаг в зависимости от дня недели
-    """
-    if selected_date:
-        weekday = selected_date.weekday()
-    else:
-        weekday = datetime.now().weekday()
-    
-    if weekday <= 4:  # будни (пн-пт)
-        start_time = time(14, 0)
-        end_time = time(20, 0)
-    else:  # выходные (сб-вс)
-        start_time = time(9, 0)
-        end_time = time(15, 0)
-    
-    return start_time, end_time, 15  # шаг 15 минут
+
 
 @dp.callback_query(BookingStates.SELECT_DATE, F.data.startswith("calendar_day_"))
 async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
@@ -2042,14 +1819,14 @@ def get_student_class(user_id: int) -> int:
         logger.error(f"Ошибка получения класса ученика {user_id}: {e}")
         return 9
     
-def calculate_lesson_duration(student_class: int) -> int:
-    """Рассчитывает длительность занятия в минутах в зависимости от класса"""
-    if student_class <= 6:
-        return 60  # 1 час для 6 класса и младше
-    elif student_class <= 8:
-        return 90  # 1.5 часа для 7-8 классов
-    else:
-        return 120  # 2 часа для 9 класса и старше
+# def calculate_lesson_duration(student_class: int) -> int:
+#     """Рассчитывает длительность занятия в минутах в зависимости от класса"""
+#     if student_class <= 6:
+#         return 60  # 1 час для 6 класса и младше
+#     elif student_class <= 8:
+#         return 90  # 1.5 часа для 7-8 классов
+#     else:
+#         return 120  # 2 часа для 9 класса и старше
 
 
 @dp.callback_query(BookingStates.SELECT_TIME_RANGE, F.data == "interval_unavailable")
