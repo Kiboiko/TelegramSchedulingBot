@@ -1,7 +1,7 @@
 # main.py
 import sys
 
-sys.path.append(r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
 
 import asyncio
 import json
@@ -40,7 +40,13 @@ from config import FEEDBACK_CONFIG
 
 from calendar_utils import generate_calendar,get_time_range_for_date
 from time_utils import generate_time_range_keyboard_with_availability,calculate_lesson_duration
+from datetime import datetime
+from aiogram.fsm.state import State, StatesGroup
+from states import BookingStates, FinanceStates
+from teacher_reminder import TeacherReminderManager
 # Настройка логирования
+
+
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
@@ -66,6 +72,8 @@ feedback_manager = FeedbackManager(storage, gsheets, bot)
 feedback_teacher_manager = FeedbackTeacherManager(storage, gsheets, bot)
 feedback_manager.good_feedback_delay = FEEDBACK_CONFIG["good_feedback_delay"]
 feedback_teacher_manager.good_feedback_delay = FEEDBACK_CONFIG["good_feedback_delay"]
+teacher_reminder_manager = TeacherReminderManager(storage, gsheets, bot)
+
 class RoleCheckMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         # Пропускаем команду /start, /help и ввод имени
@@ -106,7 +114,6 @@ class RoleCheckMiddleware(BaseMiddleware):
 # Добавление middleware
 dp.update.middleware(RoleCheckMiddleware())
 booking_manager = BookingManager(storage, gsheets)
-register_menu_handlers(dp, booking_manager,storage)
 background_tasks = BackgroundTasks(storage, gsheets, feedback_manager, feedback_teacher_manager)
 
 
@@ -619,7 +626,7 @@ async def handle_teacher_feedback_submit(callback: types.CallbackQuery, state: F
 
         await callback.message.edit_text(
             "Спасибо за вашу обратную связь! 💫\n"
-            "Ваше мнение очень важно для улучшения нашей работы!"
+            "Ваш отзыв важен для совершенствования нашей работы!"
         )
 
         await state.clear()
@@ -890,9 +897,9 @@ additional_menu = ReplyKeyboardMarkup(
 #             "Ваши роли еще не назначены. Обратитесь к администратору. \n Телефон администратора: +79001372727")
 
 
-# @dp.message(F.text == "ℹ️ Помощь")
-# async def show_help(message: types.Message):
-#     await cmd_help(message)
+@dp.message(F.text == "ℹ️ Помощь")
+async def show_help(message: types.Message):
+    await cmd_help(message)
 
 
 # @dp.message(Command("help"))

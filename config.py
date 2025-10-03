@@ -8,7 +8,7 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 BOOKINGS_FILE = "bookings.json"
-CREDENTIALS_PATH = r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\credentials.json"
+CREDENTIALS_PATH = r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\credentials.json"
 SPREADSHEET_ID = "1gFtQ7UJstu-Uv_BpgCUp24unsVT9oajSyWxU0j0GMpg"
 ADMIN_IDS = [1180878673, 973231400, 1312414595]
 BOOKING_TYPES = ["Тип1"]
@@ -37,6 +37,22 @@ FEEDBACK_CONFIG = {
     },
     "admin_phone": "+79001372727",
     "good_feedback_delay": 7  # НОВАЯ КОНСТАНТА - через сколько занятий отправлять следующий отзыв после "Хорошо"
+}
+
+# config.py (дополнение)
+FINANCE_CONFIG = {
+    "start_date": "01.09.2025",  # Дата начала финансового учета
+    "finance_columns_start": "JG",  # Начало столбцов с финансовыми данными
+    "tariff_column": "N",  # Столбец с тарифом
+    "replenishment_offset": 0,  # Смещение для пополнения (первый столбец даты)
+    "withdrawal_offset": 1,  # Смещение для списания (второй столбец даты)
+}
+
+REMINDER_CONFIG = {
+    "reminder_day": 3,  # Четверг (0-понедельник, 6-воскресенье)
+    "reminder_hour": 18,  # 18:00
+    "reminder_minute": 0,
+    "reminder_message": "НАПОМИНАНИЕ! Проставьте свои возможности на следующую неделю"
 }
 
 # Интервал проверки отзывов для обоих типов пользователей
