@@ -1,17 +1,14 @@
 # menu_handlers.py
-from aiogram import types,F
+from aiogram import types, F
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import ReplyKeyboardMarkup, KeyboardButton
 import logging
 from config import is_admin
-from storage import JSONStorage
 from states import BookingStates
+import logging
 
 logger = logging.getLogger(__name__)
-
-# Создаем экземпляр storage - используем тот же путь, что в main.py
-storage = JSONStorage(file_path="bookings.json")
 
 # Меню для пользователей без ролей
 no_roles_menu = ReplyKeyboardMarkup(
@@ -22,7 +19,7 @@ no_roles_menu = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-async def generate_main_menu(user_id: int) -> ReplyKeyboardMarkup:
+async def generate_main_menu(user_id: int, storage) -> ReplyKeyboardMarkup:
     """Генерирует главное меню в зависимости от ролей и прав"""
     roles = storage.get_user_roles(user_id)
 
@@ -50,12 +47,12 @@ async def generate_main_menu(user_id: int) -> ReplyKeyboardMarkup:
 
     return ReplyKeyboardMarkup(keyboard=keyboard_buttons, resize_keyboard=True)
 
-async def cmd_start(message: types.Message, state: FSMContext):
+async def cmd_start(message: types.Message, state: FSMContext, storage):
     """Обработчик команды /start"""
     user_id = message.from_user.id
     user_name = storage.get_user_name(user_id)
 
-    menu = await generate_main_menu(user_id)
+    menu = await generate_main_menu(user_id, storage)
 
     if user_name:
         await message.answer(
@@ -71,13 +68,16 @@ async def cmd_start(message: types.Message, state: FSMContext):
         )
         await state.set_state(BookingStates.INPUT_NAME)
 
-async def check_roles(message: types.Message, state: FSMContext):
+async def check_roles(message: types.Message, state: FSMContext, storage):
     """Обработчик кнопки проверки ролей - выполняет команду /start"""
-    await cmd_start(message, state)
+    await cmd_start(message, state, storage)
 
-async def show_my_role(message: types.Message):
+async def show_my_role(message: types.Message, storage):
     """Показывает роли пользователя"""
     roles = storage.get_user_roles(message.from_user.id)
+    logger.info("Найденные роли: " + ",".join(role for role in roles))
+    logger.info("ID для поиска: " + str(message.from_user.id))
+    
     if roles:
         role_translations = {
             "teacher": "преподаватель",
@@ -140,10 +140,10 @@ def create_past_bookings_handler(booking_manager):
                             reply_markup=keyboard.as_markup() if hasattr(keyboard, 'as_markup') else keyboard)
     return show_past_bookings_handler
 
-async def back_to_menu_handler(callback: types.CallbackQuery):
+async def back_to_menu_handler(callback: types.CallbackQuery, storage):
     """Обработчик возврата в главное меню"""
     user_id = callback.from_user.id
-    menu = await generate_main_menu(user_id)
+    menu = await generate_main_menu(user_id, storage)
 
     await callback.message.edit_text(
         "Главное меню:",
@@ -164,7 +164,7 @@ def create_back_to_bookings_handler(booking_manager):
         if keyboard:
             await callback.message.edit_text(
                 "Ваши бронирования:",
-                reply_markup=keyboard
+                reply_markup=keyboard.as_markup()  # Add .as_markup() here
             )
         else:
             await callback.message.edit_text("У вас нет активных бронирований")
@@ -180,17 +180,17 @@ def create_back_to_past_bookings_handler(booking_manager):
         if keyboard:
             await callback.message.edit_text(
                 "📚 Ваши прошедшие бронирования:",
-                reply_markup=keyboard
+                reply_markup=keyboard.as_markup()  # Add .as_markup() here
             )
         else:
             await callback.message.edit_text("У вас нет прошедших бронирований")
             await callback.answer()
     return back_to_past_bookings_handler
 
-async def back_to_menu_from_past_handler(callback: types.CallbackQuery):
+async def back_to_menu_from_past_handler(callback: types.CallbackQuery, storage):
     """Обработчик возврата в меню из раздела прошедших бронирований"""
     user_id = callback.from_user.id
-    menu = await generate_main_menu(user_id)
+    menu = await generate_main_menu(user_id, storage)
 
     await callback.message.edit_text(
         "Главное меню:",
@@ -203,7 +203,7 @@ async def back_to_menu_from_past_handler(callback: types.CallbackQuery):
     await callback.answer()
 
 # Функция для регистрации обработчиков в диспетчере
-def register_menu_handlers(dp, booking_manager):
+def register_menu_handlers(dp, booking_manager, storage):
     """Регистрирует все обработчики меню в диспетчере"""
     
     # Создаем обработчики с booking_manager
@@ -212,14 +212,30 @@ def register_menu_handlers(dp, booking_manager):
     back_to_bookings_handler = create_back_to_bookings_handler(booking_manager)
     back_to_past_bookings_handler = create_back_to_past_bookings_handler(booking_manager)
     
+    # Создаем обертки для обработчиков, которым нужен storage
+    async def wrapped_cmd_start(message: types.Message, state: FSMContext):
+        return await cmd_start(message, state, storage)
+    
+    async def wrapped_check_roles(message: types.Message, state: FSMContext):
+        return await check_roles(message, state, storage)
+    
+    async def wrapped_show_my_role(message: types.Message):
+        return await show_my_role(message, storage)
+    
+    async def wrapped_back_to_menu_handler(callback: types.CallbackQuery):
+        return await back_to_menu_handler(callback, storage)
+    
+    async def wrapped_back_to_menu_from_past_handler(callback: types.CallbackQuery):
+        return await back_to_menu_from_past_handler(callback, storage)
+    
     # Команды
-    dp.message.register(cmd_start, CommandStart())
+    dp.message.register(wrapped_cmd_start, CommandStart())
     dp.message.register(cmd_help, Command("help"))
-    dp.message.register(show_my_role, Command("my_role"))
+    dp.message.register(wrapped_show_my_role, Command("my_role"))
     
     # Текстовые обработчики меню
-    dp.message.register(check_roles, F.text == "🔄 Проверить наличие ролей")
-    dp.message.register(show_my_role, F.text == "👤 Моя роль")
+    dp.message.register(wrapped_check_roles, F.text == "🔄 Проверить наличие ролей")
+    dp.message.register(wrapped_show_my_role, F.text == "👤 Моя роль")
     dp.message.register(show_help, F.text == "ℹ️ Помощь")
     dp.message.register(contact_admin, F.text == "❓ Обратиться к администратору")
     dp.message.register(show_bookings_handler, F.text == "📋 Мои бронирования")
@@ -227,7 +243,7 @@ def register_menu_handlers(dp, booking_manager):
     
     # Callback обработчики навигации
     dp.callback_query.register(
-        back_to_menu_handler, 
+        wrapped_back_to_menu_handler, 
         F.data == "back_to_menu"
     )
     dp.callback_query.register(
@@ -239,6 +255,6 @@ def register_menu_handlers(dp, booking_manager):
         F.data == "back_to_past_bookings"
     )
     dp.callback_query.register(
-        back_to_menu_from_past_handler,
+        wrapped_back_to_menu_from_past_handler,
         F.data == "back_to_menu_from_past"
     )

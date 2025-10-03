@@ -106,7 +106,7 @@ class RoleCheckMiddleware(BaseMiddleware):
 # Добавление middleware
 dp.update.middleware(RoleCheckMiddleware())
 booking_manager = BookingManager(storage, gsheets)
-register_menu_handlers(dp, booking_manager)
+register_menu_handlers(dp, booking_manager,storage)
 background_tasks = BackgroundTasks(storage, gsheets, feedback_manager, feedback_teacher_manager)
 
 
@@ -1144,7 +1144,7 @@ async def show_past_bookings(message: types.Message):
         return
 
     await message.answer("📚 Ваши прошедшие бронирования:", 
-                        reply_markup=keyboard.as_markup() if hasattr(keyboard, 'as_markup') else keyboard)
+                        reply_markup=keyboard.as_markup())  # Add .as_markup() here
 
 
 @dp.callback_query(F.data.startswith("past_booking_info_"))
@@ -2192,23 +2192,24 @@ async def show_bookings(message: types.Message):
         return
 
     await message.answer("Ваши бронирования (отсортированы по дате и времени):", 
-                        reply_markup=keyboard.as_markup() if hasattr(keyboard, 'as_markup') else keyboard)
+                        reply_markup=keyboard.as_markup())  # Add .as_markup() here
 
 
-@dp.message(Command("my_role"))
-async def show_role(message: types.Message):
-    roles = storage.get_user_roles(message.from_user.id)
-    if roles:
-        role_text = ", ".join([
-            "преподаватель" if role == "teacher"
-            else "родитель" if role == "parent"
-            else "ученик"
-            for role in roles
-        ])
-        await message.answer(f"Ваши роли: {role_text}")
-    else:
-        await message.answer(
-            "Ваши роли еще не назначены. Обратитесь к администратору.\n Телефон администратора: +79001372727")
+# @dp.message(Command("my_role"))
+# async def show_role(message: types.Message):
+#     roles = storage.get_user_roles(message.from_user.id)
+#     if roles:
+
+#         role_text = ", ".join([
+#             "преподаватель" if role == "teacher"
+#             else "родитель" if role == "parent"
+#             else "ученик"
+#             for role in roles
+#         ])
+#         await message.answer(f"Ваши роли: {role_text}")
+#     else:
+#         await message.answer(
+#             "Ваши роли еще не назначены. Обратитесь к администратору.\n Телефон администратора: +79001372727")
 
 
 @dp.message(F.text == "❌ Отменить бронь")

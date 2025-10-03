@@ -510,6 +510,7 @@ class GoogleSheetsManager:
             if cell:
                 # Колонка C - роли (разделенные запятыми)
                 roles_cell = worksheet.cell(cell.row, 3).value
+                logger.info("Поиск по ID" + str(user_id) + ": " + roles_cell)
                 if roles_cell:
                     # Убираем дубликаты и возвращаем уникальные роли
                     roles = [role.strip().lower() for role in roles_cell.split(',')]
