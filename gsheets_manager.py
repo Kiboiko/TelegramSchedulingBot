@@ -759,11 +759,12 @@ class GoogleSheetsManager:
             return []
         
     def update_student_booking_cell(self, user_id: int, subject_id: str, date: str, 
-                               start_time: str, end_time: str) -> bool:
+                           start_time: str, end_time: str) -> bool:
         """Обновляет только конкретную ячейку для ученика"""
         try:
             worksheet = self._get_or_create_worksheet("Ученики бот")
             data = worksheet.get_all_values()
+            logger.info("ищется предмет: " + subject_id)
             
             if len(data) < 2:
                 return False
@@ -791,14 +792,39 @@ class GoogleSheetsManager:
             
             # Ищем строку с user_id и subject_id
             target_row = -1
+            
+            # ПРЕОБРАЗУЕМ subject_id ТОЛЬКО если это не числовой ID
+            search_subject_id = subject_id
+            
+            # Если subject_id - это название предмета (например "информатика"), преобразуем в числовой ID
+            if not subject_id.isdigit():  # Если это не число
+                if subject_id.lower() in self.qual_map:
+                    # Если subject_id это название в нижнем регистре (например "информатика")
+                    search_subject_id = self.qual_map[subject_id.lower()]
+                elif subject_id in self.qual_map.values():
+                    # Если subject_id это название предмета в правильном регистре
+                    for id_key, name_value in self.qual_map.items():
+                        if name_value == subject_id:
+                            search_subject_id = id_key
+                            break
+            
+            logger.info(f"Поиск строки: user_id={user_id}, subject_id={search_subject_id} (оригинальный: {subject_id})")
+            
             for row_idx, row in enumerate(data[1:], start=2):  # Пропускаем заголовок
-                if (len(row) > 0 and str(row[0]).strip() == str(user_id) and 
-                    len(row) > 2 and str(row[2]).strip() == str(subject_id)):
-                    target_row = row_idx
-                    break
+                if len(row) > 0 and str(row[0]).strip() == str(user_id):
+                    # Проверяем subject_id в столбце C (индекс 2)
+                    if len(row) > 2 and str(row[2]).strip() == str(search_subject_id):
+                        target_row = row_idx
+                        logger.info(f"Найдена строка {target_row} для user_id {user_id} и subject_id {search_subject_id}")
+                        break
             
             if target_row == -1:
-                logger.error(f"Не найдена строка для user_id {user_id} и subject_id {subject_id}")
+                logger.error(f"Не найдена строка для user_id {user_id} и subject_id {search_subject_id}")
+                logger.info(f"Доступные subject_id в таблице:")
+                for row_idx, row in enumerate(data[1:], start=2):
+                    if len(row) > 0 and str(row[0]).strip() == str(user_id):
+                        row_subject = row[2] if len(row) > 2 else "нет данных"
+                        logger.info(f"Строка {row_idx}: user_id={row[0]}, subject_id={row_subject}")
                 return False
             
             # Обновляем только нужные ячейки
@@ -810,7 +836,7 @@ class GoogleSheetsManager:
                 if date_col_start + 2 <= len(data[0]):
                     worksheet.update_cell(target_row, date_col_start + 2, end_time)
             
-            logger.info(f"Обновлена ячейка для user_id {user_id}, subject {subject_id}, date {formatted_date}")
+            logger.info(f"Обновлена ячейка для user_id {user_id}, subject {search_subject_id}, date {formatted_date}")
             return True
             
         except Exception as e:
@@ -818,8 +844,8 @@ class GoogleSheetsManager:
             return False
         
     def update_teacher_booking_cell(self, user_id: int, subjects: List[str], date: str, 
-                               start_time: str, end_time: str) -> bool:
-        """Обновляет только конкретную ячейку для преподавателя"""
+                           start_time: str, end_time: str) -> bool:
+        """Обновляет только конкретную ячейку для преподавателя (ищет только по user_id)"""
         try:
             worksheet = self._get_or_create_worksheet("Преподаватели бот")
             data = worksheet.get_all_values()
@@ -848,18 +874,25 @@ class GoogleSheetsManager:
                 logger.error(f"Дата {formatted_date} не найдена в заголовках")
                 return False
             
-            # Ищем строку с user_id и subjects
+            # Ищем строку ТОЛЬКО по user_id (игнорируем subjects)
             target_row = -1
-            subjects_str = ', '.join(subjects)
+            
+            logger.info(f"Поиск строки преподавателя по user_id: {user_id}")
             
             for row_idx, row in enumerate(data[1:], start=2):  # Пропускаем заголовок
-                if (len(row) > 0 and str(row[0]).strip() == str(user_id) and 
-                    len(row) > 2 and str(row[2]).strip() == subjects_str):
+                if len(row) > 0 and str(row[0]).strip() == str(user_id):
                     target_row = row_idx
+                    logger.info(f"Найдена строка {target_row} для user_id {user_id}")
                     break
             
             if target_row == -1:
-                logger.error(f"Не найдена строка для user_id {user_id} и subjects {subjects_str}")
+                logger.error(f"Не найдена строка для user_id {user_id}")
+                logger.info(f"Доступные преподаватели в таблице:")
+                for row_idx, row in enumerate(data[1:], start=2):
+                    if len(row) > 0:
+                        row_user_id = row[0] if row[0] else "пусто"
+                        row_name = row[1] if len(row) > 1 else "нет имени"
+                        logger.info(f"Строка {row_idx}: user_id={row_user_id}, имя={row_name}")
                 return False
             
             # Обновляем только нужные ячейки
@@ -871,7 +904,7 @@ class GoogleSheetsManager:
                 if date_col_start + 2 <= len(data[0]):
                     worksheet.update_cell(target_row, date_col_start + 2, end_time)
             
-            logger.info(f"Обновлена ячейка для user_id {user_id}, subjects {subjects_str}, date {formatted_date}")
+            logger.info(f"Обновлена ячейка для user_id {user_id}, date {formatted_date}")
             return True
                 
         except Exception as e:
