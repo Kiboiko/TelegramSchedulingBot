@@ -29,7 +29,7 @@ from shedule_app.models import Person, Teacher, Student
 from typing import List, Dict
 from shedule_app.GoogleParser import GoogleSheetsDataLoader
 from bookings_management.booking_management import BookingManager
-
+from background_tasks import BackgroundTasks
 # Импорты из новых файлов
 from config import *
 from states import BookingStates
@@ -102,6 +102,7 @@ class RoleCheckMiddleware(BaseMiddleware):
 # Добавление middleware
 dp.update.middleware(RoleCheckMiddleware())
 booking_manager = BookingManager(storage, gsheets)
+background_tasks = BackgroundTasks(storage, gsheets, feedback_manager, feedback_teacher_manager)
 
 
 def get_subject_distribution_by_time(loader, target_date: str, condition_check: bool = True) -> Dict[time, Dict]:
@@ -432,128 +433,6 @@ def generate_time_range_keyboard_with_availability(
 
     return builder.as_markup()
 
-# def generate_time_range_keyboard_with_availability(
-#     selected_date=None,
-#     start_time=None,
-#     end_time=None,
-#     availability_map: Dict[time, bool] = None
-# ):
-#     """Генерирует клавиатуру выбора времени с учетом доступности"""
-#     builder = InlineKeyboardBuilder()
-
-#     # Определяем рабочие часы (9:00 - 20:00)
-#     start = datetime.strptime("09:00", "%H:%M")
-#     end = datetime.strptime("20:00", "%H:%M")
-#     current = start
-
-#     while current <= end:
-#         time_str = current.strftime("%H:%M")
-#         time_obj = current.time()
-
-#         # Если availability_map = None (для преподавателей), все слоты доступны
-#         is_available = True
-#         if availability_map is not None:  # Только если есть карта доступности
-#             is_available = availability_map.get(time_obj, True)
-
-#         # Определяем стиль кнопки на основе доступности
-#         if start_time and time_str == start_time:
-#             button_text = "🟢 " + time_str
-#         elif end_time and time_str == end_time:
-#             button_text = "🔴 " + time_str
-#         elif (start_time and end_time and
-#               datetime.strptime(start_time, "%H:%M").time() < time_obj <
-#               datetime.strptime(end_time, "%H:%M").time()):
-#             button_text = "🔵 " + time_str
-#         else:
-#             button_text = time_str
-
-#         # Для учеников показываем заблокированные слоты
-#         if availability_map is not None and not is_available:
-#             button_text = "🔒 " + time_str
-#             callback_data = "time_slot_unavailable"
-#         else:
-#             callback_data = f"time_point_{time_str}"
-
-#         builder.add(types.InlineKeyboardButton(
-#             text=button_text,
-#             callback_data=callback_data
-#         ))
-#         current += timedelta(minutes=30)
-
-#     builder.adjust(4)
-
-#     # Добавляем кнопки управления
-#     control_buttons = []
-#     if availability_map is not None:  # Статистика только для учеников
-#         available_count = sum(1 for available in availability_map.values() if available)
-#         total_count = len(availability_map)
-#         control_buttons.append(types.InlineKeyboardButton(
-#             text=f"Доступно: {available_count}/{total_count}",
-#             callback_data="availability_info"
-#         ))
-
-#     control_buttons.extend([
-#         types.InlineKeyboardButton(
-#             text="Выбрать начало 🟢",
-#             callback_data="select_start_mode"
-#         ),
-#         types.InlineKeyboardButton(
-#             text="Выбирать конец 🔴",
-#             callback_data="select_end_mode"
-#         )
-#     ])
-
-#     builder.row(*control_buttons)
-
-#     if start_time and end_time:
-#         # Для преподавателей всегда доступно подтверждение
-#         if availability_map is None:
-#             builder.row(
-#                 types.InlineKeyboardButton(
-#                     text="✅ Подтвердить время",
-#                     callback_data="confirm_time_range"
-#                 )
-#             )
-#         else:
-#             # Для учеников проверяем доступность всего интервала
-#             is_interval_available = True
-            
-#             # Проверяем все временные слоты в выбранном интервале
-#             start_obj = datetime.strptime(start_time, "%H:%M").time()
-#             end_obj = datetime.strptime(end_time, "%H:%M").time()
-            
-#             current_check = start_obj
-#             while current_check < end_obj:
-#                 if current_check not in availability_map or not availability_map[current_check]:
-#                     is_interval_available = False
-#                     break
-#                 # Переходим к следующему получасовому слоту
-#                 current_check = School.add_minutes_to_time(current_check, 30)
-            
-#             if is_interval_available:
-#                 builder.row(
-#                     types.InlineKeyboardButton(
-#                         text="✅ Подтвердить время",
-#                         callback_data="confirm_time_range"
-#                     )
-#                 )
-#             else:
-#                 builder.row(
-#                     types.InlineKeyboardButton(
-#                         text="❌ Интервал содержит недоступные слоты",
-#                         callback_data="interval_contains_unavailable"
-#                     )
-#                 )
-
-#     builder.row(
-#         types.InlineKeyboardButton(
-#             text="❌ Отменить",
-#             callback_data="cancel_time_selection"
-#         )
-#     )
-
-#     return builder.as_markup()
-
 
 @dp.callback_query(BookingStates.SELECT_TIME_RANGE, F.data == "interval_contains_unavailable")
 async def handle_interval_contains_unavailable(callback: types.CallbackQuery, state: FSMContext):
@@ -608,38 +487,6 @@ def generate_booking_types():
         ))
     builder.adjust(2)
     return builder.as_markup()
-
-
-# def load_bookings():
-#     """Загружает бронирования из файла и удаляет прошедшие"""
-#     data = storage.load()
-#     valid_bookings = []
-#     current_time = datetime.now()
-
-#     for booking in data:
-#         if 'date' not in booking:
-#             continue
-
-#         try:
-#             if isinstance(booking['date'], str):
-#                 booking_date = datetime.strptime(booking['date'], "%Y-%m-%d").date()
-#             else:
-#                 continue
-
-#             time_end = datetime.strptime(booking.get('end_time', "00:00"), "%H:%M").time()
-#             booking_datetime = datetime.combine(booking_date, time_end)
-
-#             if booking_datetime < current_time:
-#                 continue
-            
-#             booking['date'] = booking_date
-#             valid_bookings.append(booking)
-
-#         except ValueError:
-#             continue
-
-#     return valid_bookings
-
 
 def generate_calendar(year=None, month=None):
     """Генерирует календарь с корректной обработкой переключения месяцев"""
@@ -1061,161 +908,6 @@ def generate_confirmation():
         types.InlineKeyboardButton(text="❌ Отменить", callback_data="booking_cancel"),
     )
     return builder.as_markup()
-
-
-# def generate_booking_list(user_id: int):
-#     bookings = load_bookings()
-#     user_roles = storage.get_user_roles(user_id)
-
-#     # Для родителя показываем бронирования всех его детей
-#     children_ids = []
-#     if 'parent' in user_roles:
-#         children_ids = storage.get_parent_children(user_id)
-
-#     # Разделяем бронирования по категориям
-#     teacher_bookings = []
-#     student_bookings = []
-#     children_bookings = []
-
-#     for booking in bookings:
-#         if booking.get('user_id') == user_id:
-#             if booking.get('user_role') == 'teacher':
-#                 teacher_bookings.append(booking)
-#             else:
-#                 student_bookings.append(booking)
-#         elif booking.get('user_id') in children_ids:
-#             children_bookings.append(booking)
-
-#     if not any([teacher_bookings, student_bookings, children_bookings]):
-#         return None
-
-#     builder = InlineKeyboardBuilder()
-
-#     # Бронирования преподавателя
-#     if teacher_bookings:
-#         builder.row(types.InlineKeyboardButton(
-#             text="👨‍🏫 МОИ БРОНИРОВАНИЯ (ПРЕПОДАВАТЕЛЬ)",
-#             callback_data="ignore"
-#         ))
-
-#         for booking in sorted(teacher_bookings, key=lambda x: (x.get("date"), x.get("start_time"))):
-#             date_str = booking.get('date', '')
-#             if isinstance(date_str, str) and len(date_str) == 10:  # YYYY-MM-DD format
-#                 try:
-#                     date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-#                     formatted_date = date_obj.strftime("%d.%m")
-#                 except ValueError:
-#                     formatted_date = date_str
-#             else:
-#                 formatted_date = date_str
-
-#             button_text = (
-#                 f"📅 {formatted_date} "
-#                 f"⏰ {booking.get('start_time', '?')}-{booking.get('end_time', '?')}"
-#             )
-
-#             builder.row(types.InlineKeyboardButton(
-#                 text=button_text,
-#                 callback_data=f"booking_info_{booking.get('id')}"
-#             ))
-
-#     # Бронирования ученика
-#     if student_bookings:
-#         builder.row(types.InlineKeyboardButton(
-#             text="👨‍🎓 МОИ БРОНИРОВАНИЯ (УЧЕНИК)",
-#             callback_data="ignore"
-#         ))
-
-#         for booking in sorted(student_bookings, key=lambda x: (x.get("date"), x.get("start_time"))):
-#             date_str = booking.get('date', '')
-#             if isinstance(date_str, str) and len(date_str) == 10:
-#                 try:
-#                     date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-#                     formatted_date = date_obj.strftime("%d.%m")
-#                 except ValueError:
-#                     formatted_date = date_str
-#             else:
-#                 formatted_date = date_str
-
-#             subject = booking.get('subject', '')
-#             subject_short = get_subject_short_name(subject)
-
-#             button_text = (
-#                 f"📅 {formatted_date} "
-#                 f"⏰ {booking.get('start_time', '?')}-{booking.get('end_time', '?')} "
-#                 f"📚 {subject_short}"
-#             )
-
-#             builder.row(types.InlineKeyboardButton(
-#                 text=button_text,
-#                 callback_data=f"booking_info_{booking.get('id')}"
-#             ))
-
-#     # Бронирования детей (для родителей)
-#     if children_bookings:
-#         builder.row(types.InlineKeyboardButton(
-#             text="👶 БРОНИРОВАНИЯ МОИХ ДЕТЕЙ",
-#             callback_data="ignore"
-#         ))
-
-#         # Группируем по детям
-#         children_bookings_by_child = {}
-#         for booking in children_bookings:
-#             child_id = booking.get('user_id')
-#             if child_id not in children_bookings_by_child:
-#                 children_bookings_by_child[child_id] = []
-#             children_bookings_by_child[child_id].append(booking)
-
-#         for child_id, child_bookings in children_bookings_by_child.items():
-#             child_info = storage.get_child_info(child_id)
-#             child_name = child_info.get('user_name', f'Ребенок {child_id}')
-
-#             builder.row(types.InlineKeyboardButton(
-#                 text=f"👶 {child_name}",
-#                 callback_data="ignore"
-#             ))
-
-#             for booking in sorted(child_bookings, key=lambda x: (x.get("date"), x.get("start_time"))):
-#                 date_str = booking.get('date', '')
-#                 if isinstance(date_str, str) and len(date_str) == 10:
-#                     try:
-#                         date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-#                         formatted_date = date_obj.strftime("%d.%m")
-#                     except ValueError:
-#                         formatted_date = date_str
-#                 else:
-#                     formatted_date = date_str
-
-#                 subject = booking.get('subject', '')
-#                 subject_short = get_subject_short_name(subject)
-
-#                 button_text = (
-#                     f"   📅 {formatted_date} "
-#                     f"⏰ {booking.get('start_time', '?')}-{booking.get('end_time', '?')} "
-#                     f"📚 {subject_short}"
-#                 )
-
-#                 builder.row(types.InlineKeyboardButton(
-#                     text=button_text,
-#                     callback_data=f"booking_info_{booking.get('id')}"
-#                 ))
-
-#     builder.row(types.InlineKeyboardButton(
-#         text="🔙 Назад в меню",
-#         callback_data="back_to_menu"
-#     ))
-
-#     return builder.as_markup()
-
-
-# def generate_booking_actions(booking_id):
-#     """Клавиатура действий с бронированием"""
-#     builder = InlineKeyboardBuilder()
-#     builder.row(
-#         types.InlineKeyboardButton(text="❌ Отменить бронь", callback_data=f"cancel_booking_{booking_id}"),
-#         types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_bookings"),
-#     )
-#     return builder.as_markup()
 
 
 def generate_schedule_for_date(target_date: str) -> str:
@@ -2901,138 +2593,134 @@ async def back_handler(callback: types.CallbackQuery):
     await callback.answer()
 
 
-async def cleanup_old_bookings():
-    """Периодически очищает старые бронирования"""
-    while True:
-        try:
-            bookings = storage.load()
-            storage.save(bookings)  # Это вызовет фильтрацию старых записей
-            logger.info("Cleanup of old bookings completed")
-            await asyncio.sleep(6 * 60 * 60)  # Каждые 6 часов
-        except Exception as e:
-            logger.error(f"Error in cleanup_old_bookings: {e}")
-            await asyncio.sleep(60)  # Подождать минуту при ошибке
+# async def cleanup_old_bookings():
+#     """Периодически очищает старые бронирования"""
+#     while True:
+#         try:
+#             bookings = storage.load()
+#             storage.save(bookings)  # Это вызовет фильтрацию старых записей
+#             logger.info("Cleanup of old bookings completed")
+#             await asyncio.sleep(6 * 60 * 60)  # Каждые 6 часов
+#         except Exception as e:
+#             logger.error(f"Error in cleanup_old_bookings: {e}")
+#             await asyncio.sleep(60)  # Подождать минуту при ошибке
 
 
-async def sync_with_gsheets():
-    """Фоновая синхронизация с Google Sheets"""
-    while True:
-        try:
-            if hasattr(storage, 'gsheets') and storage.gsheets:
-                bookings = storage.load()
-                success = storage.gsheets.update_all_sheets(bookings)
-                if success:
-                    logger.info("Фоновая синхронизация с Google Sheets выполнена")
-                else:
-                    logger.warning("Не удалось выполнить синхронизацию с Google Sheets")
-            await asyncio.sleep(60)  # Каждый час
-        except Exception as e:
-            logger.error(f"Ошибка в фоновой синхронизации: {e}")
-            await asyncio.sleep(600)  # Ждем 10 минут при ошибке
+# async def sync_with_gsheets():
+#     """Фоновая синхронизация с Google Sheets"""
+#     while True:
+#         try:
+#             if hasattr(storage, 'gsheets') and storage.gsheets:
+#                 bookings = storage.load()
+#                 success = storage.gsheets.update_all_sheets(bookings)
+#                 if success:
+#                     logger.info("Фоновая синхронизация с Google Sheets выполнена")
+#                 else:
+#                     logger.warning("Не удалось выполнить синхронизацию с Google Sheets")
+#             await asyncio.sleep(60)  # Каждый час
+#         except Exception as e:
+#             logger.error(f"Ошибка в фоновой синхронизации: {e}")
+#             await asyncio.sleep(600)  # Ждем 10 минут при ошибке
 
 
-async def on_startup():
-    logger.info("Заглушка")
-    """Действия при запуске бота"""
-    # Принудительная синхронизация при старте
-    if gsheets:
-        try:
-            worksheet = gsheets._get_or_create_users_worksheet()
-            records = worksheet.get_all_records()
+# async def on_startup():
+#     logger.info("Заглушка")
+#     """Действия при запуске бота"""
+#     # Принудительная синхронизация при старте
+#     if gsheets:
+#         try:
+#             worksheet = gsheets._get_or_create_users_worksheet()
+#             records = worksheet.get_all_records()
 
-            # Собираем уникальные user_id
-            unique_users = {}
-            duplicates = []
+#             # Собираем уникальные user_id
+#             unique_users = {}
+#             duplicates = []
 
-            for i, record in enumerate(records, start=2):
-                user_id = str(record.get("user_id"))
-                if user_id in unique_users:
-                    duplicates.append(i)
-                else:
-                    unique_users[user_id] = record
+#             for i, record in enumerate(records, start=2):
+#                 user_id = str(record.get("user_id"))
+#                 if user_id in unique_users:
+#                     duplicates.append(i)
+#                 else:
+#                     unique_users[user_id] = record
 
-            # Удаляем дубликаты (с конца, чтобы не сбивались номера строк)
-            for row_num in sorted(duplicates, reverse=True):
-                worksheet.delete_rows(row_num)
+#             # Удаляем дубликаты (с конца, чтобы не сбивались номера строк)
+#             for row_num in sorted(duplicates, reverse=True):
+#                 worksheet.delete_rows(row_num)
 
-            logger.info(f"Удалено {len(duplicates)} дубликатов пользователей")
-        except Exception as e:
-            logger.error(f"Ошибка при очистке дубликатов: {e}")
-
-
-async def sync_from_gsheets_background():
-    """Фоновая синхронизация из Google Sheets в JSON"""
-    while True:
-        try:
-            if hasattr(storage, 'gsheets') and storage.gsheets:
-                success = storage.gsheets.sync_from_gsheets_to_json(storage)
-                if success:
-                    logger.info("Фоновая синхронизация из Google Sheets в JSON выполнена")
-                else:
-                    logger.warning("Не удалось выполнить синхронизацию из Google Sheets")
-            await asyncio.sleep(60)  # Синхронизация каждую минуту
-        except Exception as e:
-            logger.error(f"Ошибка в фоновой синхронизации из Google Sheets: {e}")
-            await asyncio.sleep(300)
-async def check_feedback_background():
-    """Фоновая задача для проверки и отправки обратной связи"""
-    while True:
-        try:
-            await feedback_manager.send_feedback_questions()
-            await asyncio.sleep(1800)  # Проверка каждые 30 минут
-        except Exception as e:
-            logger.error(f"Ошибка в фоновой задаче feedback: {e}")
-            await asyncio.sleep(300)  # Ждем 5 минут при ошибке
+#             logger.info(f"Удалено {len(duplicates)} дубликатов пользователей")
+#         except Exception as e:
+#             logger.error(f"Ошибка при очистке дубликатов: {e}")
 
 
-async def sync_pending_feedback_background():
-    """Фоновая задача для синхронизации неотправленных отзывов"""
-    while True:
-        try:
-            # Получаем несинхронизированные отзывы
-            pending_feedback = feedback_manager.get_pending_feedback_for_gsheets()
+# async def sync_from_gsheets_background():
+#     """Фоновая синхронизация из Google Sheets в JSON"""
+#     while True:
+#         try:
+#             if hasattr(storage, 'gsheets') and storage.gsheets:
+#                 success = storage.gsheets.sync_from_gsheets_to_json(storage)
+#                 if success:
+#                     logger.info("Фоновая синхронизация из Google Sheets в JSON выполнена")
+#                 else:
+#                     logger.warning("Не удалось выполнить синхронизацию из Google Sheets")
+#             await asyncio.sleep(60)  # Синхронизация каждую минуту
+#         except Exception as e:
+#             logger.error(f"Ошибка в фоновой синхронизации из Google Sheets: {e}")
+#             await asyncio.sleep(300)
+# async def check_feedback_background():
+#     """Фоновая задача для проверки и отправки обратной связи"""
+#     while True:
+#         try:
+#             await feedback_manager.send_feedback_questions()
+#             await asyncio.sleep(1800)  # Проверка каждые 30 минут
+#         except Exception as e:
+#             logger.error(f"Ошибка в фоновой задаче feedback: {e}")
+#             await asyncio.sleep(300)  # Ждем 5 минут при ошибке
 
-            if pending_feedback:
-                logger.info(f"Найдено {len(pending_feedback)} несинхронизированных отзывов")
 
-                for feedback in pending_feedback:
-                    try:
-                        # Синхронизируем каждый отзыв
-                        feedback_manager.sync_feedback_to_gsheets(feedback)
+# async def sync_pending_feedback_background():
+#     """Фоновая задача для синхронизации неотправленных отзывов"""
+#     while True:
+#         try:
+#             # Получаем несинхронизированные отзывы
+#             pending_feedback = feedback_manager.get_pending_feedback_for_gsheets()
 
-                        # Помечаем как синхронизированный
-                        feedback_manager.mark_feedback_synced(
-                            feedback['user_id'],
-                            feedback['date'],
-                            feedback['subject']
-                        )
+#             if pending_feedback:
+#                 logger.info(f"Найдено {len(pending_feedback)} несинхронизированных отзывов")
 
-                        logger.info(f"Синхронизирован отзыв user_id {feedback['user_id']}")
+#                 for feedback in pending_feedback:
+#                     try:
+#                         # Синхронизируем каждый отзыв
+#                         feedback_manager.sync_feedback_to_gsheets(feedback)
 
-                    except Exception as e:
-                        logger.error(f"Ошибка синхронизации отзыва: {e}")
-                        continue
+#                         # Помечаем как синхронизированный
+#                         feedback_manager.mark_feedback_synced(
+#                             feedback['user_id'],
+#                             feedback['date'],
+#                             feedback['subject']
+#                         )
 
-                logger.info("Синхронизация отзывов завершена")
+#                         logger.info(f"Синхронизирован отзыв user_id {feedback['user_id']}")
 
-            await asyncio.sleep(300)  # Проверка каждые 5 минут
+#                     except Exception as e:
+#                         logger.error(f"Ошибка синхронизации отзыва: {e}")
+#                         continue
 
-        except Exception as e:
-            logger.error(f"Ошибка в фоновой задаче синхронизации отзывов: {e}")
-            await asyncio.sleep(300)
+#                 logger.info("Синхронизация отзывов завершена")
+
+#             await asyncio.sleep(300)  # Проверка каждые 5 минут
+
+#         except Exception as e:
+#             logger.error(f"Ошибка в фоновой задаче синхронизации отзывов: {e}")
+#             await asyncio.sleep(300)
 
 
 async def main():
-    # Инициализация при старте
-    await on_startup()
+    await background_tasks.startup_tasks()
 
     # Запуск фоновых задач
-    asyncio.create_task(cleanup_old_bookings())
-    asyncio.create_task(sync_from_gsheets_background())
-    asyncio.create_task(check_feedback_background())  # для учеников
-    asyncio.create_task(sync_pending_feedback_background())  # для учеников
-    asyncio.create_task(check_teacher_feedback_background())  # ДЛЯ ПРЕПОДАВАТЕЛЕЙ
-    asyncio.create_task(sync_pending_teacher_feedback_background())  # ДЛЯ ПРЕПОДАВАТЕЛЕЙ
+    tasks = background_tasks.start_all_tasks()
+    for task in tasks:
+        asyncio.create_task(task)
 
     # Запуск бота
     await dp.start_polling(bot)
