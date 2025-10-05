@@ -19,7 +19,7 @@ no_roles_menu = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-async def generate_main_menu(user_id: int, storage) -> ReplyKeyboardMarkup:
+async def generate_main_menu(user_id: int,storage) -> ReplyKeyboardMarkup:
     """Генерирует главное меню в зависимости от ролей и прав"""
     roles = storage.get_user_roles(user_id)
 
@@ -35,6 +35,10 @@ async def generate_main_menu(user_id: int, storage) -> ReplyKeyboardMarkup:
 
     if can_book:
         keyboard_buttons.append([KeyboardButton(text="📅 Забронировать время")])
+
+    # Добавляем кнопку финансов только для учеников
+    if 'student' in roles:
+        keyboard_buttons.append([KeyboardButton(text="💰 Финансы")])
 
     keyboard_buttons.append([KeyboardButton(text="📋 Мои бронирования")])
     keyboard_buttons.append([KeyboardButton(text="📚 Прошедшие бронирования")])

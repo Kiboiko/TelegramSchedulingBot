@@ -8,6 +8,7 @@ from main import booking_manager
 logger = logging.getLogger(__name__)
 from bookings_management.booking_management import BookingManager
 from bookings_management.booking_keyboards import *
+from menu_handlers import back_to_menu_handler, back_to_past_bookings_handler
 class CallbackHandlers:
     """Централизованная обработка callback'ов"""
     

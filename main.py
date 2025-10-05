@@ -1,7 +1,7 @@
 # main.py
 import sys
 
-sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\shedule_app")
 
 import asyncio
 import json
@@ -44,6 +44,14 @@ from datetime import datetime
 from aiogram.fsm.state import State, StatesGroup
 from states import BookingStates, FinanceStates
 from teacher_reminder import TeacherReminderManager
+from menu_handlers import (
+    generate_main_menu,
+    cmd_start,
+    show_my_role,
+    cmd_help,
+    contact_admin
+)
+from menu_handlers import register_menu_handlers
 # Настройка логирования
 
 
@@ -114,7 +122,8 @@ class RoleCheckMiddleware(BaseMiddleware):
 # Добавление middleware
 dp.update.middleware(RoleCheckMiddleware())
 booking_manager = BookingManager(storage, gsheets)
-background_tasks = BackgroundTasks(storage, gsheets, feedback_manager, feedback_teacher_manager)
+background_tasks = BackgroundTasks(storage, gsheets, feedback_manager, feedback_teacher_manager,bot)
+register_menu_handlers(dp, booking_manager, storage)
 
 
 def get_subject_distribution_by_time(loader, target_date: str, condition_check: bool = True) -> Dict[time, Dict]:
@@ -898,8 +907,8 @@ additional_menu = ReplyKeyboardMarkup(
 
 
 @dp.message(F.text == "ℹ️ Помощь")
-async def show_help(message: types.Message):
-    await cmd_help(message)
+async def show_help(message: types.Message,state:FSMContext):
+    await cmd_start(message, state, storage)
 
 
 # @dp.message(Command("help"))
