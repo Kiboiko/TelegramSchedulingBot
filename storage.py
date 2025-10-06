@@ -455,3 +455,20 @@ class JSONStorage:
         except Exception as e:
             logger.error(f"Ошибка при загрузке всех данных: {e}")
             return []
+    def get_student_balance(self, student_id: int) -> float:
+        """Получает текущий баланс студента"""
+        try:
+            if hasattr(self, 'gsheets') and self.gsheets:
+                return self.gsheets.get_student_balance(student_id)
+            return 0.0
+        except Exception as e:
+            logger.error(f"Error getting balance for student {student_id}: {e}")
+            return 0.0
+
+    def update_student_balance(self, student_id: int, amount: float):
+        """Обновляет баланс студента"""
+        try:
+            if hasattr(self, 'gsheets') and self.gsheets:
+                self.gsheets.update_student_balance(student_id, amount)
+        except Exception as e:
+            logger.error(f"Error updating balance for student {student_id}: {e}")

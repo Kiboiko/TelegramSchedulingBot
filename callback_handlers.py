@@ -60,6 +60,10 @@ class CallbackHandlers:
         "finance_day_": "handle_finance_day",
         "finance_change_": "handle_finance_change",
         "finance_cancel": "handle_finance_cancel",
+        "finance_show_balance": "handle_finance_show_balance",
+        "finance_back_from_balance": "handle_finance_back_from_balance",
+        "balance_self": "handle_balance_self", 
+        "balance_child_": "handle_balance_child",
 
         # Расписание
         "confirm_schedule": "handle_confirm_schedule",
@@ -357,3 +361,25 @@ class CallbackHandlers:
     async def handle_finance_cancel(callback: types.CallbackQuery, state: FSMContext):
         from main import finance_handlers
         await finance_handlers.finance_cancel(callback, state)
+
+    @staticmethod
+    async def handle_finance_show_balance(callback: types.CallbackQuery, state: FSMContext):
+        from main import finance_handlers
+        await finance_handlers.finance_show_balance(callback, state)
+
+    @staticmethod
+    async def handle_finance_back_from_balance(callback: types.CallbackQuery, state: FSMContext):
+        from main import finance_handlers
+        await finance_handlers.finance_back_from_balance(callback, state)
+
+    @staticmethod
+    async def handle_balance_self(callback: types.CallbackQuery, state: FSMContext):
+        """Обработка показа баланса для себя"""
+        from main import finance_handlers
+        await finance_handlers.balance_show_self(callback, state)
+
+    @staticmethod
+    async def handle_balance_child(callback: types.CallbackQuery, state: FSMContext):
+        """Обработка показа баланса для ребенка"""
+        from main import finance_handlers
+        await finance_handlers.balance_show_child(callback, state)

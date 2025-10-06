@@ -13,10 +13,11 @@ logger = logging.getLogger(__name__)
 
 
 class FinanceStates(StatesGroup):
-    SELECT_PERSON = State()  # Выбор человека (себя или ребенка)
-    SELECT_SUBJECT = State()  # Выбор предмета
-    SELECT_DATE = State()  # Выбор даты
-    SHOW_FINANCES = State()  # Показать финансовую информацию
+    SELECT_PERSON = State()
+    SELECT_SUBJECT = State()
+    SELECT_DATE = State()
+    SHOW_FINANCES = State()
+    SHOW_BALANCE = State()
 
 
 class FinanceHandlers:
@@ -31,8 +32,12 @@ class FinanceHandlers:
         # Обработчик кнопки "Финансы" в меню
         dp.message.register(self.start_finances, F.text == "💰 Финансы")
 
-        # Обработчики выбора человека
+        # Обработчики выбора действия
         dp.callback_query.register(self.finance_select_person, F.data == "finance_start")
+        dp.callback_query.register(self.finance_show_balance, F.data == "finance_show_balance")
+        dp.callback_query.register(self.finance_back_from_balance, F.data == "finance_back_from_balance")
+
+        # Обработчики выбора человека
         dp.callback_query.register(self.finance_select_child, F.data.startswith("finance_child_"))
         dp.callback_query.register(self.finance_select_self, F.data == "finance_self")
         dp.callback_query.register(self.finance_back_to_person_selection, F.data == "finance_back_to_person")
@@ -48,9 +53,13 @@ class FinanceHandlers:
         dp.callback_query.register(self.finance_back_to_dates, F.data == "finance_back_to_dates")
         dp.callback_query.register(self.finance_back_to_subjects, F.data == "finance_back_to_subjects")
         dp.callback_query.register(self.finance_cancel, F.data == "finance_cancel")
+        
+        # Обработчики баланса
+        dp.callback_query.register(self.balance_show_self, F.data == "balance_self")
+        dp.callback_query.register(self.balance_show_child, F.data.startswith("balance_child_"))
 
     async def start_finances(self, message: types.Message, state: FSMContext):
-        """Начало работы с финансами - выбор человека"""
+        """Начало работы с финансами - выбор действия"""
         user_id = message.from_user.id
         user_roles = self.storage.get_user_roles(user_id)
 
@@ -69,64 +78,208 @@ class FinanceHandlers:
             )
             return
 
-        # Получаем информацию о детях для родителей
-        children = []
-        if is_parent:
-            children_ids = self.storage.get_parent_children(user_id)
-            for child_id in children_ids:
-                child_info = self.storage.get_child_info(child_id)
-                if child_info:
-                    children.append({
-                        'id': child_id,
-                        'name': child_info.get('user_name', f'Ученик {child_id}')
-                    })
-
-        # Создаем клавиатуру выбора человека
+        # Создаем клавиатуру выбора действия
         builder = InlineKeyboardBuilder()
 
-        # Если пользователь ученик - может выбрать себя
-        if is_student:
-            user_name = self.storage.get_user_name(user_id)
-            builder.button(
-                text=f"👤 {user_name} (Я)",
-                callback_data="finance_self"
-            )
+        builder.button(
+            text="📊 Детали по дате",
+            callback_data="finance_start"
+        )
+        
+        builder.button(
+            text="💰 Текущий баланс", 
+            callback_data="finance_show_balance"
+        )
+        
+        builder.button(
+            text="❌ Отмена",
+            callback_data="finance_cancel"
+        )
+        
+        builder.adjust(1)
 
-        # Если пользователь родитель - может выбрать детей
-        if is_parent and children:
-            for child in children:
-                builder.button(
-                    text=f"👶 {child['name']}",
-                    callback_data=f"finance_child_{child['id']}"
-                )
-
-        builder.button(text="❌ Отмена", callback_data="finance_cancel")
-        builder.adjust(1)  # По одной кнопке в строке
-
-        message_text = "💰 Выберите, чьи финансы вы хотите посмотреть:"
+        message_text = "💰 Выберите действие:"
 
         await message.answer(message_text, reply_markup=builder.as_markup())
         await state.set_state(FinanceStates.SELECT_PERSON)
 
-    async def finance_select_person(self, callback: types.CallbackQuery, state: FSMContext):
-        """Выбор человека для просмотра финансов"""
+    async def finance_show_balance(self, callback: types.CallbackQuery, state: FSMContext):
+        """Показывает текущий баланс"""
         try:
             user_id = callback.from_user.id
+            user_roles = self.storage.get_user_roles(user_id)
 
-            # Получаем роли с обработкой ошибок
-            try:
-                user_roles = self.storage.get_user_roles(user_id)
-            except Exception as e:
-                logger.error(f"Error getting user roles: {e}")
-                await callback.answer("❌ Ошибка при получении ролей. Попробуйте позже.", show_alert=True)
+            # Получаем информацию о детях для родителей
+            children = []
+            if 'parent' in user_roles:
+                children_ids = self.storage.get_parent_children(user_id)
+                for child_id in children_ids:
+                    child_info = self.storage.get_child_info(child_id)
+                    if child_info:
+                        children.append({
+                            'id': child_id,
+                            'name': child_info.get('user_name', f'Ученик {child_id}')
+                        })
+
+            # Создаем клавиатуру выбора человека для баланса
+            builder = InlineKeyboardBuilder()
+
+            # Если пользователь ученик - может выбрать себя
+            if 'student' in user_roles:
+                user_name = self.storage.get_user_name(user_id)
+                balance = self.storage.get_student_balance(user_id)
+                builder.button(
+                    text=f"👤 {user_name}: {balance} руб.",
+                    callback_data="balance_self"
+                )
+
+            # Если пользователь родитель - может выбрать детей
+            if 'parent' in user_roles and children:
+                for child in children:
+                    balance = self.storage.get_student_balance(child['id'])
+                    builder.button(
+                        text=f"👶 {child['name']}: {balance} руб.",
+                        callback_data=f"balance_child_{child['id']}"
+                    )
+
+            builder.button(
+                text="⬅️ Назад", 
+                callback_data="finance_back_from_balance"
+            )
+            builder.adjust(1)
+
+            await callback.message.edit_text(
+                "💰 Текущий баланс:\n\n"
+                "Баланс = Все пополнения - Все списания\n\n"
+                "Выберите для просмотра:",
+                reply_markup=builder.as_markup()
+            )
+            await state.set_state(FinanceStates.SHOW_BALANCE)
+
+        except Exception as e:
+            logger.error(f"Error in finance_show_balance: {e}")
+            await callback.answer("❌ Произошла ошибка", show_alert=True)
+
+    async def balance_show_self(self, callback: types.CallbackQuery, state: FSMContext):
+        """Показывает детальную информацию о балансе для себя"""
+        try:
+            user_id = callback.from_user.id
+            user_name = self.storage.get_user_name(user_id)
+            balance = self.storage.get_student_balance(user_id)
+            
+            # Получаем историю операций
+            finance_history = self.gsheets.get_student_finance_history(user_id)
+            
+            # Рассчитываем итоги
+            total_replenished = sum(op["replenished"] for op in finance_history)
+            total_withdrawn = sum(op["withdrawn"] for op in finance_history)
+            
+            # Форматируем историю для отображения
+            history_text = ""
+            if finance_history:
+                # Берем последние 10 операций
+                recent_operations = finance_history[-10:]
+                for op in recent_operations:
+                    date_display = datetime.strptime(op["date"], "%Y-%m-%d").strftime("%d.%m.%Y")
+                    replenished_text = f"+{op['replenished']} руб." if op["replenished"] > 0 else ""
+                    withdrawn_text = f"-{op['withdrawn']} руб." if op["withdrawn"] > 0 else ""
+                    operation_text = replenished_text or withdrawn_text
+                    
+                    history_text += f"📅 {date_display}: {operation_text}\n"
+            else:
+                history_text = "История операций отсутствует\n"
+            
+            message_text = (
+                f"💰 Детальная информация о балансе\n\n"
+                f"👤 Студент: {user_name}\n"
+                f"💳 Текущий баланс: {balance:.2f} руб.\n\n"
+                f"Баланс = Все пополнения - Все списания\n\n"
+                f"Остаток средств переносится на следующие занятия."
+            )
+            
+            builder = InlineKeyboardBuilder()
+            builder.button(text="🔄 Обновить", callback_data="balance_self")
+            builder.button(text="⬅️ Назад", callback_data="finance_show_balance")
+            builder.adjust(2)
+            
+            await callback.message.edit_text(
+                message_text,
+                reply_markup=builder.as_markup()
+            )
+            await callback.answer()
+            
+        except Exception as e:
+            logger.error(f"Error in balance_show_self: {e}")
+            await callback.answer("❌ Произошла ошибка", show_alert=True)
+
+    async def balance_show_child(self, callback: types.CallbackQuery, state: FSMContext):
+        """Показывает детальную информацию о балансе для ребенка"""
+        try:
+            child_id = int(callback.data.replace("balance_child_", ""))
+            child_info = self.storage.get_child_info(child_id)
+            
+            if not child_info:
+                await callback.answer("❌ Информация о ребенке не найдена", show_alert=True)
                 return
+                
+            child_name = child_info.get('user_name', f'Ученик {child_id}')
+            balance = self.storage.get_student_balance(child_id)
+            
+            # Получаем историю операций
+            finance_history = self.gsheets.get_student_finance_history(child_id)
+            
+            # Рассчитываем итоги
+            total_replenished = sum(op["replenished"] for op in finance_history)
+            total_withdrawn = sum(op["withdrawn"] for op in finance_history)
+            
+            # Форматируем историю для отображения
+            history_text = ""
+            if finance_history:
+                # Берем последние 10 операций
+                recent_operations = finance_history[-10:]
+                for op in recent_operations:
+                    date_display = datetime.strptime(op["date"], "%Y-%m-%d").strftime("%d.%m.%Y")
+                    replenished_text = f"+{op['replenished']} руб." if op["replenished"] > 0 else ""
+                    withdrawn_text = f"-{op['withdrawn']} руб." if op["withdrawn"] > 0 else ""
+                    operation_text = replenished_text or withdrawn_text
+                    
+                    history_text += f"📅 {date_display}: {operation_text}\n"
+            else:
+                history_text = "История операций отсутствует\n"
+            
+            message_text = (
+                f"💰 Детальная информация о балансе\n\n"
+                f"👶 Ребенок: {child_name}\n"
+                f"💳 Текущий баланс: {balance:.2f} руб.\n\n"
+                f"Баланс = Все пополнения - Все списания\n\n"
+                f"Остаток средств переносится на следующие занятия."
+            )
+            
+            builder = InlineKeyboardBuilder()
+            builder.button(text="🔄 Обновить", callback_data=f"balance_child_{child_id}")
+            builder.button(text="⬅️ Назад", callback_data="finance_show_balance")
+            builder.adjust(2)
+            
+            await callback.message.edit_text(
+                message_text,
+                reply_markup=builder.as_markup()
+            )
+            await callback.answer()
+            
+        except Exception as e:
+            logger.error(f"Error in balance_show_child: {e}")
+            await callback.answer("❌ Произошла ошибка", show_alert=True)
 
-            logger.info(f"User {user_id} roles: {user_roles}")
+    async def finance_back_from_balance(self, callback: types.CallbackQuery, state: FSMContext):
+        """Возврат из просмотра баланса"""
+        await self.start_finances(callback.message, state)
+        await callback.answer()
 
-            # Если ролей нет или пользователь только преподаватель
-            if not user_roles or (len(user_roles) == 1 and 'teacher' in user_roles):
-                await callback.answer("❌ У вас нет доступа к финансам", show_alert=True)
-                return
+    async def finance_select_person(self, callback: types.CallbackQuery, state: FSMContext):
+        """Выбор человека для просмотра деталей по дате"""
+        try:
+            user_id = callback.from_user.id
+            user_roles = self.storage.get_user_roles(user_id)
 
             # Сбрасываем состояние
             await state.clear()
@@ -144,24 +297,21 @@ class FinanceHandlers:
 
             # Если пользователь родитель - добавляем детей
             if 'parent' in user_roles:
-                try:
-                    children_ids = self.storage.get_parent_children(user_id)
-                    for child_id in children_ids:
-                        child_info = self.storage.get_child_info(child_id)
-                        if child_info:
-                            child_name = child_info.get('user_name', f'Ученик {child_id}')
-                            builder.button(
-                                text=f"👶 {child_name}",
-                                callback_data=f"finance_child_{child_id}"
-                            )
-                except Exception as e:
-                    logger.error(f"Error getting children: {e}")
+                children_ids = self.storage.get_parent_children(user_id)
+                for child_id in children_ids:
+                    child_info = self.storage.get_child_info(child_id)
+                    if child_info:
+                        child_name = child_info.get('user_name', f'Ученик {child_id}')
+                        builder.button(
+                            text=f"👶 {child_name}",
+                            callback_data=f"finance_child_{child_id}"
+                        )
 
-            builder.button(text="❌ Отмена", callback_data="finance_cancel")
+            builder.button(text="⬅️ Назад", callback_data="finance_back_from_balance")
             builder.adjust(1)
 
             await callback.message.edit_text(
-                "👥 Выберите человека для просмотра финансов:",
+                "👥 Выберите человека для просмотра финансовых деталей:",
                 reply_markup=builder.as_markup()
             )
 
@@ -170,155 +320,174 @@ class FinanceHandlers:
             await callback.answer("❌ Произошла ошибка", show_alert=True)
 
     async def finance_select_child(self, callback: types.CallbackQuery, state: FSMContext):
-        """Обработка выбора ребенка"""
-        child_id = int(callback.data.replace("finance_child_", ""))
+        """Обработка выбора ребенка для финансовых деталей"""
+        try:
+            child_id = int(callback.data.replace("finance_child_", ""))
+            child_info = self.storage.get_child_info(child_id)
 
-        # Получаем информацию о ребенке
-        child_info = self.storage.get_child_info(child_id)
-        if not child_info:
-            await callback.answer("❌ Информация о ребенке не найдена", show_alert=True)
-            return
+            if not child_info:
+                await callback.answer("❌ Информация о ребенке не найдена", show_alert=True)
+                return
 
-        child_name = child_info.get('user_name', f'Ученик {child_id}')
+            child_name = child_info.get('user_name', f'Ученик {child_id}')
 
-        # Сохраняем информацию о выбранном человеке
-        await state.update_data(
-            finance_target_id=child_id,
-            finance_target_name=child_name,
-            finance_target_type='child'
-        )
-
-        # Получаем доступные предметы для этого ребенка
-        available_subjects = self.storage.get_available_subjects_for_student(child_id)
-
-        if not available_subjects:
-            await callback.answer(
-                f"❌ У {child_name} нет доступных предметов",
-                show_alert=True
+            # Сохраняем информацию о выбранном человеке
+            await state.update_data(
+                finance_target_id=child_id,
+                finance_target_name=child_name,
+                finance_target_type='child'
             )
-            return
 
-        await callback.message.edit_text(
-            f"👶 Выбран: {child_name}\n"
-            "📚 Теперь выберите предмет:",
-            reply_markup=self.generate_subjects_keyboard_func(
-                available_subjects=available_subjects
+            # Получаем доступные предметы для этого ребенка
+            available_subjects = self.storage.get_available_subjects_for_student(child_id)
+
+            if not available_subjects:
+                await callback.answer(
+                    f"❌ У {child_name} нет доступных предметов",
+                    show_alert=True
+                )
+                return
+
+            await callback.message.edit_text(
+                f"👶 Выбран: {child_name}\n"
+                "📚 Теперь выберите предмет:",
+                reply_markup=self.generate_subjects_keyboard_func(
+                    available_subjects=available_subjects
+                )
             )
-        )
-        await state.set_state(FinanceStates.SELECT_SUBJECT)
-        await callback.answer()
+            await state.set_state(FinanceStates.SELECT_SUBJECT)
+            await callback.answer()
+
+        except Exception as e:
+            logger.error(f"Error in finance_select_child: {e}")
+            await callback.answer("❌ Произошла ошибка", show_alert=True)
 
     async def finance_select_self(self, callback: types.CallbackQuery, state: FSMContext):
-        """Обработка выбора себя"""
-        data = await state.get_data()
-        user_id = data.get('finance_user_id')
+        """Обработка выбора себя для финансовых деталей"""
+        try:
+            data = await state.get_data()
+            user_id = data.get('finance_user_id', callback.from_user.id)
 
-        user_name = self.storage.get_user_name(user_id)
+            user_name = self.storage.get_user_name(user_id)
 
-        # Сохраняем информацию о выбранном человеке
-        await state.update_data(
-            finance_target_id=user_id,
-            finance_target_name=user_name,
-            finance_target_type='self'
-        )
-
-        # Получаем доступные предметы для ученика
-        available_subjects = self.storage.get_available_subjects_for_student(user_id)
-
-        if not available_subjects:
-            await callback.answer("❌ У вас нет доступных предметов", show_alert=True)
-            return
-
-        await callback.message.edit_text(
-            f"👤 Выбран: {user_name}\n"
-            "📚 Теперь выберите предмет:",
-            reply_markup=self.generate_subjects_keyboard_func(
-                available_subjects=available_subjects
+            # Сохраняем информацию о выбранном человеке
+            await state.update_data(
+                finance_target_id=user_id,
+                finance_target_name=user_name,
+                finance_target_type='self'
             )
-        )
-        await state.set_state(FinanceStates.SELECT_SUBJECT)
-        await callback.answer()
+
+            # Получаем доступные предметы для ученика
+            available_subjects = self.storage.get_available_subjects_for_student(user_id)
+
+            if not available_subjects:
+                await callback.answer("❌ У вас нет доступных предметов", show_alert=True)
+                return
+
+            await callback.message.edit_text(
+                f"👤 Выбран: {user_name}\n"
+                "📚 Теперь выберите предмет:",
+                reply_markup=self.generate_subjects_keyboard_func(
+                    available_subjects=available_subjects
+                )
+            )
+            await state.set_state(FinanceStates.SELECT_SUBJECT)
+            await callback.answer()
+
+        except Exception as e:
+            logger.error(f"Error in finance_select_self: {e}")
+            await callback.answer("❌ Произошла ошибка", show_alert=True)
 
     async def finance_select_subject(self, callback: types.CallbackQuery, state: FSMContext):
         """Обработка выбора предмета"""
-        subject_id = callback.data.replace("subject_", "")
+        try:
+            subject_id = callback.data.replace("subject_", "")
 
-        # Проверяем, что предмет существует
-        if subject_id not in self.subjects_config:
-            await callback.answer("❌ Предмет не найден", show_alert=True)
-            return
+            # Проверяем, что предмет существует
+            if subject_id not in self.subjects_config:
+                await callback.answer("❌ Предмет не найден", show_alert=True)
+                return
 
-        subject_name = self.subjects_config[subject_id]
+            subject_name = self.subjects_config[subject_id]
 
-        # Сохраняем выбранный предмет
-        await state.update_data(
-            finance_subject_id=subject_id,
-            finance_subject_name=subject_name
-        )
-
-        # Получаем данные из состояния
-        data = await state.get_data()
-        target_id = data.get('finance_target_id')
-        target_name = data.get('finance_target_name')
-
-        # Получаем доступные даты для финансов
-        available_dates = self.gsheets.get_available_finance_dates(target_id, subject_id)
-
-        if not available_dates:
-            await callback.message.edit_text(
-                f"💰 Финансы для {target_name}\n"
-                f"📚 Предмет: {subject_name}\n\n"
-                "❌ Нет финансовых данных за выбранный период."
+            # Сохраняем выбранный предмет
+            await state.update_data(
+                finance_subject_id=subject_id,
+                finance_subject_name=subject_name
             )
-            await state.clear()
-            return
 
-        # Показываем календарь для выбора даты
-        await callback.message.edit_text(
-            f"💰 Финансы для: {target_name}\n"
-            f"📚 Предмет: {subject_name}\n\n"
-            "📅 Выберите дату для просмотра финансов:",
-            reply_markup=generate_finance_calendar()
-        )
-        await state.set_state(FinanceStates.SELECT_DATE)
-        await callback.answer()
+            # Получаем данные из состояния
+            data = await state.get_data()
+            target_id = data.get('finance_target_id')
+            target_name = data.get('finance_target_name')
+
+            # Получаем доступные даты для финансов
+            available_dates = self.gsheets.get_available_finance_dates(target_id, subject_id)
+
+            if not available_dates:
+                await callback.message.edit_text(
+                    f"💰 Финансы для {target_name}\n"
+                    f"📚 Предмет: {subject_name}\n\n"
+                    "❌ Нет финансовых данных за выбранный период."
+                )
+                await state.clear()
+                return
+
+            # Показываем календарь для выбора даты
+            await callback.message.edit_text(
+                f"💰 Финансы для: {target_name}\n"
+                f"📚 Предмет: {subject_name}\n\n"
+                "📅 Выберите дату для просмотра финансов:",
+                reply_markup=generate_finance_calendar()
+            )
+            await state.set_state(FinanceStates.SELECT_DATE)
+            await callback.answer()
+
+        except Exception as e:
+            logger.error(f"Error in finance_select_subject: {e}")
+            await callback.answer("❌ Произошла ошибка", show_alert=True)
 
     async def finance_select_date(self, callback: types.CallbackQuery, state: FSMContext):
         """Обработка выбора даты из календаря"""
-        date_str = callback.data.replace("finance_day_", "")
-        year, month, day = map(int, date_str.split("-"))
-        selected_date = datetime(year, month, day).date()
-        formatted_date = selected_date.strftime("%Y-%m-%d")
+        try:
+            date_str = callback.data.replace("finance_day_", "")
+            year, month, day = map(int, date_str.split("-"))
+            selected_date = datetime(year, month, day).date()
+            formatted_date = selected_date.strftime("%Y-%m-%d")
 
-        # Сохраняем выбранную дату
-        await state.update_data(finance_selected_date=formatted_date)
+            # Сохраняем выбранную дату
+            await state.update_data(finance_selected_date=formatted_date)
 
-        # Получаем все данные из состояния
-        data = await state.get_data()
-        target_id = data.get('finance_target_id')
-        target_name = data.get('finance_target_name')
-        subject_id = data.get('finance_subject_id')
-        subject_name = data.get('finance_subject_name')
+            # Получаем все данные из состояния
+            data = await state.get_data()
+            target_id = data.get('finance_target_id')
+            target_name = data.get('finance_target_name')
+            subject_id = data.get('finance_subject_id')
+            subject_name = data.get('finance_subject_name')
 
-        # Получаем финансовую информацию
-        finance_data = self.gsheets.get_student_finances(
-            target_id, subject_id, formatted_date
-        )
+            # Получаем финансовую информацию
+            finance_data = self.gsheets.get_student_finances(
+                target_id, subject_id, formatted_date
+            )
 
-        # Формируем сообщение с финансовой информацией
-        message_text = self._format_finance_message(
-            target_name, subject_name, formatted_date, finance_data
-        )
+            # Формируем сообщение с финансовой информацией
+            message_text = self._format_finance_message(
+                target_name, subject_name, formatted_date, finance_data
+            )
 
-        # Создаем клавиатуру для навигации
-        keyboard = self._generate_finance_navigation_keyboard()
+            # Создаем клавиатуру для навигации
+            keyboard = self._generate_finance_navigation_keyboard()
 
-        await callback.message.edit_text(
-            message_text,
-            reply_markup=keyboard
-        )
-        await state.set_state(FinanceStates.SHOW_FINANCES)
-        await callback.answer()
+            await callback.message.edit_text(
+                message_text,
+                reply_markup=keyboard
+            )
+            await state.set_state(FinanceStates.SHOW_FINANCES)
+            await callback.answer()
+
+        except Exception as e:
+            logger.error(f"Error in finance_select_date: {e}")
+            await callback.answer("❌ Произошла ошибка", show_alert=True)
 
     async def finance_change_month(self, callback: types.CallbackQuery, state: FSMContext):
         """Обработка смены месяца в календаре"""
@@ -434,18 +603,18 @@ class FinanceHandlers:
         # Добавляем информацию о тарифе
         message += f"📋 Тариф: {tariff} руб./занятие\n\n"
 
-        # Рассчитываем баланс
-        balance_change = replenished - withdrawn
-        if balance_change > 0:
-            message += f"📈 Изменение баланса: +{balance_change} руб."
-        elif balance_change < 0:
-            message += f"📉 Изменение баланса: {balance_change} руб."
+        # Рассчитываем изменение за день
+        daily_change = replenished - withdrawn
+        if daily_change > 0:
+            message += f"📈 Изменение за день: +{daily_change} руб."
+        elif daily_change < 0:
+            message += f"📉 Изменение за день: {daily_change} руб."
         else:
-            message += "➖ Баланс не изменился"
+            message += "➖ За день баланс не изменился"
 
         return message
 
-    def _generate_finance_navigation_keyboard(self):
+    def _generate_finance_navigation_keyboard(self, show_balance_button=True):
         """Создает клавиатуру для навигации по финансам"""
         builder = InlineKeyboardBuilder()
 
@@ -461,12 +630,19 @@ class FinanceHandlers:
             text="👤 Выбрать другого человека",
             callback_data="finance_back_to_person"
         )
+        
+        if show_balance_button:
+            builder.button(
+                text="💰 Текущий баланс",
+                callback_data="finance_show_balance"
+            )
+            
         builder.button(
             text="❌ Завершить",
             callback_data="finance_cancel"
         )
 
-        builder.adjust(1)  # По одной кнопке в строке
+        builder.adjust(1)
         return builder.as_markup()
 
     async def _generate_main_menu(self, user_id: int):

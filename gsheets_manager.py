@@ -1189,3 +1189,203 @@ class GoogleSheetsManager:
         except Exception as e:
             logger.error(f"Ошибка обновления ячейки преподавателя: {e}")
             return False
+        
+    def get_student_balance(self, student_id: int) -> float:
+        """Получает текущий баланс студента на основе всей истории"""
+        try:
+            finance_history = self.get_student_finance_history(student_id)
+            
+            total_replenished = 0.0
+            total_withdrawn = 0.0
+            
+            for operation in finance_history:
+                total_replenished += operation["replenished"]
+                total_withdrawn += operation["withdrawn"]
+            
+            balance = total_replenished - total_withdrawn
+            logger.info(f"Balance for student {student_id}: {balance} (replenished: {total_replenished}, withdrawn: {total_withdrawn})")
+            
+            return balance
+            
+        except Exception as e:
+            logger.error(f"Error calculating balance for student {student_id}: {e}")
+            return 0.0
+
+    def update_student_balance(self, student_id: int, amount: float):
+        """Обновляет баланс студента в Google Sheets"""
+        try:
+            worksheet = self._get_or_create_worksheet("Балансы")
+            data = worksheet.get_all_values()
+            
+            # Ищем существующую запись
+            found = False
+            for i, row in enumerate(data[1:], start=2):  # start=2 потому что 1 строка - заголовок
+                if row and len(row) >= 1 and str(row[0]).strip() == str(student_id):
+                    worksheet.update_cell(i, 2, amount)  # Колонка B - баланс
+                    found = True
+                    break
+            
+            # Если не нашли, добавляем новую запись
+            if not found:
+                next_row = len(data) + 1
+                worksheet.update(f'A{next_row}:B{next_row}', [[student_id, amount]])
+                
+        except Exception as e:
+            logger.error(f"Error updating balance in sheets: {e}")
+
+    def get_student_finances_with_balance(self, student_id: int, subject_id: str, date: str) -> Dict:
+        """Получает финансовую информацию с учетом баланса"""
+        finances = self.get_student_finances(student_id, subject_id, date)
+        finances["balance"] = self.get_student_balance(student_id)
+        return finances
+
+    
+    def process_daily_finances(self):
+        """Обрабатывает дневные финансы и обновляет балансы"""
+        try:
+            # Получаем все финансовые операции за сегодня
+            today = datetime.now().strftime("%Y-%m-%d")
+            worksheet = self._get_or_create_worksheet("Финансы")
+            data = worksheet.get_all_values()
+            
+            # Пропускаем заголовок
+            for row in data[1:]:
+                if len(row) >= 5 and row[3] == today:  # Дата в колонке D
+                    student_id = int(row[0])
+                    replenished = float(row[4] or 0)  # Колонка E - пополнение
+                    withdrawn = float(row[5] or 0)    # Колонка F - списание
+                    
+                    # Получаем текущий баланс
+                    current_balance = self.get_student_balance(student_id)
+                    
+                    # Обновляем баланс
+                    new_balance = current_balance + replenished - withdrawn
+                    self.update_student_balance(student_id, new_balance)
+                    
+            logger.info("Daily finances processed successfully")
+            
+        except Exception as e:
+            logger.error(f"Error processing daily finances: {e}")
+
+    def get_student_finance_history(self, student_id: int) -> List[Dict]:
+        """Получает полную историю финансовых операций студента"""
+        try:
+            cache_key = f"finance_history_{student_id}"
+            cached_result = self._get_cached_data(cache_key)
+            if cached_result:
+                return cached_result
+
+            worksheet = self._get_or_create_worksheet("Ученики бот")
+            data = worksheet.get_all_values()
+
+            if len(data) < 2:
+                return []
+
+            # Находим все строки студента
+            student_rows = []
+            for row_idx, row in enumerate(data[1:], start=2):
+                if len(row) > 0 and str(row[0]).strip() == str(student_id):
+                    student_rows.append((row_idx, row))
+
+            if not student_rows:
+                return []
+
+            finance_history = []
+            headers = [str(h).strip().lower() for h in data[0]]
+
+            # Получаем тариф студента
+            tariff = 0.0
+            if student_rows[0][1] and len(student_rows[0][1]) > 13 and student_rows[0][1][13]:
+                try:
+                    tariff_str = str(student_rows[0][1][13]).replace(',', '.').strip()
+                    tariff_str = tariff_str.replace('\xa0', '').replace(' ', '')
+                    tariff = float(tariff_str) if tariff_str else 0.0
+                except ValueError:
+                    tariff = 0.0
+
+            # Собираем все финансовые столбцы (начиная с 245)
+            for i in range(245, min(len(headers), 500)):
+                if i < len(headers) and headers[i]:
+                    date_header = headers[i].split()[0] if ' ' in headers[i] else headers[i]
+                    
+                    # Парсим дату
+                    try:
+                        date_formats = ["%d.%m.%Y", "%d.%m", "%d.%m.%y"]
+                        date_obj = None
+
+                        for date_format in date_formats:
+                            try:
+                                date_obj = datetime.strptime(date_header, date_format)
+                                if date_format == "%d.%m":
+                                    date_obj = date_obj.replace(year=datetime.now().year)
+                                break
+                            except ValueError:
+                                continue
+
+                        if not date_obj:
+                            continue
+
+                        formatted_date = date_obj.strftime("%Y-%m-%d")
+                        
+                        # Для каждой строки студента (каждого предмета)
+                        for row_idx, row in student_rows:
+                            if len(row) <= i:
+                                continue
+
+                            replenishment_str = row[i]
+                            withdrawn = 0.0
+                            replenished = 0.0
+
+                            # Проверяем, было ли занятие в эту дату
+                            # Ищем столбцы расписания (первые 245 столбцов)
+                            schedule_found = False
+                            for schedule_col in range(14, min(245, len(headers)), 2):
+                                if (schedule_col < len(headers) and 
+                                    formatted_date.lower() in headers[schedule_col].lower()):
+                                    
+                                    if (len(row) > schedule_col + 1 and 
+                                        row[schedule_col] and row[schedule_col + 1]):
+                                        start_time = row[schedule_col]
+                                        end_time = row[schedule_col + 1]
+                                        if start_time.strip() and end_time.strip():
+                                            withdrawn = tariff
+                                            schedule_found = True
+                                            break
+
+                            # Обрабатываем пополнение
+                            if replenishment_str and str(replenishment_str).strip():
+                                try:
+                                    clean_str = str(replenishment_str)
+                                    clean_str = clean_str.replace('\xa0', '')
+                                    clean_str = clean_str.replace(' ', '')
+                                    clean_str = clean_str.replace(',', '.')
+                                    import re
+                                    clean_str = re.sub(r'[^\d.-]', '', clean_str)
+                                    
+                                    if clean_str:
+                                        replenished = float(clean_str)
+                                except ValueError:
+                                    replenished = 0.0
+
+                            # Добавляем операцию только если есть движение средств
+                            if replenished != 0 or withdrawn != 0:
+                                finance_history.append({
+                                    "date": formatted_date,
+                                    "replenished": replenished,
+                                    "withdrawn": withdrawn,
+                                    "tariff": tariff,
+                                    "subject": row[2] if len(row) > 2 else ""
+                                })
+
+                    except ValueError:
+                        continue
+
+            # Сортируем по дате
+            finance_history.sort(key=lambda x: x["date"])
+            
+            self._set_cached_data(cache_key, finance_history)
+            return finance_history
+
+        except Exception as e:
+            logger.error(f"Error getting finance history for student {student_id}: {e}")
+            return []
