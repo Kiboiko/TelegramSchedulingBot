@@ -14,6 +14,7 @@ class BookingStates(StatesGroup):
     CONFIRM_SCHEDULE = State()
 
 class FinanceStates(StatesGroup):
+    SELECT_PERSON = State()
     SELECT_SUBJECT = State()
     SELECT_DATE = State()
     SHOW_FINANCES = State()

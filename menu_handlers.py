@@ -37,7 +37,7 @@ async def generate_main_menu(user_id: int,storage) -> ReplyKeyboardMarkup:
         keyboard_buttons.append([KeyboardButton(text="📅 Забронировать время")])
 
     # Добавляем кнопку финансов только для учеников
-    if 'student' in roles:
+    if 'student' in roles or 'parent' in roles:
         keyboard_buttons.append([KeyboardButton(text="💰 Финансы")])
 
     keyboard_buttons.append([KeyboardButton(text="📋 Мои бронирования")])

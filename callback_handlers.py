@@ -51,8 +51,15 @@ class CallbackHandlers:
         "feedback_teacher_submit_details": "handle_teacher_feedback_submit",
 
         # Финансы
+         "finance_start": "handle_finance_start",
+        "finance_child_": "handle_finance_child",
+        "finance_self": "handle_finance_self",
+        "finance_back_to_person": "handle_finance_back_to_person",
         "finance_back_to_dates": "handle_finance_back_to_dates",
         "finance_back_to_subjects": "handle_finance_back_to_subjects",
+        "finance_day_": "handle_finance_day",
+        "finance_change_": "handle_finance_change",
+        "finance_cancel": "handle_finance_cancel",
 
         # Расписание
         "confirm_schedule": "handle_confirm_schedule",
@@ -307,21 +314,46 @@ class CallbackHandlers:
         await cancel_time_selection_handler(callback, state)
 
     @staticmethod
+    async def handle_finance_start(callback: types.CallbackQuery, state: FSMContext):
+        from main import finance_handlers
+        await finance_handlers.finance_select_person(callback, state)
+
+    @staticmethod
+    async def handle_finance_child(callback: types.CallbackQuery, state: FSMContext):
+        from main import finance_handlers
+        await finance_handlers.finance_select_child(callback, state)
+
+    @staticmethod
+    async def handle_finance_self(callback: types.CallbackQuery, state: FSMContext):
+        from main import finance_handlers
+        await finance_handlers.finance_select_self(callback, state)
+
+    @staticmethod
+    async def handle_finance_back_to_person(callback: types.CallbackQuery, state: FSMContext):
+        from main import finance_handlers
+        await finance_handlers.finance_back_to_person_selection(callback, state)
+
+    @staticmethod
     async def handle_finance_back_to_dates(callback: types.CallbackQuery, state: FSMContext):
-        """Обрабатывает возврат к выбору даты для финансов"""
-        try:
-            from main import finance_handlers
-            await finance_handlers.finance_back_to_dates(callback, state)
-        except Exception as e:
-            logger.error(f"Ошибка в handle_finance_back_to_dates: {e}")
-            await callback.answer("❌ Произошла ошибка", show_alert=True)
+        from main import finance_handlers
+        await finance_handlers.finance_back_to_dates(callback, state)
 
     @staticmethod
     async def handle_finance_back_to_subjects(callback: types.CallbackQuery, state: FSMContext):
-        """Обрабатывает возврат к выбору предмета для финансов"""
-        try:
-            from main import finance_handlers
-            await finance_handlers.finance_back_to_subjects(callback, state)
-        except Exception as e:
-            logger.error(f"Ошибка в handle_finance_back_to_subjects: {e}")
-            await callback.answer("❌ Произошла ошибка", show_alert=True)
+        from main import finance_handlers
+        await finance_handlers.finance_back_to_subjects(callback, state)
+
+    @staticmethod
+    async def handle_finance_day(callback: types.CallbackQuery, state: FSMContext):
+        from main import finance_handlers
+        await finance_handlers.finance_select_date(callback, state)
+
+    @staticmethod
+    async def handle_finance_change(callback: types.CallbackQuery, state: FSMContext):
+        from main import finance_handlers
+        await finance_handlers.finance_change_month(callback, state)
+
+    @staticmethod
+    async def handle_finance_cancel(callback: types.CallbackQuery, state: FSMContext):
+        from main import finance_handlers
+        await finance_handlers.finance_cancel(callback, state)
