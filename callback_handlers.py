@@ -309,11 +309,19 @@ class CallbackHandlers:
     @staticmethod
     async def handle_finance_back_to_dates(callback: types.CallbackQuery, state: FSMContext):
         """Обрабатывает возврат к выбору даты для финансов"""
-        from main import finance_back_to_dates
-        await finance_back_to_dates(callback, state)
+        try:
+            from main import finance_handlers
+            await finance_handlers.finance_back_to_dates(callback, state)
+        except Exception as e:
+            logger.error(f"Ошибка в handle_finance_back_to_dates: {e}")
+            await callback.answer("❌ Произошла ошибка", show_alert=True)
 
     @staticmethod
     async def handle_finance_back_to_subjects(callback: types.CallbackQuery, state: FSMContext):
         """Обрабатывает возврат к выбору предмета для финансов"""
-        from main import finance_back_to_subjects
-        await finance_back_to_subjects(callback, state)
+        try:
+            from main import finance_handlers
+            await finance_handlers.finance_back_to_subjects(callback, state)
+        except Exception as e:
+            logger.error(f"Ошибка в handle_finance_back_to_subjects: {e}")
+            await callback.answer("❌ Произошла ошибка", show_alert=True)

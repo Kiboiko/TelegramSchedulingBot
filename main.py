@@ -1,7 +1,7 @@
 # main.py
 import sys
 
-sys.path.append(r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
 
 import asyncio
 import json
@@ -52,6 +52,7 @@ from menu_handlers import (
     contact_admin
 )
 from menu_handlers import register_menu_handlers
+from finance_handlers import FinanceHandlers
 # Настройка логирования
 
 
@@ -779,6 +780,9 @@ def generate_schedule_for_date(target_date: str) -> str:
 
 
 def generate_subjects_keyboard(selected_subjects=None, is_teacher=False, available_subjects=None):
+    """Генерирует клавиатуру выбора предметов"""
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+
     builder = InlineKeyboardBuilder()
     selected_subjects = selected_subjects or []
 
@@ -2387,7 +2391,14 @@ async def back_handler(callback: types.CallbackQuery):
         )
     await callback.answer()
 
-
+# Инициализация обработчиков финансов
+finance_handlers = FinanceHandlers(
+    storage=storage,
+    gsheets=gsheets,
+    subjects_config=SUBJECTS,
+    generate_subjects_keyboard_func=generate_subjects_keyboard
+)
+finance_handlers.register_handlers(dp)
 
 
 async def main():
