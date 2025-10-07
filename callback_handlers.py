@@ -67,7 +67,10 @@ class CallbackHandlers:
 
         # Расписание
         "confirm_schedule": "handle_confirm_schedule",
-        "cancel_schedule": "handle_cancel_schedule"
+        "cancel_schedule": "handle_cancel_schedule",
+
+        "suggested_time_info": "handle_suggested_time_info",
+    "use_suggested_time_": "handle_use_suggested_time",
     }
     
     @staticmethod
@@ -384,3 +387,28 @@ class CallbackHandlers:
         """Обработка показа баланса для ребенка"""
         from main import finance_handlers
         await finance_handlers.balance_show_child(callback, state)
+
+    @staticmethod
+    async def handle_suggested_time_info(callback: types.CallbackQuery, state: FSMContext):
+        """Показывает информацию о предложенном времени"""
+        data = await state.get_data()
+        suggested_start = data.get('suggested_start_time')
+        suggested_end = data.get('suggested_end_time')
+        
+        if suggested_start and suggested_end:
+            message = (
+                f"⭐ Предложенное время основано на вашем предыдущем бронировании:\n"
+                f"Начало: {suggested_start}\n"
+                f"Окончание: {suggested_end}\n\n"
+                f"Это время автоматически скорректировано под рабочие часы выбранного дня."
+            )
+        else:
+            message = "Информация о предложенном времени недоступна"
+        
+        await callback.answer(message, show_alert=True)
+
+    @staticmethod
+    async def handle_use_suggested_time(callback: types.CallbackQuery, state: FSMContext):
+        """Обрабатывает использование предложенного времени"""
+        from main import use_suggested_time
+        await use_suggested_time(callback, state)

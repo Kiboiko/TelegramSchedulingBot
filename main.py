@@ -44,6 +44,7 @@ from datetime import datetime
 from aiogram.fsm.state import State, StatesGroup
 from states import BookingStates, FinanceStates
 from teacher_reminder import TeacherReminderManager
+from booking_history_manager import BookingHistoryManager
 from menu_handlers import (
     generate_main_menu,
     cmd_start,
@@ -125,6 +126,7 @@ dp.update.middleware(RoleCheckMiddleware())
 booking_manager = BookingManager(storage, gsheets)
 background_tasks = BackgroundTasks(storage, gsheets, feedback_manager, feedback_teacher_manager,bot)
 register_menu_handlers(dp, booking_manager, storage)
+booking_history = BookingHistoryManager("booking_history.json")
 
 
 def get_subject_distribution_by_time(loader, target_date: str, condition_check: bool = True) -> Dict[time, Dict]:
@@ -1712,6 +1714,21 @@ async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
         state_data = await state.get_data()
         role = state_data.get('user_role')
         subject = state_data.get('subject') if role == 'student' else None
+        child_id = state_data.get('child_id')
+
+        suggested_start_time = None
+        suggested_end_time = None
+
+        if role == 'student':
+            # Для ученика или ребенка родителя
+            target_user_id = child_id if child_id else user_id
+            is_child = bool(child_id)
+            
+            suggested_time = booking_history.get_suggested_time(
+                target_user_id, subject, selected_date, is_child
+            )
+            suggested_start_time = suggested_time.get("start_time")
+            suggested_end_time = suggested_time.get("end_time")
 
         # Для учеников: проверяем доступность временных слотов
         availability_map = None
@@ -1773,7 +1790,9 @@ async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
             time_start=None,
             time_end=None,
             availability_map=availability_map,
-            click_count=0  # Сбрасываем счетчик нажатий
+            click_count=0,  # Сбрасываем счетчик нажатий
+            suggested_start_time=suggested_start_time,
+            suggested_end_time=suggested_end_time
         )
 
         # Формируем текст сообщения с информацией о дне недели
@@ -1784,6 +1803,9 @@ async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
         message_text = f"📅 Выбрана дата: {day}.{month}.{year} ({weekday_name})\n"
         message_text += f"⏰ Доступное время: {start_time_range.strftime('%H:%M')}-{end_time_range.strftime('%H:%M')}\n"
         message_text += f"📊 Шаг времени: {time_step} минут\n"
+
+        if suggested_start_time and suggested_end_time:
+            message_text += f"⭐ Предложенное время: {suggested_start_time}-{suggested_end_time}\n"
         
         if role == 'student' and availability_map:
             available_count = sum(1 for available in availability_map.values() if available)
@@ -1801,11 +1823,42 @@ async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
             message_text,
             reply_markup=generate_time_range_keyboard_with_availability(
                 selected_date=selected_date,
-                availability_map=availability_map
+                availability_map=availability_map,
+                suggested_start_time=suggested_start_time,
+                suggested_end_time=suggested_end_time
             )
         )
         await state.set_state(BookingStates.SELECT_TIME_RANGE)
         await callback.answer()
+
+@dp.callback_query(BookingStates.SELECT_TIME_RANGE, F.data.startswith("use_suggested_time_"))
+async def use_suggested_time(callback: types.CallbackQuery, state: FSMContext):
+    """Обрабатывает использование предложенного времени"""
+    try:
+        data_parts = callback.data.split('_')
+        if len(data_parts) >= 6:
+            start_time = data_parts[3]
+            end_time = data_parts[4] + '_' + data_parts[5] if len(data_parts) > 5 else data_parts[4]
+            
+            # Корректируем время окончания если нужно
+            state_data = await state.get_data()
+            selected_date = state_data.get('selected_date')
+            
+            end_time = booking_history.adjust_time_to_working_hours(end_time, selected_date, is_start=False)
+            
+            await state.update_data(
+                time_start=start_time,
+                time_end=end_time,
+                click_count=2  # Устанавливаем что оба времени выбраны
+            )
+            
+            # Переходим к подтверждению
+            await confirm_time_range(callback, state)
+            
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Ошибка использования предложенного времени: {e}")
+        await callback.answer("Ошибка использования предложенного времени", show_alert=True)
 
 @dp.callback_query(BookingStates.SELECT_TIME_RANGE, F.data == "time_slot_unavailable")
 async def handle_unavailable_slot(callback: types.CallbackQuery):
@@ -2145,6 +2198,17 @@ async def process_confirmation(callback: types.CallbackQuery, state: FSMContext)
     is_parent = 'child_id' in data
     target_user_id = data['child_id'] if is_parent else callback.from_user.id
     target_user_name = data['child_name'] if is_parent else data['user_name']
+    subject_id = data.get('subject', '')
+
+    if subject_id and data.get('time_start') and data.get('time_end'):
+        booking_history.save_booking_time(
+            user_id=target_user_id,
+            subject_id=subject_id,
+            start_time=data['time_start'],
+            end_time=data['time_end'],
+            is_child=is_parent,
+            date=data['selected_date'].strftime("%Y-%m-%d")
+        )
 
     # Формируем данные брони
     booking_data = {
