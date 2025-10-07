@@ -67,9 +67,18 @@ class CallbackHandlers:
 
         # Расписание
         "confirm_schedule": "handle_confirm_schedule",
-        "cancel_schedule": "handle_cancel_schedule"
+        "cancel_schedule": "handle_cancel_schedule",
+
+        # Напоминания
+        "reminder_book_now": "handle_reminder_book_now"
     }
-    
+
+    @staticmethod
+    async def handle_reminder_book_now(callback: types.CallbackQuery, state: FSMContext):
+        """Обрабатывает нажатие кнопки 'Давайте запишемся!' из напоминания"""
+        from main import start_booking
+        await start_booking(callback.message, state)
+        await callback.answer()
     @staticmethod
     async def process_callback(callback: types.CallbackQuery, state: FSMContext):
         """Обрабатывает callback и направляет в соответствующий обработчик"""

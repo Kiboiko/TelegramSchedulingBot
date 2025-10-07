@@ -6,7 +6,7 @@ import asyncio
 import logging
 from datetime import datetime
 from teacher_reminder import TeacherReminderManager
-
+from reminder_manager import StudentReminderManager
 logger = logging.getLogger(__name__)
 
 
@@ -18,7 +18,7 @@ class BackgroundTasks:
         self.feedback_teacher_manager = feedback_teacher_manager
         self.bot = bot
         self.teacher_reminder_manager = TeacherReminderManager(storage, gsheets, bot)
-
+        self.student_reminder_manager = StudentReminderManager(storage, gsheets, bot)
     async def reminder_check_task(self):
         """Задача для проверки и отправки напоминаний преподавателям"""
         logger.info("Задача проверки напоминаний запущена")
@@ -125,6 +125,26 @@ class BackgroundTasks:
                 logger.error(f"Ошибка в фоновой задаче синхронизации отзывов: {e}")
                 await asyncio.sleep(300)
 
+    async def student_reminder_check_task(self):
+        """Задача для проверки и отправки напоминаний ученикам"""
+        logger.info("Задача проверки напоминаний ученикам запущена")
+
+        while True:
+            try:
+                # Очищаем список отправленных напоминаний в начале месяца
+                self.student_reminder_manager.clear_sent_reminders()
+
+                # Проверяем, нужно ли запускать проверку (середина месяца)
+                if self.student_reminder_manager.should_run_check():
+                    logger.info("Время проверки напоминаний ученикам")
+                    await self.student_reminder_manager.check_and_send_reminders()
+
+                # Проверяем раз в день
+                await asyncio.sleep(24 * 60 * 60)  # 24 часа
+
+            except Exception as e:
+                logger.error(f"Ошибка в задаче проверки напоминаний ученикам: {e}")
+                await asyncio.sleep(60 * 60)  # Ждем 1 час при ошибке
     async def check_teacher_feedback_background(self):
         """Фоновая задача для проверки и отправки обратной связи преподавателям"""
         while True:
@@ -200,6 +220,7 @@ class BackgroundTasks:
             self.sync_pending_feedback_background(),
             self.check_teacher_feedback_background(),
             self.sync_pending_teacher_feedback_background(),
-            self.reminder_check_task()
+            self.reminder_check_task(),
+            self.student_reminder_check_task()
         ]
         return tasks

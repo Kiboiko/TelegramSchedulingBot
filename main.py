@@ -1,7 +1,7 @@
 # main.py
 import sys
 
-sys.path.append(r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
 
 import asyncio
 import json
@@ -53,6 +53,7 @@ from menu_handlers import (
 )
 from menu_handlers import register_menu_handlers
 from finance_handlers import FinanceHandlers
+from reminder_manager import StudentReminderManager
 # Настройка логирования
 
 
@@ -82,7 +83,7 @@ feedback_teacher_manager = FeedbackTeacherManager(storage, gsheets, bot)
 feedback_manager.good_feedback_delay = FEEDBACK_CONFIG["good_feedback_delay"]
 feedback_teacher_manager.good_feedback_delay = FEEDBACK_CONFIG["good_feedback_delay"]
 teacher_reminder_manager = TeacherReminderManager(storage, gsheets, bot)
-
+student_reminder_manager = StudentReminderManager(storage, gsheets, bot)
 class RoleCheckMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         # Пропускаем команду /start, /help и ввод имени
@@ -123,7 +124,7 @@ class RoleCheckMiddleware(BaseMiddleware):
 # Добавление middleware
 dp.update.middleware(RoleCheckMiddleware())
 booking_manager = BookingManager(storage, gsheets)
-background_tasks = BackgroundTasks(storage, gsheets, feedback_manager, feedback_teacher_manager,bot)
+background_tasks = BackgroundTasks(storage, gsheets, feedback_manager, feedback_teacher_manager, bot)
 register_menu_handlers(dp, booking_manager, storage)
 
 
