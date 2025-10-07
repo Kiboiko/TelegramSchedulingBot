@@ -270,10 +270,49 @@ class FinanceHandlers:
             logger.error(f"Error in balance_show_child: {e}")
             await callback.answer("❌ Произошла ошибка", show_alert=True)
 
-    async def finance_back_from_balance(self, callback: types.CallbackQuery, state: FSMContext):
+    @staticmethod
+    async def finance_back_from_balance(callback: types.CallbackQuery, state: FSMContext):
         """Возврат из просмотра баланса"""
-        await self.start_finances(callback.message, state)
-        await callback.answer()
+        try:
+            # Получаем данные из состояния
+            data = await state.get_data()
+            user_id = data.get('finance_user_id', callback.from_user.id)
+            
+            # Сбрасываем состояние финансов
+            await state.clear()
+            
+            # Создаем клавиатуру выбора действия для финансов
+            builder = InlineKeyboardBuilder()
+
+            builder.button(
+                text="📊 Детали по дате",
+                callback_data="finance_start"
+            )
+            
+            builder.button(
+                text="💰 Текущий баланс", 
+                callback_data="finance_show_balance"
+            )
+            
+            builder.button(
+                text="❌ Отмена",
+                callback_data="finance_cancel"
+            )
+            
+            builder.adjust(1)
+
+            message_text = "💰 Выберите действие:"
+
+            await callback.message.edit_text(
+                message_text, 
+                reply_markup=builder.as_markup()
+            )
+            await state.set_state(FinanceStates.SELECT_PERSON)
+            await callback.answer()
+            
+        except Exception as e:
+            logger.error(f"Error in finance_back_from_balance: {e}")
+            await callback.answer("❌ Произошла ошибка", show_alert=True)
 
     async def finance_select_person(self, callback: types.CallbackQuery, state: FSMContext):
         """Выбор человека для просмотра деталей по дате"""

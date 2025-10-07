@@ -371,6 +371,7 @@ class CallbackHandlers:
     async def handle_finance_back_from_balance(callback: types.CallbackQuery, state: FSMContext):
         from main import finance_handlers
         await finance_handlers.finance_back_from_balance(callback, state)
+        await callback.answer()
 
     @staticmethod
     async def handle_balance_self(callback: types.CallbackQuery, state: FSMContext):
