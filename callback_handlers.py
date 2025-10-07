@@ -74,12 +74,6 @@ class CallbackHandlers:
     }
 
     @staticmethod
-    async def handle_reminder_book_now(callback: types.CallbackQuery, state: FSMContext):
-        """Обрабатывает нажатие кнопки 'Давайте запишемся!' из напоминания"""
-        from main import start_booking
-        await start_booking(callback.message, state)
-        await callback.answer()
-    @staticmethod
     async def process_callback(callback: types.CallbackQuery, state: FSMContext):
         """Обрабатывает callback и направляет в соответствующий обработчик"""
         try:
@@ -393,3 +387,10 @@ class CallbackHandlers:
         """Обработка показа баланса для ребенка"""
         from main import finance_handlers
         await finance_handlers.balance_show_child(callback, state)
+
+    @staticmethod
+    async def handle_reminder_book_now(callback: types.CallbackQuery, state: FSMContext):
+        """Обрабатывает нажатие кнопки 'Давайте запишемся!' из напоминания"""
+        from main import start_booking
+        await start_booking(callback.message, state)
+        await callback.answer()

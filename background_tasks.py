@@ -134,9 +134,9 @@ class BackgroundTasks:
                 # Очищаем список отправленных напоминаний в начале месяца
                 self.student_reminder_manager.clear_sent_reminders()
 
-                # Проверяем, нужно ли запускать проверку (середина месяца)
+                # Проверяем, нужно ли запускать проверку (15 число месяца)
                 if self.student_reminder_manager.should_run_check():
-                    logger.info("Время проверки напоминаний ученикам")
+                    logger.info("Время проверки напоминаний ученикам - 15 число месяца")
                     await self.student_reminder_manager.check_and_send_reminders()
 
                 # Проверяем раз в день

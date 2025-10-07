@@ -49,7 +49,7 @@ class StudentReminderManager:
             return True  # В случае ошибки считаем, что записи есть (не отправляем напоминание)
 
     def get_all_students(self) -> List[Dict]:
-        """Получает всех учеников из Google Sheets"""
+        """Получает всех учеников из Google Sheets с проверкой ФИО"""
         try:
             if not self.gsheets:
                 return []
@@ -60,12 +60,17 @@ class StudentReminderManager:
             students = []
             for record in records:
                 roles_str = record.get('roles', '')
-                if roles_str and 'student' in roles_str.lower():
+                user_name = record.get('user_name', '').strip()
+
+                # Проверяем, что пользователь имеет роль студента И имеет ФИО
+                if (roles_str and 'student' in roles_str.lower() and user_name):
                     students.append({
                         'user_id': int(record.get('user_id', 0)),
-                        'user_name': record.get('user_name', ''),
+                        'user_name': user_name,
                         'roles': [role.strip().lower() for role in roles_str.split(',')]
                     })
+                else:
+                    logger.warning(f"Student {record.get('user_id')} skipped: no name or roles")
 
             return students
 
@@ -105,7 +110,7 @@ class StudentReminderManager:
     async def check_and_send_reminders(self):
         """Основная функция проверки и отправки напоминаний"""
         try:
-            logger.info("Starting student reminder check...")
+            logger.info("Starting student reminder check for current month...")
 
             students = self.get_all_students()
             logger.info(f"Found {len(students)} students to check")
@@ -135,14 +140,14 @@ class StudentReminderManager:
             logger.error(f"Error in student reminder check: {e}")
 
     def should_run_check(self) -> bool:
-        """Проверяет, нужно ли запускать проверку (середина месяца)"""
+        """Проверяет, нужно ли запускать проверку (15 число каждого месяца)"""
         now = datetime.now()
-        # Запускаем с 10 по 20 число каждого месяца
-        return 10 <= now.day <= 20
+        # Запускаем 15 числа каждого месяца
+        return now.day == 15
 
     def clear_sent_reminders(self):
         """Очищает список отправленных напоминаний (в начале месяца)"""
         now = datetime.now()
         if now.day == 1:  # В первый день месяца очищаем
             self.sent_reminders.clear()
-            logger.info("Cleared sent reminders list")
+            logger.info("Cleared sent reminders list for new month")
