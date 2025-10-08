@@ -6,7 +6,8 @@ from typing import List, Dict, Any
 from aiogram import Bot, types
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-
+from config import SUBJECTS
+import asyncio
 logger = logging.getLogger(__name__)
 
 
@@ -250,6 +251,48 @@ class FeedbackManager:
 
         # Также сохраняем в Google Sheets
         self.sync_feedback_to_gsheets(feedback_record)
+        if rating in ['better', 'bad']:
+            asyncio.create_task(self.send_admin_notification(feedback_record))
+
+    async def send_admin_notification(self, feedback_record: Dict[str, Any]):
+        """Отправляет уведомление администраторам о негативной обратной связи"""
+        try:
+            user_name = self.storage.get_user_name(feedback_record['user_id'])
+            if not user_name:
+                user_name = f"User_{feedback_record['user_id']}"
+
+            subject_name = SUBJECTS.get(feedback_record['subject'], f"Предмет {feedback_record['subject']}")
+            rating_text = {
+                'better': 'Могло быть лучше',
+                'bad': 'Ужасно'
+            }.get(feedback_record['rating'], feedback_record['rating'])
+
+            message_text = (
+                "⚠️ *ВНИМАНИЕ! Негативная обратная связь!*\n\n"
+                f"👤 *От:* {user_name}\n"
+                f"📅 *Дата занятия:* {feedback_record['date']}\n"
+                f"📚 *Предмет:* {subject_name}\n"
+                f"⭐ *Оценка:* {rating_text}\n"
+            )
+
+            if feedback_record.get('details'):
+                message_text += f"📝 *Комментарий:* {feedback_record['details']}"
+
+            # Отправляем всем администраторам
+            from config import ADMIN_IDS
+            for admin_id in ADMIN_IDS:
+                try:
+                    await self.bot.send_message(
+                        chat_id=admin_id,
+                        text=message_text,
+                        parse_mode="Markdown"
+                    )
+                    logger.info(f"Отправлено уведомление администратору {admin_id} о негативной обратной связи")
+                except Exception as e:
+                    logger.error(f"Не удалось отправить уведомление администратору {admin_id}: {e}")
+
+        except Exception as e:
+            logger.error(f"Ошибка отправки уведомления администраторам: {e}")
 
     def sync_feedback_to_gsheets(self, feedback_record: Dict[str, Any]):
         """Синхронизирует обратную связь с Google Sheets - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
