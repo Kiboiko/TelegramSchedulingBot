@@ -71,8 +71,10 @@ class CallbackHandlers:
 
         "suggested_time_info": "handle_suggested_time_info",
     "use_suggested_time_": "handle_use_suggested_time",
+        # Напоминания
+        "reminder_book_now": "handle_reminder_book_now"
     }
-    
+
     @staticmethod
     async def process_callback(callback: types.CallbackQuery, state: FSMContext):
         """Обрабатывает callback и направляет в соответствующий обработчик"""
@@ -412,3 +414,8 @@ class CallbackHandlers:
         """Обрабатывает использование предложенного времени"""
         from main import use_suggested_time
         await use_suggested_time(callback, state)
+    async def handle_reminder_book_now(callback: types.CallbackQuery, state: FSMContext):
+        """Обрабатывает нажатие кнопки 'Давайте запишемся!' из напоминания"""
+        from main import start_booking
+        await start_booking(callback.message, state)
+        await callback.answer()

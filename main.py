@@ -1,7 +1,7 @@
 # main.py
 import sys
 
-sys.path.append(r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
 
 import asyncio
 import json
@@ -54,6 +54,7 @@ from menu_handlers import (
 )
 from menu_handlers import register_menu_handlers
 from finance_handlers import FinanceHandlers
+from reminder_manager import StudentReminderManager
 # Настройка логирования
 
 
@@ -83,7 +84,7 @@ feedback_teacher_manager = FeedbackTeacherManager(storage, gsheets, bot)
 feedback_manager.good_feedback_delay = FEEDBACK_CONFIG["good_feedback_delay"]
 feedback_teacher_manager.good_feedback_delay = FEEDBACK_CONFIG["good_feedback_delay"]
 teacher_reminder_manager = TeacherReminderManager(storage, gsheets, bot)
-
+student_reminder_manager = StudentReminderManager(storage, gsheets, bot)
 class RoleCheckMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         # Пропускаем команду /start, /help и ввод имени
@@ -124,7 +125,7 @@ class RoleCheckMiddleware(BaseMiddleware):
 # Добавление middleware
 dp.update.middleware(RoleCheckMiddleware())
 booking_manager = BookingManager(storage, gsheets)
-background_tasks = BackgroundTasks(storage, gsheets, feedback_manager, feedback_teacher_manager,bot)
+background_tasks = BackgroundTasks(storage, gsheets, feedback_manager, feedback_teacher_manager, bot)
 register_menu_handlers(dp, booking_manager, storage)
 booking_history = BookingHistoryManager("booking_history.json")
 
@@ -2465,6 +2466,132 @@ finance_handlers = FinanceHandlers(
 finance_handlers.register_handlers(dp)
 
 
+@dp.callback_query(F.data == "reminder_book_now")
+async def handle_reminder_book_now(callback: types.CallbackQuery, state: FSMContext):
+    """Обрабатывает нажатие кнопки 'Давайте запишемся!' из напоминания"""
+    try:
+        user_id = callback.from_user.id
+
+        # ПРОПУСКАЕМ ПРОВЕРКУ ФИО - пользователь уже зарегистрирован!
+        # Вместо вызова start_booking, делаем то же самое, но без проверки ФИО
+
+        # Получаем доступные роли пользователя
+        user_roles = storage.get_user_roles(user_id)
+        if not user_roles:
+            await callback.answer(
+                "⏳ Обратитесь к администратору для получения ролей \n Телефон администратора: +79001372727",
+                show_alert=True
+            )
+            return
+
+        # Получаем ФИО пользователя (оно точно есть)
+        user_name = storage.get_user_name(user_id)
+        await state.update_data(user_name=user_name)
+
+        # Показываем доступные роли для бронирования
+        builder = InlineKeyboardBuilder()
+
+        # Роли, которые можно использовать для бронирования
+        available_booking_roles = []
+
+        if 'teacher' in user_roles:
+            available_booking_roles.append('teacher')
+            builder.button(text="👨‍🏫 Я преподаватель", callback_data="role_teacher")
+
+        if 'student' in user_roles:
+            available_booking_roles.append('student')
+            builder.button(text="👨‍🎓 Я ученик", callback_data="role_student")
+
+        if 'parent' in user_roles:
+            available_booking_roles.append('parent')
+            builder.button(text="👨‍👩‍👧‍👦 Я родитель", callback_data="role_parent")
+
+        if not available_booking_roles:
+            await callback.answer(
+                "❌ У вас нет ролей для бронирования. Обратитесь к администратору. \n Телефон администратора: +79001372727",
+                show_alert=True
+            )
+            return
+
+        await state.update_data(available_roles=available_booking_roles)
+
+        if len(available_booking_roles) == 1:
+            # Если только одна роль, автоматически выбираем ее
+            role = available_booking_roles[0]
+
+            await state.update_data(user_role=role)
+
+            if role == 'teacher':
+                # Для преподавателя получаем предметы
+                teacher_subjects = storage.get_teacher_subjects(user_id)
+                if not teacher_subjects:
+                    await callback.answer(
+                        "У вас нет назначенных предметов. Обратитесь к администратору. \n Телефон администратора: +79001372727",
+                        show_alert=True
+                    )
+                    return
+
+                await state.update_data(subjects=teacher_subjects)
+                subject_names = [SUBJECTS.get(subj_id, f"Предмет {subj_id}") for subj_id in teacher_subjects]
+
+                await callback.message.edit_text(
+                    f"Вы преподаватель\n"
+                    f"Ваши предметы: {', '.join(subject_names)}\n"
+                    "Теперь выберите дату:",
+                    reply_markup=generate_calendar()
+                )
+                await state.set_state(BookingStates.SELECT_DATE)
+
+            elif role == 'student':
+                await callback.message.edit_text(
+                    "Вы ученик\n"
+                    "Выберите предмет для занятия:",
+                    reply_markup=generate_subjects_keyboard()
+                )
+                await state.set_state(BookingStates.SELECT_SUBJECT)
+
+            elif role == 'parent':
+                # Обработка родителя
+                children_ids = storage.get_parent_children(user_id)
+                if not children_ids:
+                    await callback.answer(
+                        "У вас нет привязанных детей. Обратитесь к администратору.\n Телефон администратора: +79001372727",
+                        show_alert=True
+                    )
+                    return
+
+                builder = InlineKeyboardBuilder()
+                for child_id in children_ids:
+                    child_info = storage.get_child_info(child_id)
+                    child_name = child_info.get('user_name', f'Ученик {child_id}')
+                    builder.button(
+                        text=f"👶 {child_name}",
+                        callback_data=f"select_child_{child_id}"
+                    )
+
+                builder.button(text="❌ Отмена", callback_data="cancel_child_selection")
+                builder.adjust(1)
+
+                await callback.message.edit_text(
+                    "Вы родитель\n"
+                    "Выберите ребенка для записи:",
+                    reply_markup=builder.as_markup()
+                )
+                await state.set_state(BookingStates.PARENT_SELECT_CHILD)
+
+        else:
+            # Если несколько ролей, показываем выбор
+            await callback.message.edit_text(
+                "Выберите роль для бронирования:",
+                reply_markup=builder.as_markup()
+            )
+            await state.set_state(BookingStates.SELECT_ROLE)
+
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Error handling reminder book now: {e}")
+        await callback.answer("Произошла ошибка, попробуйте позже", show_alert=True)
 async def main():
     await background_tasks.startup_tasks()
 
