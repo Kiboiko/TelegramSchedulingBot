@@ -55,14 +55,24 @@ class GoogleSheetsManager:
             data = worksheet.get_all_values()
 
             self.qual_map = {}
+            self.qual_links = {}  # Словарь для хранения ссылок
             logger.info("=== ДАННЫЕ ИЗ ЛИСТА 'Предметы бот' ===")
             for i, row in enumerate(data):
                 logger.info(f"Строка {i}: {row}")
                 if len(row) >= 2 and row[0].strip().isdigit():  # ID в колонке A
-                    self.qual_map[row[1].strip().lower()] = row[0].strip()
-                    logger.info(f"Добавлено в qual_map: '{row[1].strip().lower()}' -> '{row[0].strip()}'")
+                    subject_id = row[0].strip()
+                    subject_name = row[1].strip().lower()
+                    self.qual_map[subject_name] = subject_id
+
+                    # Загружаем ссылку из колонки C (индекс 2)
+                    if len(row) >= 3:
+                        self.qual_links[subject_id] = row[2].strip()
+
+                    logger.info(
+                        f"Добавлено: '{subject_name}' -> '{subject_id}', ссылка: {self.qual_links.get(subject_id, 'нет')}")
 
             logger.info(f"Итоговый qual_map: {self.qual_map}")
+            logger.info(f"Ссылки на материалы: {self.qual_links}")
         except Exception as e:
             logger.error(f"Ошибка загрузки квалификаций: {e}")
 

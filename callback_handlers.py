@@ -70,9 +70,12 @@ class CallbackHandlers:
         "cancel_schedule": "handle_cancel_schedule",
 
         "suggested_time_info": "handle_suggested_time_info",
-    "use_suggested_time_": "handle_use_suggested_time",
+        "use_suggested_time_": "handle_use_suggested_time",
         # Напоминания
-        "reminder_book_now": "handle_reminder_book_now"
+        "reminder_book_now": "handle_reminder_book_now",
+
+        "generate_materials": "handle_generate_materials",
+        "cancel_materials": "handle_cancel_materials"
     }
 
     @staticmethod
@@ -96,6 +99,17 @@ class CallbackHandlers:
             logger.error(f"Ошибка обработки callback: {e}")
             await callback.answer("❌ Произошла ошибка", show_alert=True)
 
+    @staticmethod
+    async def handle_generate_materials(callback: types.CallbackQuery, state: FSMContext):
+        """Обрабатывает генерацию материалов"""
+        from main import process_materials_generation
+        await process_materials_generation(callback, state)
+
+    @staticmethod
+    async def handle_cancel_materials(callback: types.CallbackQuery, state: FSMContext):
+        """Обрабатывает отмену генерации материалов"""
+        from main import cancel_materials_generation
+        await cancel_materials_generation(callback, state)
     # === ОБРАБОТЧИКИ БРОНИРОВАНИЙ ===
     
     @staticmethod

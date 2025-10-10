@@ -12,7 +12,8 @@ class BookingStates(StatesGroup):
     PARENT_SELECT_CHILD = State()
     SELECT_SCHEDULE_DATE = State()
     CONFIRM_SCHEDULE = State()
-
+    SELECT_MATERIALS_DATE = State()
+    CONFIRM_MATERIALS_GENERATION = State()
 class FinanceStates(StatesGroup):
     SELECT_PERSON = State()
     SELECT_SUBJECT = State()
