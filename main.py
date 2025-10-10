@@ -1002,7 +1002,7 @@ async def start_schedule_generation(message: types.Message, state: FSMContext):
     if not is_admin(user_id):
         await message.answer(
             "❌ У вас нет прав для составления расписания. Обратитесь к администратору. \n Телефон администратора: +79001372727",
-            reply_markup=await generate_main_menu(user_id)
+            reply_markup=await generate_main_menu(user_id,storage)
         )
         return
 
@@ -1071,7 +1071,7 @@ async def start_booking(message: types.Message, state: FSMContext):
     if not user_roles:
         await message.answer(
             "⏳ Обратитесь к администратору для получения ролей \n Телефон администратора: +79001372727",
-            reply_markup=await generate_main_menu(user_id)
+            reply_markup=await generate_main_menu(user_id,storage)
         )
         return
 
@@ -1098,7 +1098,7 @@ async def start_booking(message: types.Message, state: FSMContext):
     if not available_booking_roles:
         await message.answer(
             "❌ У вас нет ролей для бронирования. Обратитесь к администратору. \n Телефон администратора: +79001372727",
-            reply_markup=await generate_main_menu(user_id)
+            reply_markup=await generate_main_menu(user_id,storage)
         )
         return
 
@@ -1116,7 +1116,7 @@ async def start_booking(message: types.Message, state: FSMContext):
             if not teacher_subjects:
                 await message.answer(
                     "У вас нет назначенных предметов. Обратитесь к администратору. \n Телефон администратора: +79001372727",
-                    reply_markup=await generate_main_menu(user_id)
+                    reply_markup=await generate_main_menu(user_id,storage)
                 )
                 return
 
@@ -1145,7 +1145,7 @@ async def start_booking(message: types.Message, state: FSMContext):
             if not children_ids:
                 await message.answer(
                     "У вас нет привязанных детей. Обратитесь к администратору.\n Телефон администратора: +79001372727",
-                    reply_markup=await generate_main_menu(user_id)
+                    reply_markup=await generate_main_menu(user_id,storage)
                 )
                 return
 
@@ -1274,7 +1274,7 @@ async def back_to_past_bookings(callback: types.CallbackQuery):
 async def back_to_menu_from_past(callback: types.CallbackQuery):
     """Возврат в меню из раздела прошедших бронирований"""
     user_id = callback.from_user.id
-    menu = await generate_main_menu(user_id)
+    menu = await generate_main_menu(user_id,storage)
 
     await callback.message.edit_text(
         "Главное меню:",
@@ -1318,7 +1318,7 @@ async def process_name(message: types.Message, state: FSMContext):
         await message.answer(
             "✅ Ваше ФИО сохранено!\n"
             "⏳ Обратитесь к администратору для получения ролей. \n Телефон администратора: +79001372727",
-            reply_markup=await generate_main_menu(user_id)
+            reply_markup=await generate_main_menu(user_id,storage)
         )
         await state.clear()
 
@@ -1759,7 +1759,7 @@ async def cancel_schedule_generation(callback: types.CallbackQuery, state: FSMCo
     user_id = callback.from_user.id
     await callback.message.answer(
         "Выберите действие:",
-        reply_markup=await generate_main_menu(user_id)
+        reply_markup=await generate_main_menu(user_id,storage)
     )
     await callback.answer()
 
@@ -1773,7 +1773,7 @@ async def process_cancellation(callback: types.CallbackQuery, state: FSMContext)
     user_id = callback.from_user.id
     await callback.message.answer(
         "Выберите действие:",
-        reply_markup=await generate_main_menu(user_id)
+        reply_markup=await generate_main_menu(user_id,storage)
     )
     await callback.answer()
 
@@ -2193,7 +2193,7 @@ async def cancel_time_selection_handler(callback: types.CallbackQuery, state: FS
     user_id = callback.from_user.id
     await callback.message.answer(
         "Выберите действие:",
-        reply_markup=await generate_main_menu(user_id)
+        reply_markup=await generate_main_menu(user_id,storage)
     )
     await callback.answer()
 
@@ -2650,7 +2650,7 @@ async def cancel_child_selection(callback: types.CallbackQuery, state: FSMContex
     user_id = callback.from_user.id
     await callback.message.answer(
         "Выберите действие:",
-        reply_markup=await generate_main_menu(user_id)
+        reply_markup=await generate_main_menu(user_id,storage)
     )
     await callback.answer()
 
@@ -2658,7 +2658,7 @@ async def cancel_child_selection(callback: types.CallbackQuery, state: FSMContex
 @dp.callback_query(F.data.in_(["back_to_menu", "back_to_bookings"]))
 async def back_handler(callback: types.CallbackQuery):
     user_id = callback.from_user.id
-    menu = await generate_main_menu(user_id)
+    menu = await generate_main_menu(user_id,storage)
 
     if callback.data == "back_to_menu":
         await callback.message.edit_text(
