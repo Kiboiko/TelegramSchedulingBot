@@ -305,77 +305,66 @@ class GoogleDocsMerger:
             # Возвращаем текст без обработки если что-то пошло не так
             clean = re.compile('<.*?>')
             return re.sub(clean, '', html_content)
-    
+
     def merge_documents_with_images(self, doc_urls: List[str], output_path: str) -> bool:
         """
-        Объединяет несколько Google Docs в один Word-документ с попыткой сохранения изображений
+        Объединяет несколько Google Docs в один Word-документ
+        без заголовков и разделителей
         """
         try:
             doc = Document()
-            title = doc.add_heading('Объединенный документ', 0)
-            doc.add_paragraph(f"Объединено документов: {len(doc_urls)}")
-            doc.add_paragraph()
-            
+
             total_images = 0
-            
+
             for i, doc_url in enumerate(doc_urls, 1):
                 logger.info(f"Обработка документа {i}/{len(doc_urls)}: {doc_url}")
-                
-                if i > 1:
-                    doc.add_paragraph("\n" + "="*50 + "\n")
-                
-                doc.add_heading(f'Документ {i}', level=1)
-                
+
                 # Получаем контент с информацией об изображениях
                 content_data = self.get_document_content_with_images(doc_url)
                 text_content = content_data['text']
                 images = content_data['images']
-                
+
                 total_images += len(images)
                 logger.info(f"Документ {i}: {len(text_content)} символов, {len(images)} изображений")
-                
+
                 if text_content:
-                    # Обрабатываем текст и добавляем изображения
+                    # Обрабатываем текст - добавляем без заголовков
                     paragraphs = text_content.split('\n')
-                    
+
                     for paragraph in paragraphs:
                         if paragraph.strip():
                             doc.add_paragraph(paragraph.strip())
-                    
-                    # Добавляем изображения в конец документа
+
+                    # Добавляем изображения без подписей
                     if images:
-                        doc.add_paragraph("\n" + "-" * 30 + " ИЗОБРАЖЕНИЯ " + "-" * 30 + "\n")
-                        
                         for img_idx, image_info in enumerate(images, 1):
                             try:
                                 image_data = image_info['data']
                                 if image_data:
                                     # Создаем временный файл для изображения
                                     image_stream = io.BytesIO(image_data)
-                                    
-                                    # Добавляем подпись к изображению
-                                    doc.add_paragraph(f"Изображение {img_idx}: {image_info.get('alt', '')}")
-                                    
-                                    # Добавляем изображение
+
+                                    # Добавляем изображение без подписи
                                     doc.add_picture(image_stream, width=Inches(5.0))
-                                    
+
                                     # Пустая строка после изображения
                                     doc.add_paragraph()
-                                    
+
                                     logger.info(f"Добавлено изображение {img_idx} в документ {i}")
-                                    
+
                             except Exception as e:
                                 logger.error(f"Ошибка добавления изображения {img_idx}: {e}")
-                                doc.add_paragraph(f"[Ошибка загрузки изображения {img_idx}]")
-                else:
-                    doc.add_paragraph(f"Не удалось загрузить содержимое документа {i}")
-                    logger.warning(f"Не удалось загрузить документ {i}")
-            
+                                continue
+
+                # Добавляем разрыв страницы между документами (опционально)
+                if i < len(doc_urls):
+                    doc.add_page_break()
+
             doc.save(output_path)
             logger.info(f"Успешно создан объединенный документ: {output_path}")
             logger.info(f"Всего обработано изображений: {total_images}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Ошибка объединения документов: {e}")
             return False

@@ -260,15 +260,11 @@ class AdvancedMaterialsManager:
             return f"❌ Ошибка: {str(e)}"
 
     def _create_students_info_document(self, students_data: List[Dict], target_date: str) -> str:
-        """Создает временный документ с информацией о студентах"""
+        """Создает временный документ с информацией о студентах БЕЗ ЗАГОЛОВКОВ"""
         try:
             doc = Document()
 
-            # Заголовок
-            title = doc.add_heading('Информация о занятиях', level=1)
-            doc.add_paragraph(f"Дата: {target_date}")
-            doc.add_paragraph(f"Всего занятий: {len(students_data)}")
-            doc.add_paragraph()
+            # НЕ добавляем заголовок - начинаем сразу с содержимого
 
             # Группируем по предметам
             subjects_map = {}
@@ -278,18 +274,15 @@ class AdvancedMaterialsManager:
                     subjects_map[subject_id] = []
                 subjects_map[subject_id].append(student)
 
-            # Добавляем информацию по каждому предмету
+            # Добавляем информацию по каждому предмету без заголовков
             for subject_id, students in subjects_map.items():
                 subject_name = self._get_subject_name(subject_id)
-                doc.add_heading(f'Предмет: {subject_name}', level=2)
 
                 for student in students:
                     doc.add_paragraph(
-                        f"• {student['name']} - Занятие №{student['lesson_number']}: "
+                        f"{student['name']} - Занятие №{student['lesson_number']}: "
                         f"{student['topic']} ({student['start_time']}-{student['end_time']})"
                     )
-
-                doc.add_paragraph()
 
             # Сохраняем временный файл
             temp_path = os.path.join(self.output_dir, f"temp_students_info_{datetime.now().timestamp()}.docx")
@@ -302,12 +295,11 @@ class AdvancedMaterialsManager:
             # Возвращаем путь к пустому файлу в случае ошибки
             temp_path = os.path.join(self.output_dir, f"temp_empty_{datetime.now().timestamp()}.docx")
             doc = Document()
-            doc.add_paragraph("Информация о студентах недоступна")
             doc.save(temp_path)
             return temp_path
 
     def _combine_documents(self, first_doc_path: str, second_doc_path: str, target_date: str) -> str:
-        """Объединяет два документа в один"""
+        """Объединяет два документа в один БЕЗ РАЗДЕЛИТЕЛЕЙ"""
         try:
             final_filename = f"final_combined_materials_{target_date.replace('.', '_')}.docx"
             final_path = os.path.join(self.output_dir, final_filename)
@@ -315,21 +307,14 @@ class AdvancedMaterialsManager:
             # Создаем новый документ
             final_doc = Document()
 
-            # Добавляем заголовок
-            final_doc.add_heading(f'Материалы для занятий на {target_date}', level=0)
-            final_doc.add_paragraph(f"Документ сгенерирован: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
-            final_doc.add_paragraph()
+            # НЕ добавляем заголовки и разделители
 
             # Копируем содержимое первого документа (информация о студентах)
             first_doc = Document(first_doc_path)
             for element in first_doc.element.body:
                 final_doc.element.body.append(element)
 
-            final_doc.add_paragraph()
-            final_doc.add_paragraph("=" * 80)
-            final_doc.add_paragraph("МАТЕРИАЛЫ ПО ПРЕДМЕТАМ")
-            final_doc.add_paragraph("=" * 80)
-            final_doc.add_paragraph()
+            # НЕ добавляем разделители между документами
 
             # Копируем содержимое второго документа (материалы по предметам)
             second_doc = Document(second_doc_path)
