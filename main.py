@@ -1,22 +1,7 @@
 # main.py
 import sys
 
-sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
-from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.client.session.aiohttp import AiohttpSession
-import aiohttp
-from aiogram import Bot, Dispatcher, types, F, BaseMiddleware
-from aiogram.filters import Command, CommandStart
-from aiogram.types import (
-    Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
-    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
-)
-from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-import asyncio
-from functools import wraps
-from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter
+sys.path.append(r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\shedule_app")
 
 import asyncio
 import json
@@ -52,7 +37,6 @@ from states import BookingStates
 from feedback import FeedbackManager, FeedbackStates
 from feedback_teachers import FeedbackTeacherManager, FeedbackTeacherStates
 from config import FEEDBACK_CONFIG
-from materials_manager import MaterialsManager
 
 from calendar_utils import generate_calendar,get_time_range_for_date
 from time_utils import generate_time_range_keyboard_with_availability,calculate_lesson_duration
@@ -77,30 +61,7 @@ from reminder_manager import StudentReminderManager
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-
-def handle_network_errors(max_retries=3):
-    def decorator(func):
-        @wraps(func)
-        async def wrapper(*args, **kwargs):
-            for attempt in range(max_retries):
-                try:
-                    return await func(*args, **kwargs)
-                except Exception as e:
-                    if attempt == max_retries - 1:
-                        logger.error(f"Error after {max_retries} attempts in {func.__name__}: {e}")
-                        # Не пробрасываем исключение, чтобы бот не падал
-                        return None
-                    wait_time = 2 ** attempt
-                    logger.warning(f"Error (attempt {attempt + 1}), retrying in {wait_time}s: {e}")
-                    await asyncio.sleep(wait_time)
-            return None
-        return wrapper
-    return decorator
 # Инициализация бота
-session = AiohttpSession(
-    timeout=aiohttp.ClientTimeout(total=30)  # Универсальный таймаут
-)
-
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 storage = JSONStorage(file_path=BOOKINGS_FILE)
@@ -124,19 +85,6 @@ feedback_manager.good_feedback_delay = FEEDBACK_CONFIG["good_feedback_delay"]
 feedback_teacher_manager.good_feedback_delay = FEEDBACK_CONFIG["good_feedback_delay"]
 teacher_reminder_manager = TeacherReminderManager(storage, gsheets, bot)
 student_reminder_manager = StudentReminderManager(storage, gsheets, bot)
-materials_manager = MaterialsManager(gsheets, 'credentials.json', SPREADSHEET_ID)
-# ДОБАВЬТЕ после инициализации других менеджеров:
-try:
-    from documents_merger import DocumentsMerger
-    materials_manager = DocumentsMerger(gsheets, 'credentials.json', SPREADSHEET_ID)
-    logger.info("Documents merger initialized")
-except Exception as e:
-    logger.error(f"Failed to initialize documents merger: {e}")
-    materials_manager = None
-    class DummyMaterialsManager:
-        def create_combined_materials_document(self, target_date):
-            return "Сервис генерации материалов временно недоступен"
-    materials_manager = DummyMaterialsManager()
 class RoleCheckMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         # Пропускаем команду /start, /help и ввод имени
@@ -1323,175 +1271,6 @@ async def process_name(message: types.Message, state: FSMContext):
         await state.clear()
 
 
-# Обработчик команды генерации материалов
-@dp.message(F.text == "📚 Сгенерировать материалы")
-async def generate_materials_command(message: types.Message, state: FSMContext):
-    """Команда для генерации материалов"""
-    try:
-        user_id = message.from_user.id
-
-        if not is_admin(user_id):
-            await message.answer("❌ Эта команда только для администраторов")
-            return
-
-        await message.answer(
-            "📅 Выберите дату для генерации материалов:",
-            reply_markup=generate_calendar()
-        )
-        await state.set_state(BookingStates.SELECT_MATERIALS_DATE)
-    except Exception as e:
-        logger.error(f"Error in generate_materials_command: {e}")
-        await message.answer("❌ Произошла ошибка")
-#@dp.callback_query(BookingStates.SELECT_MATERIALS_DATE, F.data.startswith("calendar_day_"))
-@dp.callback_query(BookingStates.SELECT_MATERIALS_DATE, F.data.startswith("calendar_day_"))
-async def process_materials_date_selection(callback: types.CallbackQuery, state: FSMContext):
-    """Обработка выбора даты для генерации материалов"""
-    try:
-        data = callback.data
-        date_str = data.replace("calendar_day_", "")
-        year, month, day = map(int, date_str.split("-"))
-        selected_date = datetime(year, month, day).date()
-        formatted_date = selected_date.strftime("%d.%m.%Y")
-
-        await state.update_data(materials_date=formatted_date)
-
-        builder = InlineKeyboardBuilder()
-        builder.row(
-            types.InlineKeyboardButton(text="✅ Сгенерировать", callback_data="generate_materials"),
-            types.InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_materials")
-        )
-
-        await callback.message.edit_text(
-            f"📅 Дата для генерации материалов: {formatted_date}\n"
-            "Сгенерировать объединенный документ с материалами?",
-            reply_markup=builder.as_markup()
-        )
-        await state.set_state(BookingStates.CONFIRM_MATERIALS_GENERATION)
-        await callback.answer()
-
-    except Exception as e:
-        logger.error(f"Ошибка при выборе даты материалов: {e}")
-        await callback.answer("Ошибка при выборе даты", show_alert=True)
-
-
-@dp.callback_query(BookingStates.CONFIRM_MATERIALS_GENERATION, F.data == "generate_materials")
-async def process_materials_generation(callback: types.CallbackQuery, state: FSMContext):
-    """Запуск процесса объединения документов"""
-    try:
-        data = await state.get_data()
-        target_date = data.get('materials_date')
-
-        if not target_date:
-            await callback.answer("Ошибка: дата не выбрана", show_alert=True)
-            return
-
-        if not materials_manager:
-            await callback.message.edit_text("❌ Сервис объединения документов недоступен")
-            return
-
-        await callback.message.edit_text(
-            "⏳ Объединяю документы...\n"
-            "📚 Ищу ссылки в таблице 'Предметы бот'\n"
-            "🔗 Загружаю содержимое Google документов"
-        )
-
-        # Запускаем объединение
-        result = await asyncio.to_thread(
-            materials_manager.merge_qualification_documents,
-            target_date
-        )
-
-        await callback.message.edit_text(result)
-
-    except Exception as e:
-        logger.error(f"Ошибка при объединении документов: {e}")
-        await callback.message.edit_text(
-            f"❌ Произошла ошибка при объединении документов:\n{str(e)}"
-        )
-
-    await state.clear()
-
-@dp.callback_query(BookingStates.CONFIRM_MATERIALS_GENERATION, F.data == "cancel_materials")
-async def cancel_materials_generation(callback: types.CallbackQuery, state: FSMContext):
-    """Отмена генерации материалов"""
-    try:
-        await callback.message.edit_text("❌ Генерация материалов отменена")
-        await state.clear()
-
-        user_id = callback.from_user.id
-        await callback.message.answer(
-            "Выберите действие:",
-            reply_markup=await generate_main_menu(user_id)
-        )
-        await callback.answer()
-    except Exception as e:
-        logger.error(f"Error in cancel_materials_generation: {e}")
- # Обработчик генерации материалов
-# @dp.callback_query(BookingStates.CONFIRM_MATERIALS_GENERATION, F.data == "generate_materials")
-# @handle_network_errors(max_retries=2)
-# async def process_materials_generation(callback: types.CallbackQuery, state: FSMContext):
-#     """Запуск процесса генерации материалов"""
-#     try:
-#         data = await state.get_data()
-#         target_date = data.get('materials_date')
-#
-#         if not target_date:
-#             await callback.answer("Ошибка: дата не выбрана", show_alert=True)
-#             return
-#
-#         # Отправляем сообщение о начале процесса
-#         await callback.message.edit_text("⏳ Генерирую материалы... Это может занять несколько минут.")
-#
-#         try:
-#             # Запускаем генерацию в отдельном потоке с таймаутом
-#             doc_url = await asyncio.wait_for(
-#                 asyncio.to_thread(materials_manager.create_combined_materials_document, target_date),
-#                 timeout=300  # 5 минут таймаут для генерации
-#             )
-#
-#             if doc_url.startswith("https://"):
-#                 await callback.message.edit_text(
-#                     f"✅ Материалы успешно сгенерированы!\n"
-#                     f"📎 Ссылка на документ:\n{doc_url}"
-#                 )
-#             else:
-#                 await callback.message.edit_text(
-#                     f"❌ {doc_url}"
-#                 )
-#
-#         except asyncio.TimeoutError:
-#             await callback.message.edit_text(
-#                 "❌ Генерация материалов заняла слишком много времени. "
-#                 "Попробуйте позже или обратитесь к администратору."
-#             )
-#             logger.error(f"Timeout generating materials for date {target_date}")
-#
-#     except Exception as e:
-#         logger.error(f"Ошибка при генерации материалов: {e}")
-#         await callback.message.edit_text(
-#             f"❌ Произошла ошибка при генерации материалов:\n{str(e)}"
-#         )
-#
-#     await state.clear()
-
-
-# # Обработчик отмены генерации материалов
-# @dp.callback_query(BookingStates.CONFIRM_MATERIALS_GENERATION, F.data == "cancel_materials")
-# @handle_network_errors(max_retries=2)
-# async def cancel_materials_generation(callback: types.CallbackQuery, state: FSMContext):
-#     """Отмена генерации материалов"""
-#     try:
-#         await callback.message.edit_text("❌ Генерация материалов отменена")
-#         await state.clear()
-#
-#         user_id = callback.from_user.id
-#         await callback.message.answer(
-#             "Выберите действие:",
-#             reply_markup=await generate_main_menu(user_id)
-#         )
-#         await callback.answer()
-#     except Exception as e:
-#         logger.error(f"Error in cancel_materials_generation: {e}")
 @dp.callback_query(BookingStates.SELECT_SCHEDULE_DATE, F.data.startswith("calendar_day_"))
 async def process_schedule_date_selection(callback: types.CallbackQuery, state: FSMContext):
     """Обработка выбора даты для составления расписания"""
@@ -2821,12 +2600,9 @@ async def main():
     for task in tasks:
         asyncio.create_task(task)
 
-    # Простой запуск бота
-    try:
-        await dp.start_polling(bot)
-    except Exception as e:
-        logger.error(f"Fatal error in polling: {e}")
-        raise
+    # Запуск бота
+    await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     logger.info("Starting bot...")
