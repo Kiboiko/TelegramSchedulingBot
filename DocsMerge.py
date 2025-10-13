@@ -309,7 +309,7 @@ class GoogleDocsMerger:
     def merge_documents_with_images(self, doc_urls: List[str], output_path: str) -> bool:
         """
         Объединяет несколько Google Docs в один Word-документ
-        без заголовков и разделителей
+        без заголовков, разделителей и разрывов страниц
         """
         try:
             doc = Document()
@@ -319,7 +319,7 @@ class GoogleDocsMerger:
             for i, doc_url in enumerate(doc_urls, 1):
                 logger.info(f"Обработка документа {i}/{len(doc_urls)}: {doc_url}")
 
-                # Получаем контент с информацией об изображениях
+                # Получаем контент с информацией об изображениями
                 content_data = self.get_document_content_with_images(doc_url)
                 text_content = content_data['text']
                 images = content_data['images']
@@ -356,9 +356,8 @@ class GoogleDocsMerger:
                                 logger.error(f"Ошибка добавления изображения {img_idx}: {e}")
                                 continue
 
-                # Добавляем разрыв страницы между документами (опционально)
-                if i < len(doc_urls):
-                    doc.add_page_break()
+                # НЕ добавляем разрыв страницы между документами
+                # Содержимое продолжается на той же странице
 
             doc.save(output_path)
             logger.info(f"Успешно создан объединенный документ: {output_path}")

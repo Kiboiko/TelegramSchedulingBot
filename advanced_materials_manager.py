@@ -260,11 +260,9 @@ class AdvancedMaterialsManager:
             return f"❌ Ошибка: {str(e)}"
 
     def _create_students_info_document(self, students_data: List[Dict], target_date: str) -> str:
-        """Создает временный документ с информацией о студентах БЕЗ ЗАГОЛОВКОВ"""
+        """Создает временный документ с информацией о студентах БЕЗ ЗАГОЛОВКОВ И РАЗРЫВОВ"""
         try:
             doc = Document()
-
-            # НЕ добавляем заголовок - начинаем сразу с содержимого
 
             # Группируем по предметам
             subjects_map = {}
@@ -276,10 +274,10 @@ class AdvancedMaterialsManager:
 
             # Добавляем информацию по каждому предмету без заголовков
             for subject_id, students in subjects_map.items():
-                subject_name = self._get_subject_name(subject_id)
-
                 for student in students:
-                    doc.add_paragraph(
+                    # Добавляем информацию о студенте как обычный параграф
+                    p = doc.add_paragraph()
+                    p.add_run(
                         f"{student['name']} - Занятие №{student['lesson_number']}: "
                         f"{student['topic']} ({student['start_time']}-{student['end_time']})"
                     )
@@ -292,14 +290,13 @@ class AdvancedMaterialsManager:
 
         except Exception as e:
             logger.error(f"Ошибка создания документа с информацией о студентах: {e}")
-            # Возвращаем путь к пустому файлу в случае ошибки
             temp_path = os.path.join(self.output_dir, f"temp_empty_{datetime.now().timestamp()}.docx")
             doc = Document()
             doc.save(temp_path)
             return temp_path
 
     def _combine_documents(self, first_doc_path: str, second_doc_path: str, target_date: str) -> str:
-        """Объединяет два документа в один БЕЗ РАЗДЕЛИТЕЛЕЙ"""
+        """Объединяет два документа в один БЕЗ РАЗДЕЛИТЕЛЕЙ И РАЗРЫВОВ СТРАНИЦ"""
         try:
             final_filename = f"final_combined_materials_{target_date.replace('.', '_')}.docx"
             final_path = os.path.join(self.output_dir, final_filename)
@@ -307,16 +304,13 @@ class AdvancedMaterialsManager:
             # Создаем новый документ
             final_doc = Document()
 
-            # НЕ добавляем заголовки и разделители
-
             # Копируем содержимое первого документа (информация о студентах)
             first_doc = Document(first_doc_path)
             for element in first_doc.element.body:
                 final_doc.element.body.append(element)
 
-            # НЕ добавляем разделители между документами
-
             # Копируем содержимое второго документа (материалы по предметам)
+            # Без каких-либо разделителей - содержимое продолжается
             second_doc = Document(second_doc_path)
             for element in second_doc.element.body:
                 final_doc.element.body.append(element)
@@ -328,7 +322,6 @@ class AdvancedMaterialsManager:
 
         except Exception as e:
             logger.error(f"Ошибка объединения документов: {e}")
-            # В случае ошибки возвращаем хотя бы один из документов
             return second_doc_path
 
     def _get_subject_name(self, subject_id: str) -> str:
