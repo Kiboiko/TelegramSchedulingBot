@@ -127,12 +127,13 @@ student_reminder_manager = StudentReminderManager(storage, gsheets, bot)
 materials_manager = MaterialsManager(gsheets, 'credentials.json', SPREADSHEET_ID)
 # ДОБАВЬТЕ после инициализации других менеджеров:
 try:
-    from documents_merger import DocumentsMerger
-    materials_manager = DocumentsMerger(gsheets, 'credentials.json', SPREADSHEET_ID)
-    logger.info("Documents merger initialized")
+    from advanced_materials_manager import AdvancedMaterialsManager
+    materials_manager = AdvancedMaterialsManager(gsheets, 'credentials.json', SPREADSHEET_ID)
+    logger.info("Advanced materials manager initialized")
 except Exception as e:
-    logger.error(f"Failed to initialize documents merger: {e}")
+    logger.error(f"Failed to initialize advanced materials manager: {e}")
     materials_manager = None
+
     class DummyMaterialsManager:
         def create_combined_materials_document(self, target_date):
             return "Сервис генерации материалов временно недоступен"
@@ -1390,16 +1391,15 @@ async def process_materials_generation(callback: types.CallbackQuery, state: FSM
             return
 
         await callback.message.edit_text(
-            "⏳ Объединяю документы...\n"
-            "📚 Ищу ссылки в таблице 'Предметы бот'\n"
-            "🔗 Загружаю содержимое Google документов"
+            "⏳ Начинаю объединение документов...\n"
+            "📚 Ищу занятия студентов на указанную дату\n"
+            "🔗 Загружаю материалы по квалификациям\n"
+            "📄 Объединяю документы...\n\n"
+            "Это может занять несколько минут."
         )
 
-        # Запускаем объединение
-        result = await asyncio.to_thread(
-            materials_manager.merge_qualification_documents,
-            target_date
-        )
+        # Запускаем объединение - используем await для асинхронного метода
+        result = await materials_manager.create_combined_materials_document(target_date)
 
         await callback.message.edit_text(result)
 
@@ -1410,7 +1410,6 @@ async def process_materials_generation(callback: types.CallbackQuery, state: FSM
         )
 
     await state.clear()
-
 @dp.callback_query(BookingStates.CONFIRM_MATERIALS_GENERATION, F.data == "cancel_materials")
 async def cancel_materials_generation(callback: types.CallbackQuery, state: FSMContext):
     """Отмена генерации материалов"""
