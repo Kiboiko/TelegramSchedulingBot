@@ -55,6 +55,7 @@ from menu_handlers import (
 from menu_handlers import register_menu_handlers
 from finance_handlers import FinanceHandlers
 from reminder_manager import StudentReminderManager
+from DocsMerge import GoogleDocsMerger,export_as_pdf_and_convert,check_document_permissions
 # Настройка логирования
 
 
@@ -128,6 +129,7 @@ booking_manager = BookingManager(storage, gsheets)
 background_tasks = BackgroundTasks(storage, gsheets, feedback_manager, feedback_teacher_manager, bot)
 register_menu_handlers(dp, booking_manager, storage)
 booking_history = BookingHistoryManager("booking_history.json")
+merger = GoogleDocsMerger(CREDENTIALS_PATH)
 
 
 def get_subject_distribution_by_time(loader, target_date: str, condition_check: bool = True) -> Dict[time, Dict]:
@@ -2599,6 +2601,23 @@ async def main():
     tasks = background_tasks.start_all_tasks()
     for task in tasks:
         asyncio.create_task(task)
+    doc_urls = [
+        'https://docs.google.com/document/d/1009vY3SSX_BUyU8wGD9YQrFETRB5o34FNBmgOA-VAwk/edit?usp=sharing',
+        'https://docs.google.com/document/d/1C8Rp2Ir-TKmD6N11l85a8Xs58px3paqw5K37EsWd_5E/edit?usp=sharing',
+    ]
+    check_document_permissions(merger, doc_urls)
+    
+    # Объединение в Word-документ
+    success = merger.merge_documents_with_images(doc_urls, 'merged.docx')
+    if not success:
+        # Альтернативный метод через PDF
+        print("Пробуем альтернативный метод через PDF...")
+        success = export_as_pdf_and_convert(doc_urls[0], 'объединенный_документ_альтернативный.docx')
+    
+    if success:
+        print("Документы успешно объединены!")
+    else:
+        print("Произошла ошибка при объединении документов")
 
     # Запуск бота
     await dp.start_polling(bot)
