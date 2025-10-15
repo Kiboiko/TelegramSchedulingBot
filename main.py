@@ -1,9 +1,10 @@
 # main.py
 import sys
 
-sys.path.append(r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.session.aiohttp import AiohttpSession
+from payment_handlers import PaymentStates
 import aiohttp
 from aiogram import Bot, Dispatcher, types, F, BaseMiddleware
 from aiogram.filters import Command, CommandStart
@@ -73,6 +74,7 @@ from menu_handlers import register_menu_handlers
 from finance_handlers import FinanceHandlers
 from reminder_manager import StudentReminderManager
 from payment_handlers import PaymentHandlers,PaymentStates
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 # Настройка логирования
 
 
@@ -2510,6 +2512,8 @@ async def check_payment_handler(callback: types.CallbackQuery):
 
 @dp.message(PaymentStates.WAITING_AMOUNT)
 async def handle_payment_amount(message: types.Message, state: FSMContext):
+    """Обрабатывает ввод суммы для пополнения баланса"""
+    from payment_handlers import PaymentHandlers
     await PaymentHandlers.handle_amount_input(message, state)
 
 @dp.callback_query(F.data == 'confirm_payment')
@@ -2528,6 +2532,35 @@ async def new_payment_handler(callback: types.CallbackQuery, state: FSMContext):
 async def check_payment_handler(callback: types.CallbackQuery):
     await PaymentHandlers.handle_check_payment(callback)
 
+@dp.message(F.text == "💳 Пополнить баланс")
+async def start_payment(message: types.Message, state: FSMContext):
+    """Начало процесса пополнения баланса"""
+    from payment_handlers import PaymentHandlers
+    await PaymentHandlers.handle_payment_start(message, state)
+
+@dp.callback_query(F.data.startswith("payment_child_"))
+async def handle_payment_child(callback: types.CallbackQuery, state: FSMContext):
+    """Обрабатывает выбор ребенка для оплаты"""
+    from payment_handlers import PaymentHandlers
+    await PaymentHandlers.handle_child_selection(callback, state)
+
+@dp.callback_query(F.data.startswith("payment_subject_"))
+async def handle_payment_subject(callback: types.CallbackQuery, state: FSMContext):
+    """Обрабатывает выбор предмета для оплаты"""
+    from payment_handlers import PaymentHandlers
+    await PaymentHandlers.handle_subject_selection(callback, state)
+
+@dp.callback_query(F.data == "cancel_payment")
+async def handle_cancel_payment(callback: types.CallbackQuery, state: FSMContext):
+    """Отмена процесса оплаты"""
+    from payment_handlers import PaymentHandlers
+    await PaymentHandlers.handle_cancel_payment(callback, state)
+
+@dp.message(PaymentStates.WAITING_AMOUNT)
+async def handle_payment_amount(message: types.Message, state: FSMContext):
+    """Обрабатывает ввод суммы для пополнения баланса"""
+    from payment_handlers import PaymentHandlers
+    await PaymentHandlers.handle_amount_input(message, state)
 
 @dp.callback_query(F.data == "reminder_book_now")
 async def handle_reminder_book_now(callback: types.CallbackQuery, state: FSMContext):

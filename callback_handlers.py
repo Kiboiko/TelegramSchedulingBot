@@ -79,6 +79,9 @@ class CallbackHandlers:
 
         "pay_1": "handle_payment_create",
         "check_": "handle_payment_check",
+        "payment_child_": "handle_payment_child",
+        "payment_subject_": "handle_payment_subject",
+        "cancel_payment": "handle_cancel_payment"
     }
 
     @staticmethod
@@ -448,3 +451,4 @@ class CallbackHandlers:
         """Обрабатывает проверку статуса платежа"""
         from payment_handlers import PaymentHandlers
         await PaymentHandlers.handle_check_payment(callback)
+

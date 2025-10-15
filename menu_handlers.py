@@ -19,6 +19,7 @@ no_roles_menu = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+
 async def generate_main_menu(user_id: int, storage) -> ReplyKeyboardMarkup:
     roles = storage.get_user_roles(user_id)
 
@@ -34,8 +35,11 @@ async def generate_main_menu(user_id: int, storage) -> ReplyKeyboardMarkup:
 
     if can_book:
         keyboard_buttons.append([KeyboardButton(text="📅 Забронировать время")])
+
+    # ДОБАВЬТЕ эту кнопку - возможность пополнения баланса
     if 'student' in roles or 'parent' in roles:
         keyboard_buttons.append([KeyboardButton(text="💰 Финансы")])
+        keyboard_buttons.append([KeyboardButton(text="💳 Пополнить баланс")])  # НОВАЯ КНОПКА
 
     keyboard_buttons.append([KeyboardButton(text="📋 Мои бронирования")])
     keyboard_buttons.append([KeyboardButton(text="📚 Прошедшие бронирования")])
@@ -45,8 +49,7 @@ async def generate_main_menu(user_id: int, storage) -> ReplyKeyboardMarkup:
     # Добавляем кнопки для администраторов
     if is_admin(user_id):
         keyboard_buttons.append([KeyboardButton(text="📊 Составить расписание")])
-        keyboard_buttons.append([KeyboardButton(text="💳 Тест оплаты")])
-        keyboard_buttons.append([KeyboardButton(text="📚 Сгенерировать материалы")])  # ДОБАВЬТЕ эту строку
+        keyboard_buttons.append([KeyboardButton(text="📚 Сгенерировать материалы")])
 
     return ReplyKeyboardMarkup(keyboard=keyboard_buttons, resize_keyboard=True)
 
@@ -267,3 +270,4 @@ async def cmd_pay(message: types.Message, state: FSMContext):
     """Обработчик команды оплаты"""
     from payment_handlers import PaymentHandlers
     await PaymentHandlers.handle_payment_start(message, state)
+
