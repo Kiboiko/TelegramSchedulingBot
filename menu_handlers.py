@@ -34,6 +34,8 @@ async def generate_main_menu(user_id: int, storage) -> ReplyKeyboardMarkup:
 
     if can_book:
         keyboard_buttons.append([KeyboardButton(text="📅 Забронировать время")])
+    if 'student' in roles or 'parent' in roles:
+        keyboard_buttons.append([KeyboardButton(text="💰 Финансы")])
 
     keyboard_buttons.append([KeyboardButton(text="📋 Мои бронирования")])
     keyboard_buttons.append([KeyboardButton(text="📚 Прошедшие бронирования")])
@@ -233,6 +235,7 @@ def register_menu_handlers(dp, booking_manager, storage):
     dp.message.register(wrapped_cmd_start, CommandStart())
     dp.message.register(cmd_help, Command("help"))
     dp.message.register(wrapped_show_my_role, Command("my_role"))
+    dp.message.register(cmd_pay, Command("pay"))
 
     # Текстовые обработчики меню
     dp.message.register(wrapped_check_roles, F.text == "🔄 Проверить наличие ролей")
@@ -259,3 +262,8 @@ def register_menu_handlers(dp, booking_manager, storage):
         wrapped_back_to_menu_from_past_handler,
         F.data == "back_to_menu_from_past"
     )
+
+async def cmd_pay(message: types.Message, state: FSMContext):
+    """Обработчик команды оплаты"""
+    from payment_handlers import PaymentHandlers
+    await PaymentHandlers.handle_payment_start(message, state)

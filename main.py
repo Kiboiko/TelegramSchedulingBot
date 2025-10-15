@@ -72,7 +72,7 @@ from menu_handlers import (
 from menu_handlers import register_menu_handlers
 from finance_handlers import FinanceHandlers
 from reminder_manager import StudentReminderManager
-from payment_handlers import PaymentHandlers
+from payment_handlers import PaymentHandlers,PaymentStates
 # Настройка логирования
 
 
@@ -2496,13 +2496,33 @@ finance_handlers.register_handlers(dp)
 # Команда для тестирования оплаты
 @dp.message(F.text == "💳 Тест оплаты")
 @dp.message(Command("pay"))
-async def cmd_pay(message: types.Message):
-    await PaymentHandlers.handle_payment_start(message)
+async def cmd_pay(message: types.Message, state: FSMContext):
+    await PaymentHandlers.handle_payment_start(message, state)
 
 # Обработчики callback'ов для платежей
 @dp.callback_query(F.data == 'pay_1')
 async def create_payment_handler(callback: types.CallbackQuery):
     await PaymentHandlers.handle_create_payment(callback)
+
+@dp.callback_query(F.data.startswith('check_'))
+async def check_payment_handler(callback: types.CallbackQuery):
+    await PaymentHandlers.handle_check_payment(callback)
+
+@dp.message(PaymentStates.WAITING_AMOUNT)
+async def handle_payment_amount(message: types.Message, state: FSMContext):
+    await PaymentHandlers.handle_amount_input(message, state)
+
+@dp.callback_query(F.data == 'confirm_payment')
+async def confirm_payment_handler(callback: types.CallbackQuery, state: FSMContext):
+    await PaymentHandlers.handle_confirm_payment(callback, state)
+
+@dp.callback_query(F.data == 'cancel_payment')
+async def cancel_payment_handler(callback: types.CallbackQuery, state: FSMContext):
+    await PaymentHandlers.handle_cancel_payment(callback, state)
+
+@dp.callback_query(F.data == 'new_payment')
+async def new_payment_handler(callback: types.CallbackQuery, state: FSMContext):
+    await PaymentHandlers.handle_new_payment(callback, state)
 
 @dp.callback_query(F.data.startswith('check_'))
 async def check_payment_handler(callback: types.CallbackQuery):
