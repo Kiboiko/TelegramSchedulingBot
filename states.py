@@ -19,3 +19,7 @@ class FinanceStates(StatesGroup):
     SELECT_SUBJECT = State()
     SELECT_DATE = State()
     SHOW_FINANCES = State()
+
+class PaymentStates(StatesGroup):
+    WAITING_PAYMENT = State()
+    CONFIRMING_PAYMENT = State()

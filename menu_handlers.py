@@ -43,6 +43,7 @@ async def generate_main_menu(user_id: int, storage) -> ReplyKeyboardMarkup:
     # Добавляем кнопки для администраторов
     if is_admin(user_id):
         keyboard_buttons.append([KeyboardButton(text="📊 Составить расписание")])
+        keyboard_buttons.append([KeyboardButton(text="💳 Тест оплаты")])
         keyboard_buttons.append([KeyboardButton(text="📚 Сгенерировать материалы")])  # ДОБАВЬТЕ эту строку
 
     return ReplyKeyboardMarkup(keyboard=keyboard_buttons, resize_keyboard=True)

@@ -1,7 +1,7 @@
 # main.py
 import sys
 
-sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\shedule_app")
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.session.aiohttp import AiohttpSession
 import aiohttp
@@ -17,6 +17,7 @@ from aiogram.fsm.state import State, StatesGroup
 import asyncio
 from functools import wraps
 from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter
+from dotenv import load_dotenv
 
 import asyncio
 import json
@@ -71,12 +72,13 @@ from menu_handlers import (
 from menu_handlers import register_menu_handlers
 from finance_handlers import FinanceHandlers
 from reminder_manager import StudentReminderManager
+from payment_handlers import PaymentHandlers
 # Настройка логирования
 
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
-
+load_dotenv()
 
 def handle_network_errors(max_retries=3):
     def decorator(func):
@@ -883,115 +885,11 @@ additional_menu = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# Комбинированное меню для пользователей без ролей
-# no_roles_menu = ReplyKeyboardMarkup(
-#     keyboard=[
-#         [KeyboardButton(text="❓ Обратиться к администратору")],
-#         [KeyboardButton(text="🔄 Проверить наличие ролей")],
-#     ],
-#     resize_keyboard=True
-# )
-
-
-# async def generate_main_menu(user_id: int) -> ReplyKeyboardMarkup:
-#     """Генерирует главное меню в зависимости от ролей и прав"""
-#     roles = storage.get_user_roles(user_id)
-
-#     if not roles:
-#         return no_roles_menu
-
-#     keyboard_buttons = []
-
-#     # Проверяем, может ли пользователь бронировать
-#     can_book = any(role in roles for role in ['teacher', 'parent']) or (
-#             'student' in roles and 'parent' in roles
-#     )
-
-#     if can_book:
-#         keyboard_buttons.append([KeyboardButton(text="📅 Забронировать время")])
-
-#     keyboard_buttons.append([KeyboardButton(text="📋 Мои бронирования")])
-#     keyboard_buttons.append([KeyboardButton(text="📚 Прошедшие бронирования")])
-#     keyboard_buttons.append([KeyboardButton(text="👤 Моя роль")])
-#     keyboard_buttons.append([KeyboardButton(text="ℹ️ Помощь")])
-
-#     # Добавляем кнопку составления расписания только для администраторов
-#     if is_admin(user_id):
-#         keyboard_buttons.append([KeyboardButton(text="📊 Составить расписание")])
-
-#     return ReplyKeyboardMarkup(keyboard=keyboard_buttons, resize_keyboard=True)
-
-
-# @dp.message(CommandStart())
-# async def cmd_start(message: types.Message, state: FSMContext):
-#     user_id = message.from_user.id
-#     user_name = storage.get_user_name(user_id)
-
-#     menu = await generate_main_menu(user_id)
-
-#     if user_name:
-#         await message.answer(
-#             f"С возвращением, {user_name}!\n"
-#             "Используйте кнопки ниже для навигации:",
-#             reply_markup=menu
-#         )
-#     else:
-#         await message.answer(
-#             "Добро пожаловать в систему бронирования!\n"
-#             "Введите ваши имя и фамилию для регистрации:",
-#             reply_markup=ReplyKeyboardRemove()
-#         )
-#         await state.set_state(BookingStates.INPUT_NAME)
-
-
-# @dp.message(F.text == "🔄 Проверить наличие ролей")
-# async def check_roles(message: types.Message, state: FSMContext):
-#     """Обработчик кнопки проверки ролей - выполняет команду /start"""
-#     await cmd_start(message, state)
-
-
-# @dp.message(F.text == "👤 Моя роль")
-# async def show_my_role(message: types.Message):
-#     roles = storage.get_user_roles(message.from_user.id)
-#     if roles:
-#         role_translations = {
-#             "teacher": "преподаватель",
-#             "student": "ученик",
-#             "parent": "родитель"
-#         }
-#         role_text = ", ".join([role_translations.get(role, role) for role in roles])
-#         await message.answer(f"Ваши роли: {role_text}")
-#     else:
-#         await message.answer(
-#             "Ваши роли еще не назначены. Обратитесь к администратору. \n Телефон администратора: +79001372727")
-
 
 @dp.message(F.text == "ℹ️ Помощь")
 async def show_help(message: types.Message,state:FSMContext):
     await cmd_start(message, state, storage)
 
-
-# @dp.message(Command("help"))
-# async def cmd_help(message: types.Message):
-#     await message.answer(
-#         "📞 Для получения помощи обратитесь к администратору\n"
-#         "Телефон администратора: +79001372727.\n\n"
-#         "Доступные команды:\n"
-#         "/start - начать работу с ботом\n"
-#         "/help - показать эту справку\n"
-#         "/book - забронировать время\n"
-#         "/my_bookings - посмотреть свои бронирования\n"
-#         "/my_role - узнать свою роль"
-#     )
-
-
-# @dp.message(F.text == "❓ Обратиться к администратору")
-# async def contact_admin(message: types.Message):
-#     await message.answer(
-#         "📞 Для получения доступа к системе бронирования\n"
-#         "обратитесь к администратору \n Телефон администратора: +79001372727.\n\n"
-#         "После назначения ролей вы сможете пользоваться всеми функциями бота."
-#     )
 
 
 @dp.message(F.text == "📊 Составить расписание")
@@ -1425,72 +1323,7 @@ async def cancel_materials_generation(callback: types.CallbackQuery, state: FSMC
         await callback.answer()
     except Exception as e:
         logger.error(f"Error in cancel_materials_generation: {e}")
- # Обработчик генерации материалов
-# @dp.callback_query(BookingStates.CONFIRM_MATERIALS_GENERATION, F.data == "generate_materials")
-# @handle_network_errors(max_retries=2)
-# async def process_materials_generation(callback: types.CallbackQuery, state: FSMContext):
-#     """Запуск процесса генерации материалов"""
-#     try:
-#         data = await state.get_data()
-#         target_date = data.get('materials_date')
-#
-#         if not target_date:
-#             await callback.answer("Ошибка: дата не выбрана", show_alert=True)
-#             return
-#
-#         # Отправляем сообщение о начале процесса
-#         await callback.message.edit_text("⏳ Генерирую материалы... Это может занять несколько минут.")
-#
-#         try:
-#             # Запускаем генерацию в отдельном потоке с таймаутом
-#             doc_url = await asyncio.wait_for(
-#                 asyncio.to_thread(materials_manager.create_combined_materials_document, target_date),
-#                 timeout=300  # 5 минут таймаут для генерации
-#             )
-#
-#             if doc_url.startswith("https://"):
-#                 await callback.message.edit_text(
-#                     f"✅ Материалы успешно сгенерированы!\n"
-#                     f"📎 Ссылка на документ:\n{doc_url}"
-#                 )
-#             else:
-#                 await callback.message.edit_text(
-#                     f"❌ {doc_url}"
-#                 )
-#
-#         except asyncio.TimeoutError:
-#             await callback.message.edit_text(
-#                 "❌ Генерация материалов заняла слишком много времени. "
-#                 "Попробуйте позже или обратитесь к администратору."
-#             )
-#             logger.error(f"Timeout generating materials for date {target_date}")
-#
-#     except Exception as e:
-#         logger.error(f"Ошибка при генерации материалов: {e}")
-#         await callback.message.edit_text(
-#             f"❌ Произошла ошибка при генерации материалов:\n{str(e)}"
-#         )
-#
-#     await state.clear()
-
-
-# # Обработчик отмены генерации материалов
-# @dp.callback_query(BookingStates.CONFIRM_MATERIALS_GENERATION, F.data == "cancel_materials")
-# @handle_network_errors(max_retries=2)
-# async def cancel_materials_generation(callback: types.CallbackQuery, state: FSMContext):
-#     """Отмена генерации материалов"""
-#     try:
-#         await callback.message.edit_text("❌ Генерация материалов отменена")
-#         await state.clear()
-#
-#         user_id = callback.from_user.id
-#         await callback.message.answer(
-#             "Выберите действие:",
-#             reply_markup=await generate_main_menu(user_id)
-#         )
-#         await callback.answer()
-#     except Exception as e:
-#         logger.error(f"Error in cancel_materials_generation: {e}")
+ 
 @dp.callback_query(BookingStates.SELECT_SCHEDULE_DATE, F.data.startswith("calendar_day_"))
 async def process_schedule_date_selection(callback: types.CallbackQuery, state: FSMContext):
     """Обработка выбора даты для составления расписания"""
@@ -2114,14 +1947,6 @@ def get_student_class(user_id: int) -> int:
         logger.error(f"Ошибка получения класса ученика {user_id}: {e}")
         return 9
     
-# def calculate_lesson_duration(student_class: int) -> int:
-#     """Рассчитывает длительность занятия в минутах в зависимости от класса"""
-#     if student_class <= 6:
-#         return 60  # 1 час для 6 класса и младше
-#     elif student_class <= 8:
-#         return 90  # 1.5 часа для 7-8 классов
-#     else:
-#         return 120  # 2 часа для 9 класса и старше
 
 
 @dp.callback_query(BookingStates.SELECT_TIME_RANGE, F.data == "interval_unavailable")
@@ -2500,23 +2325,6 @@ async def show_bookings(message: types.Message):
                         reply_markup=keyboard.as_markup())  # Add .as_markup() here
 
 
-# @dp.message(Command("my_role"))
-# async def show_role(message: types.Message):
-#     roles = storage.get_user_roles(message.from_user.id)
-#     if roles:
-
-#         role_text = ", ".join([
-#             "преподаватель" if role == "teacher"
-#             else "родитель" if role == "parent"
-#             else "ученик"
-#             for role in roles
-#         ])
-#         await message.answer(f"Ваши роли: {role_text}")
-#     else:
-#         await message.answer(
-#             "Ваши роли еще не назначены. Обратитесь к администратору.\n Телефон администратора: +79001372727")
-
-
 @dp.message(F.text == "❌ Отменить бронь")
 async def start_cancel_booking(message: types.Message):
     keyboard = booking_manager.generate_booking_list(message.from_user.id)
@@ -2684,6 +2492,21 @@ finance_handlers = FinanceHandlers(
     generate_subjects_keyboard_func=generate_subjects_keyboard
 )
 finance_handlers.register_handlers(dp)
+
+# Команда для тестирования оплаты
+@dp.message(F.text == "💳 Тест оплаты")
+@dp.message(Command("pay"))
+async def cmd_pay(message: types.Message):
+    await PaymentHandlers.handle_payment_start(message)
+
+# Обработчики callback'ов для платежей
+@dp.callback_query(F.data == 'pay_1')
+async def create_payment_handler(callback: types.CallbackQuery):
+    await PaymentHandlers.handle_create_payment(callback)
+
+@dp.callback_query(F.data.startswith('check_'))
+async def check_payment_handler(callback: types.CallbackQuery):
+    await PaymentHandlers.handle_check_payment(callback)
 
 
 @dp.callback_query(F.data == "reminder_book_now")

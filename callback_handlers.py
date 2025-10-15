@@ -75,7 +75,10 @@ class CallbackHandlers:
         "reminder_book_now": "handle_reminder_book_now",
 
         "generate_materials": "handle_generate_materials",
-        "cancel_materials": "handle_cancel_materials"
+        "cancel_materials": "handle_cancel_materials",
+
+        "pay_1": "handle_payment_create",
+        "check_": "handle_payment_check",
     }
 
     @staticmethod
@@ -433,3 +436,15 @@ class CallbackHandlers:
         from main import start_booking
         await start_booking(callback.message, state)
         await callback.answer()
+
+    @staticmethod
+    async def handle_payment_create(callback: types.CallbackQuery, state: FSMContext):
+        """Обрабатывает создание платежа"""
+        from payment_handlers import PaymentHandlers
+        await PaymentHandlers.handle_create_payment(callback)
+
+    @staticmethod
+    async def handle_payment_check(callback: types.CallbackQuery, state: FSMContext):
+        """Обрабатывает проверку статуса платежа"""
+        from payment_handlers import PaymentHandlers
+        await PaymentHandlers.handle_check_payment(callback)
