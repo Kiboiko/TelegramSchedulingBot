@@ -300,16 +300,15 @@ class PaymentHandlers:
                 await state.clear()
                 return
 
-            # ЗАПИСЫВАЕМ СУММУ В ТАБЛИЦУ СРАЗУ ПРИ ВВОДЕ
-            success = await PaymentHandlers._write_payment_to_sheets(
-                target_user_id, subject_id, amount
-            )
+            # УДАЛЯЕМ ЗАПИСЬ В ТАБЛИЦУ - сумма будет записываться только после успешной оплаты
+            # success = await PaymentHandlers._write_payment_to_sheets(
+            #     target_user_id, subject_id, amount
+            # )
 
-            if success:
-                logger.info(
-                    f"Сумма {amount} руб. записана в таблицу для user_id {target_user_id}, subject {subject_id}")
-            else:
-                logger.error(f"Ошибка записи суммы в таблицу для user_id {target_user_id}, subject {subject_id}")
+            # if success:
+            #     logger.info(f"Сумма {amount} руб. записана в таблицу для user_id {target_user_id}, subject {subject_id}")
+            # else:
+            #     logger.error(f"Ошибка записи суммы в таблицу для user_id {target_user_id}, subject {subject_id}")
 
             # Сохраняем сумму в состоянии для дальнейшей оплаты
             await state.update_data(amount=amount)
@@ -341,7 +340,7 @@ class PaymentHandlers:
             await message.answer("❌ Пожалуйста, введите корректную сумму\n\nПример: 100 или 500.50")
         except Exception as e:
             logger.error(f"Ошибка в handle_amount_input: {e}")
-            await message.answer("❌ Произошла ошибка при обработке суммы")
+            await message.answer("❌ Произошла ошибка при обработки суммы")
 
     @staticmethod
     async def handle_confirm_payment(callback: types.CallbackQuery, state: FSMContext):
@@ -395,17 +394,26 @@ class PaymentHandlers:
                 )]
             ])
 
+            # СООБЩЕНИЕ С ЯРКИМ ПРЕДУПРЕЖДЕНИЕМ
+            warning_text = "🚨🚨🚨 ВАЖНОЕ ПРЕДУПРЕЖДЕНИЕ 🚨🚨🚨\n\n"
+            warning_text += "❌ НЕ ЗАКРЫВАЙТЕ ЭТОТ ДИАЛОГ И НЕ УДАЛЯЙТЕ ЭТО СООБЩЕНИЕ!\n\n"
+            warning_text += "📋 ПОСЛЕ ОПЛАТЫ ВЫ ДОЛЖНЫ:\n"
+            warning_text += "1. Оплатить на сайте ЮKassa\n"
+            warning_text += "2. 🔄 ВЕРНУТЬСЯ В БОТ\n"
+            warning_text += "3. НАЖАТЬ КНОПКУ '🔍 Проверить оплату'\n\n"
+            warning_text += "⚠️ ЕСЛИ ВЫ НЕ НАЖМЕТЕ 'Проверить оплату':\n"
+            warning_text += "• Деньги НЕ поступят на ваш баланс\n"
+            warning_text += "• Платеж НЕ запишется в таблицу\n"
+            warning_text += "• Вы ПОТЕРЯЕТЕ деньги!\n\n"
+            warning_text += f"💸 Платеж создан!\n"
+            warning_text += f"💰 Сумма: {amount:.2f} руб.\n"
+            warning_text += f"🆔 ID: {payment.id[:8]}...\n\n"
+            warning_text += f"💳 Тестовые карты:\n"
+            warning_text += f"• 5555 5555 5555 4477 - успешный платеж\n"
+            warning_text += f"• 5555 5555 5555 4444 - отказ"
+
             await callback.message.edit_text(
-                f"💸 Платеж создан!\n"
-                f"💰 Сумма: {amount:.2f} руб.\n"
-                f"🆔 ID: {payment.id[:8]}...\n\n"
-                f"📋 Инструкция:\n"
-                f"1. Нажмите 'Оплатить {amount:.2f} руб.'\n"
-                f"2. Оплатите на сайте ЮKassa\n"
-                f"3. Вернитесь и нажмите 'Проверить оплату'\n\n"
-                f"💳 Тестовые карты:\n"
-                f"• 5555 5555 5555 4477 - успешный платеж\n"
-                f"• 5555 5555 5555 4444 - отказ",
+                warning_text,
                 reply_markup=keyboard
             )
             await state.clear()
@@ -423,25 +431,64 @@ class PaymentHandlers:
 
     @staticmethod
     async def handle_new_payment(callback: types.CallbackQuery, state: FSMContext):
-        """Начать новый платеж"""
+        """Начать новый платеж - ПЕРЕЗАПУСКАЕМ ПРОЦЕСС С НАЧАЛА"""
         try:
-            # Очищаем состояние перед началом нового платежа
-            # await state.clear()
-            
-            # # Получаем user_id и проверяем роли
-            # user_id = callback.from_user.id
-            
-            # from main import storage
-            # user_roles = storage.get_user_roles(user_id)
+            # Полностью очищаем состояние
+            await state.clear()
 
-            # if not user_roles:
-            #     await callback.answer("❌ У вас нет ролей для оплаты", show_alert=True)
-            #     return
+            # Получаем user_id и проверяем роли
+            user_id = callback.from_user.id
 
-            # Запускаем процесс оплаты с проверкой ролей
-            await PaymentHandlers.handle_payment_start(callback, state)
-            # await callback.answer()
-            
+            from main import storage
+            user_roles = storage.get_user_roles(user_id)
+
+            if not user_roles:
+                await callback.answer("❌ У вас нет ролей для оплаты", show_alert=True)
+                return
+
+            # Начинаем процесс оплаты с самого начала
+            if 'parent' in user_roles:
+                # Для родителя - показываем выбор ребенка
+                children_ids = storage.get_parent_children(user_id)
+                if not children_ids:
+                    await callback.answer("❌ У вас нет привязанных детей", show_alert=True)
+                    return
+
+                builder = InlineKeyboardBuilder()
+                for child_id in children_ids:
+                    child_info = storage.get_child_info(child_id)
+                    child_name = child_info.get('user_name', f'Ученик {child_id}')
+                    builder.add(types.InlineKeyboardButton(
+                        text=f"👶 {child_name}",
+                        callback_data=f"payment_child_{child_id}"
+                    ))
+
+                builder.add(types.InlineKeyboardButton(
+                    text="❌ Отмена",
+                    callback_data="cancel_payment"
+                ))
+                builder.adjust(1)
+
+                await callback.message.edit_text(
+                    "💳 Выберите ребенка для оплаты:",
+                    reply_markup=builder.as_markup()
+                )
+
+            elif 'student' in user_roles:
+                # Для ученика - сразу выбираем себя
+                await state.update_data(
+                    target_user_id=user_id,
+                    target_user_name=storage.get_user_name(user_id)
+                )
+
+                # Показываем выбор предметов
+                await PaymentHandlers._show_subjects(callback.message, state)
+
+            else:
+                await callback.answer("❌ У вас нет ролей для оплаты", show_alert=True)
+
+            await callback.answer()
+
         except Exception as e:
             logger.error(f"Ошибка в handle_new_payment: {e}")
             await callback.answer("❌ Произошла ошибка", show_alert=True)
@@ -460,32 +507,63 @@ class PaymentHandlers:
             if payment.status == 'succeeded':
                 update_payment_status(payment_id, 'succeeded')
 
-                # Дополнительно подтверждаем запись в таблицу после успешной оплаты
+                # ЗАПИСЫВАЕМ СУММУ В ТАБЛИЦУ ТОЛЬКО ПОСЛЕ УСПЕШНОЙ ОПЛАТЫ
                 metadata = payment.metadata
                 target_user_id = metadata.get('target_user_id')
                 subject_id = metadata.get('subject_id')
 
                 if target_user_id and subject_id:
-                    # Обновляем запись в таблице с пометкой об успешной оплате
-                    await PaymentHandlers._update_payment_status_in_sheets(
-                        target_user_id, subject_id, amount, 'succeeded'
+                    success = await PaymentHandlers._write_payment_to_sheets(
+                        target_user_id, subject_id, amount
                     )
 
-                await callback.message.edit_text(
-                    f"✅ Платеж прошел успешно!\n"
-                    f"💰 Сумма: {amount:.2f} руб.\n"
-                    f"🎉 Услуга активирована!\n\n"
-                    f"Для нового платежа нажмите кнопку ниже:",
-                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-                        [types.InlineKeyboardButton(
-                            text="🔄 Новый платеж",
-                            callback_data="new_payment"
-                        )]
-                    ])
-                )
+                    if success:
+                        logger.info(f"Сумма {amount} руб. успешно записана в таблицу после подтверждения оплаты")
+
+                        # УСПЕШНОЕ СООБЩЕНИЕ
+                        success_text = "🎉🎉🎉 ОПЛАТА УСПЕШНО ПОДТВЕРЖДЕНА! 🎉🎉🎉\n\n"
+                        success_text += f"✅ Платеж прошел успешно!\n"
+                        success_text += f"💰 Сумма: {amount:.2f} руб. зачислена на баланс!\n"
+                        success_text += f"📊 Деньги записаны в таблицу\n"
+                        success_text += f"🎉 Услуга активирована!\n\n"
+                        success_text += f"Спасибо за оплату! 💫"
+
+                        await callback.message.edit_text(
+                            success_text,
+                            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                                [types.InlineKeyboardButton(
+                                    text="🔄 Новый платеж",
+                                    callback_data="new_payment"
+                                )]
+                            ])
+                        )
+                    else:
+                        error_text = "⚠️⚠️⚠️ ВНИМАНИЕ! ⚠️⚠️⚠️\n\n"
+                        error_text += f"✅ Платеж прошел успешно!\n"
+                        error_text += f"💰 Сумма: {amount:.2f} руб.\n"
+                        error_text += f"❌ Но произошла ошибка при зачислении на баланс.\n\n"
+                        error_text += f"🚨 СРОЧНО ОБРАТИТЕСЬ К АДМИНИСТРАТОРУ!\n"
+                        error_text += f"📞 Телефон: +79001372727\n\n"
+                        error_text += f"Сообщите ID платежа: {payment_id[:8]}..."
+
+                        await callback.message.edit_text(error_text)
+                else:
+                    error_text = "⚠️⚠️⚠️ ВНИМАНИЕ! ⚠️⚠️⚠️\n\n"
+                    error_text += f"✅ Платеж прошел успешно!\n"
+                    error_text += f"💰 Сумма: {amount:.2f} руб.\n"
+                    error_text += f"❌ Но не удалось определить данные для зачисления.\n\n"
+                    error_text += f"🚨 СРОЧНО ОБРАТИТЕСЬ К АДМИНИСТРАТОРУ!\n"
+                    error_text += f"📞 Телефон: +79001372727"
+
+                    await callback.message.edit_text(error_text)
 
             elif payment.status == 'pending':
-                await callback.answer("⏳ Платеж обрабатывается...", show_alert=True)
+                # Сообщение с напоминанием
+                reminder_text = "⏳ Платеж обрабатывается...\n\n"
+                reminder_text += "💡 Не забудьте нажать '🔍 Проверить оплату' еще раз через несколько минут!\n\n"
+                reminder_text += "❌ Без проверки деньги НЕ поступят на баланс!"
+
+                await callback.answer(reminder_text, show_alert=True)
 
             elif payment.status == 'canceled':
                 update_payment_status(payment_id, 'canceled')

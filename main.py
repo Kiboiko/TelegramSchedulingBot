@@ -1,7 +1,7 @@
 # main.py
 import sys
 
-sys.path.append(r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.session.aiohttp import AiohttpSession
 from payment_handlers import PaymentStates
@@ -2503,8 +2503,15 @@ async def cmd_pay(message: types.Message, state: FSMContext):
 
 # Обработчики callback'ов для платежей
 @dp.callback_query(F.data == 'pay_1')
-async def create_payment_handler(callback: types.CallbackQuery):
-    await PaymentHandlers.handle_create_payment(callback)
+async def create_payment_handler(callback: types.CallbackQuery, state: FSMContext):
+    """Обработчик кнопки 'Начать новый платеж' - ПЕРЕЗАПУСКАЕМ ПРОЦЕСС"""
+    try:
+        # Очищаем состояние и начинаем с начала
+        await state.clear()
+        await PaymentHandlers.handle_payment_start(callback, state)
+    except Exception as e:
+        logger.error(f"Ошибка в create_payment_handler: {e}")
+        await callback.answer("❌ Произошла ошибка", show_alert=True)
 
 @dp.callback_query(F.data.startswith('check_'))
 async def check_payment_handler(callback: types.CallbackQuery):
@@ -2534,9 +2541,15 @@ async def check_payment_handler(callback: types.CallbackQuery):
 
 @dp.message(F.text == "💳 Пополнить баланс")
 async def start_payment(message: types.Message, state: FSMContext):
-    """Начало процесса пополнения баланса"""
-    from payment_handlers import PaymentHandlers
-    await PaymentHandlers.handle_payment_start(message, state)
+    """Начало процесса пополнения баланса - ОЧИЩАЕМ СОСТОЯНИЕ ПЕРЕД НАЧАЛОМ"""
+    try:
+        # Очищаем состояние перед началом нового процесса
+        await state.clear()
+        from payment_handlers import PaymentHandlers
+        await PaymentHandlers.handle_payment_start(message, state)
+    except Exception as e:
+        logger.error(f"Ошибка в start_payment: {e}")
+        await message.answer("❌ Произошла ошибка при запуске оплаты")
 
 @dp.callback_query(F.data.startswith("payment_child_"))
 async def handle_payment_child(callback: types.CallbackQuery, state: FSMContext):
