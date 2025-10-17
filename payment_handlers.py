@@ -441,7 +441,7 @@ class PaymentHandlers:
 
     @staticmethod
     async def _write_payment_to_sheets(user_id: int, subject_id: str, amount: float) -> bool:
-        """Записывает платеж в Google Sheets"""
+        """Записывает платеж в Google Sheets (сумма прибавляется к текущему значению)"""
         try:
             from main import gsheets
             if not gsheets:
@@ -485,11 +485,25 @@ class PaymentHandlers:
                 logger.error(f"Не найдена строка для user_id {user_id} и subject_id {subject_id}")
                 return False
 
-            # Записываем сумму в найденную ячейку
-            worksheet.update_cell(target_row, target_col + 1, f"{amount:.2f}")
+            # Получаем текущее значение ячейки
+            current_value = 0.0
+            if len(data[target_row - 1]) > target_col:
+                cell_value = data[target_row - 1][target_col].strip()
+                if cell_value and cell_value.replace('.', '').replace(',', '').isdigit():
+                    try:
+                        current_value = float(cell_value.replace(',', '.'))
+                    except ValueError:
+                        current_value = 0.0
+
+            # Вычисляем новое значение (прибавляем к текущему)
+            new_value = current_value + amount
+
+            # Записываем новое значение в ячейку
+            worksheet.update_cell(target_row, target_col + 1, f"{new_value:.2f}")
 
             logger.info(
-                f"Платеж записан в таблицу: user_id={user_id}, subject={subject_id}, amount={amount}, date={formatted_date}")
+                f"Платеж записан в таблицу: user_id={user_id}, subject={subject_id}, "
+                f"amount={amount}, current_value={current_value}, new_value={new_value}, date={formatted_date}")
             return True
 
         except Exception as e:
