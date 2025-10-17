@@ -441,6 +441,12 @@ class CallbackHandlers:
         await callback.answer()
 
     @staticmethod
+    async def handle_new_payment(callback: types.CallbackQuery, state: FSMContext):
+        """Обрабатывает начало нового платежа"""
+        from payment_handlers import PaymentHandlers
+        await PaymentHandlers.handle_new_payment(callback, state)
+
+    @staticmethod
     async def handle_payment_create(callback: types.CallbackQuery, state: FSMContext):
         """Обрабатывает создание платежа"""
         from payment_handlers import PaymentHandlers
