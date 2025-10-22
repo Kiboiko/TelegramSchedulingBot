@@ -9,6 +9,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from yookassa import Configuration, Payment
 from dotenv import load_dotenv
 import logging
+from typing import List, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +92,7 @@ class PaymentHandlers:
 
     @staticmethod
     async def handle_payment_start(message: types.Message | types.CallbackQuery, state: FSMContext):
-        """Начало процесса оплаты - выбор ребенка/ученика и предмета"""
+        """Начало процесса оплаты - сразу переходим к выбору ученика/ребенка"""
         try:
             # Обрабатываем оба типа входящих данных
             if isinstance(message, types.CallbackQuery):
@@ -156,9 +157,8 @@ class PaymentHandlers:
             ))
             builder.adjust(1)
 
-            message_text = "💳 Выберите, для кого производится оплата:"
-            if 'student' in user_roles and 'parent' in user_roles:
-                message_text += "\n\n👤 - для себя\n👶 - для ребенка"
+            message_text = "💳 Выберите, для кого производится оплата:\n\n"
+            message_text += "📝 Предмет будет выбран автоматически (с наименьшим балансом)"
 
             if from_callback:
                 await message_obj.edit_text(
@@ -178,54 +178,54 @@ class PaymentHandlers:
             else:
                 await message.answer("❌ Произошла ошибка")
 
-    @staticmethod
-    async def _show_subjects(message: types.Message, state: FSMContext):
-        """Показывает выбор предметов"""
-        try:
-            data = await state.get_data()
-            target_user_id = data.get('target_user_id')
+    # @staticmethod
+    # async def _show_subjects(message: types.Message, state: FSMContext):
+    #     """Показывает выбор предметов"""
+    #     try:
+    #         data = await state.get_data()
+    #         target_user_id = data.get('target_user_id')
 
-            if not target_user_id:
-                await message.answer("❌ Ошибка: не выбран пользователь")
-                return
+    #         if not target_user_id:
+    #             await message.answer("❌ Ошибка: не выбран пользователь")
+    #             return
 
-            from main import storage
-            available_subjects = storage.get_available_subjects_for_student(target_user_id)
+    #         from main import storage
+    #         available_subjects = storage.get_available_subjects_for_student(target_user_id)
 
-            if not available_subjects:
-                await message.answer("❌ Нет доступных предметов для оплаты")
-                return
+    #         if not available_subjects:
+    #             await message.answer("❌ Нет доступных предметов для оплаты")
+    #             return
 
-            builder = InlineKeyboardBuilder()
-            for subject_id in available_subjects:
-                from config import SUBJECTS
-                subject_name = SUBJECTS.get(subject_id, f"Предмет {subject_id}")
-                builder.add(types.InlineKeyboardButton(
-                    text=subject_name,
-                    callback_data=f"payment_subject_{subject_id}"
-                ))
+    #         builder = InlineKeyboardBuilder()
+    #         for subject_id in available_subjects:
+    #             from config import SUBJECTS
+    #             subject_name = SUBJECTS.get(subject_id, f"Предмет {subject_id}")
+    #             builder.add(types.InlineKeyboardButton(
+    #                 text=subject_name,
+    #                 callback_data=f"payment_subject_{subject_id}"
+    #             ))
 
-            builder.add(types.InlineKeyboardButton(
-                text="❌ Отмена",
-                callback_data="cancel_payment"
-            ))
-            builder.adjust(2)
+    #         builder.add(types.InlineKeyboardButton(
+    #             text="❌ Отмена",
+    #             callback_data="cancel_payment"
+    #         ))
+    #         builder.adjust(2)
 
-            target_name = data.get('target_user_name', 'Пользователь')
+    #         target_name = data.get('target_user_name', 'Пользователь')
 
-            await message.answer(
-                f"💳 Оплата для: {target_name}\n"
-                "📚 Выберите предмет для оплаты:",
-                reply_markup=builder.as_markup()
-            )
+    #         await message.answer(
+    #             f"💳 Оплата для: {target_name}\n"
+    #             "📚 Выберите предмет для оплаты:",
+    #             reply_markup=builder.as_markup()
+    #         )
 
-        except Exception as e:
-            logger.error(f"Ошибка в _show_subjects: {e}")
-            await message.answer("❌ Ошибка при загрузке предметов")
+    #     except Exception as e:
+    #         logger.error(f"Ошибка в _show_subjects: {e}")
+    #         await message.answer("❌ Ошибка при загрузке предметов")
 
     @staticmethod
     async def handle_child_selection(callback: types.CallbackQuery, state: FSMContext):
-        """Обрабатывает выбор ребенка"""
+        """Обрабатывает выбор ребенка - автоматически определяем предмет"""
         try:
             child_id = int(callback.data.replace("payment_child_", ""))
 
@@ -236,36 +236,33 @@ class PaymentHandlers:
                 await callback.answer("❌ Ошибка: информация о ребенке не найдена", show_alert=True)
                 return
 
+            # Получаем доступные предметы для ребенка
+            available_subjects = storage.get_available_subjects_for_student(child_id)
+            
+            if not available_subjects:
+                await callback.answer("❌ У ребенка нет доступных предметов для оплаты", show_alert=True)
+                return
+
+            # Автоматически выбираем предмет с наименьшим балансом
+            subject_id = await PaymentHandlers._get_subject_with_lowest_balance(child_id, available_subjects)
+            
+            if not subject_id:
+                await callback.answer("❌ Не удалось определить предмет для оплаты", show_alert=True)
+                return
+
             await state.update_data(
                 target_user_id=child_id,
-                target_user_name=child_info.get('user_name', '')
+                target_user_name=child_info.get('user_name', ''),
+                subject_id=subject_id
             )
-
-            await PaymentHandlers._show_subjects(callback.message, state)
-            await callback.answer()
-
-        except Exception as e:
-            logger.error(f"Ошибка в handle_child_selection: {e}")
-            await callback.answer("❌ Произошла ошибка", show_alert=True)
-
-    @staticmethod
-    async def handle_subject_selection(callback: types.CallbackQuery, state: FSMContext):
-        """Обрабатывает выбор предмета"""
-        try:
-            subject_id = callback.data.replace("payment_subject_", "")
-
-            await state.update_data(subject_id=subject_id)
-
-            data = await state.get_data()
-            target_name = data.get('target_user_name', 'Пользователь')
 
             from config import SUBJECTS
             subject_name = SUBJECTS.get(subject_id, f"Предмет {subject_id}")
 
             await callback.message.edit_text(
                 f"💳 Оплата:\n"
-                f"👤 Для: {target_name}\n"
-                f"📚 Предмет: {subject_name}\n\n"
+                f"👤 Для: {child_info.get('user_name', '')}\n"
+                f"📚 Предмет: {subject_name} (выбран автоматически)\n\n"
                 f"Введите сумму для оплаты (в рублях):\n\n"
                 f"Примеры:\n"
                 f"• 100\n"
@@ -279,12 +276,77 @@ class PaymentHandlers:
             await callback.answer()
 
         except Exception as e:
-            logger.error(f"Ошибка в handle_subject_selection: {e}")
+            logger.error(f"Ошибка в handle_child_selection: {e}")
             await callback.answer("❌ Произошла ошибка", show_alert=True)
 
     @staticmethod
+    async def _get_subject_with_lowest_balance(user_id: int, available_subjects: List[str]) -> str:
+        """Определяет предмет с наименьшим балансом"""
+        try:
+            from main import gsheets
+            
+            if not gsheets:
+                # Если Google Sheets недоступен, возвращаем предмет с наименьшим ID
+                return min(available_subjects) if available_subjects else None
+
+            subject_balances = {}
+            
+            for subject_id in available_subjects:
+                # Получаем баланс для каждого предмета
+                balance = gsheets.get_student_balance_for_subject(user_id, subject_id)
+                subject_balances[subject_id] = balance
+            
+            # Находим минимальный баланс
+            min_balance = min(subject_balances.values())
+            
+            # Получаем все предметы с минимальным балансом
+            min_balance_subjects = [subj for subj, bal in subject_balances.items() if bal == min_balance]
+            
+            # Если несколько предметов с одинаковым минимальным балансом, выбираем с наименьшим ID
+            return min(min_balance_subjects) if min_balance_subjects else None
+            
+        except Exception as e:
+            logger.error(f"Ошибка при определении предмета с наименьшим балансом: {e}")
+            # В случае ошибки возвращаем предмет с наименьшим ID
+            return min(available_subjects) if available_subjects else None
+
+    # @staticmethod
+    # async def handle_subject_selection(callback: types.CallbackQuery, state: FSMContext):
+    #     """Обрабатывает выбор предмета"""
+    #     try:
+    #         subject_id = callback.data.replace("payment_subject_", "")
+
+    #         await state.update_data(subject_id=subject_id)
+
+    #         data = await state.get_data()
+    #         target_name = data.get('target_user_name', 'Пользователь')
+
+    #         from config import SUBJECTS
+    #         subject_name = SUBJECTS.get(subject_id, f"Предмет {subject_id}")
+
+    #         await callback.message.edit_text(
+    #             f"💳 Оплата:\n"
+    #             f"👤 Для: {target_name}\n"
+    #             f"📚 Предмет: {subject_name}\n\n"
+    #             f"Введите сумму для оплаты (в рублях):\n\n"
+    #             f"Примеры:\n"
+    #             f"• 100\n"
+    #             f"• 500.50\n"
+    #             f"• 1000\n\n"
+    #             f"Минимальная сумма: 1 рубль\n"
+    #             f"Максимальная сумма: 15000 рублей"
+    #         )
+
+    #         await state.set_state(PaymentStates.WAITING_AMOUNT)
+    #         await callback.answer()
+
+    #     except Exception as e:
+    #         logger.error(f"Ошибка в handle_subject_selection: {e}")
+    #         await callback.answer("❌ Произошла ошибка", show_alert=True)
+
+    @staticmethod
     async def handle_self_selection(callback: types.CallbackQuery, state: FSMContext):
-        """Обрабатывает выбор себя для оплаты"""
+        """Обрабатывает выбор себя для оплаты - автоматически определяем предмет"""
         try:
             user_id = callback.from_user.id
 
@@ -292,12 +354,43 @@ class PaymentHandlers:
             from main import storage
             user_name = storage.get_user_name(user_id)
 
+            # Получаем доступные предметы для пользователя
+            available_subjects = storage.get_available_subjects_for_student(user_id)
+            
+            if not available_subjects:
+                await callback.answer("❌ Нет доступных предметов для оплаты", show_alert=True)
+                return
+
+            # Автоматически выбираем предмет с наименьшим балансом
+            subject_id = await PaymentHandlers._get_subject_with_lowest_balance(user_id, available_subjects)
+            
+            if not subject_id:
+                await callback.answer("❌ Не удалось определить предмет для оплаты", show_alert=True)
+                return
+
             await state.update_data(
                 target_user_id=user_id,
-                target_user_name=user_name
+                target_user_name=user_name,
+                subject_id=subject_id
             )
 
-            await PaymentHandlers._show_subjects(callback.message, state)
+            from config import SUBJECTS
+            subject_name = SUBJECTS.get(subject_id, f"Предмет {subject_id}")
+
+            await callback.message.edit_text(
+                f"💳 Оплата:\n"
+                f"👤 Для: {user_name}\n"
+                f"📚 Предмет: {subject_name} (выбран автоматически)\n\n"
+                f"Введите сумму для оплаты (в рублях):\n\n"
+                f"Примеры:\n"
+                f"• 100\n"
+                f"• 500.50\n"
+                f"• 1000\n\n"
+                f"Минимальная сумма: 1 рубль\n"
+                f"Максимальная сумма: 15000 рублей"
+            )
+
+            await state.set_state(PaymentStates.WAITING_AMOUNT)
             await callback.answer()
 
         except Exception as e:

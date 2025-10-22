@@ -1399,3 +1399,60 @@ class GoogleSheetsManager:
         except Exception as e:
             logger.error(f"Error getting finance history for student {student_id}: {e}")
             return []
+        
+    def get_student_balance_for_subject(self, user_id: int, subject_id: str) -> float:
+        """Получает баланс студента для конкретного предмета"""
+        try:
+            worksheet = self._get_or_create_worksheet("Ученики бот")
+            data = worksheet.get_all_values()
+            
+            if len(data) < 1:
+                return 0.0
+
+            headers = [str(h).strip().lower() for h in data[0]]
+            
+            # Находим индексы колонок с датами (финансовые колонки)
+            date_columns = []
+            for i, header in enumerate(headers):
+                if 'финансы' in header and any(char.isdigit() for char in header):
+                    date_columns.append(i)
+
+            # Ищем строку пользователя с указанным subject_id
+            for row in data[1:]:  # Пропускаем заголовок
+                if (len(row) > 0 and str(row[0]).strip() == str(user_id) and
+                    len(row) > 2 and str(row[2]).strip() == str(subject_id)):
+                    
+                    total_balance = 0.0
+                    
+                    # Суммируем все финансовые операции для этого предмета
+                    for col_idx in date_columns:
+                        if len(row) > col_idx and row[col_idx].strip():
+                            try:
+                                # Пытаемся преобразовать значение в число
+                                cell_value = row[col_idx].strip()
+                                # Убираем возможные символы валюты и пробелы
+                                cell_value = cell_value.replace('₽', '').replace('руб', '').replace(' ', '')
+                                # Заменяем запятые на точки для корректного преобразования
+                                cell_value = cell_value.replace(',', '.')
+                                
+                                if cell_value and self._is_float(cell_value):
+                                    amount = float(cell_value)
+                                    total_balance += amount
+                            except (ValueError, TypeError):
+                                continue
+                    
+                    return total_balance
+                    
+            return 0.0
+            
+        except Exception as e:
+            logger.error(f"Ошибка получения баланса для user_id {user_id}, subject {subject_id}: {e}")
+            return 0.0
+
+    def _is_float(self, value: str) -> bool:
+        """Проверяет, можно ли преобразовать строку в float"""
+        try:
+            float(value)
+            return True
+        except ValueError:
+            return False
