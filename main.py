@@ -2551,6 +2551,12 @@ async def start_payment(message: types.Message, state: FSMContext):
         logger.error(f"Ошибка в start_payment: {e}")
         await message.answer("❌ Произошла ошибка при запуске оплаты")
 
+@dp.callback_query(F.data == "payment_self")
+async def handle_payment_self(callback: types.CallbackQuery, state: FSMContext):
+    """Обрабатывает выбор себя для оплаты"""
+    from payment_handlers import PaymentHandlers
+    await PaymentHandlers.handle_self_selection(callback, state)
+
 @dp.callback_query(F.data.startswith("payment_child_"))
 async def handle_payment_child(callback: types.CallbackQuery, state: FSMContext):
     """Обрабатывает выбор ребенка для оплаты"""

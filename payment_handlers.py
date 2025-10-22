@@ -114,59 +114,62 @@ class PaymentHandlers:
                     await message_obj.answer("❌ У вас нет ролей для оплаты")
                 return
 
+            # Очищаем состояние перед началом нового процесса оплаты
+            await state.clear()
+
+            builder = InlineKeyboardBuilder()
+
+            has_options = False
+
+            # ДОБАВЛЯЕМ ВЫБОР СЕБЯ ДЛЯ УЧЕНИКОВ
+            if 'student' in user_roles:
+                user_name = storage.get_user_name(user_id)
+                builder.add(types.InlineKeyboardButton(
+                    text=f"👤 {user_name} (Я)",
+                    callback_data="payment_self"
+                ))
+                has_options = True
+
             if 'parent' in user_roles:
                 # Для родителя - показываем выбор ребенка
                 children_ids = storage.get_parent_children(user_id)
-                if not children_ids:
-                    if from_callback:
-                        await message.answer("❌ У вас нет привязанных детей", show_alert=True)
-                    else:
-                        await message_obj.answer("❌ У вас нет привязанных детей")
-                    return
+                if children_ids:
+                    for child_id in children_ids:
+                        child_info = storage.get_child_info(child_id)
+                        child_name = child_info.get('user_name', f'Ученик {child_id}')
+                        builder.add(types.InlineKeyboardButton(
+                            text=f"👶 {child_name}",
+                            callback_data=f"payment_child_{child_id}"
+                        ))
+                    has_options = True
 
-                builder = InlineKeyboardBuilder()
-                for child_id in children_ids:
-                    child_info = storage.get_child_info(child_id)
-                    child_name = child_info.get('user_name', f'Ученик {child_id}')
-                    builder.add(types.InlineKeyboardButton(
-                        text=f"👶 {child_name}",
-                        callback_data=f"payment_child_{child_id}"
-                    ))
-
-                builder.add(types.InlineKeyboardButton(
-                    text="❌ Отмена",
-                    callback_data="cancel_payment"
-                ))
-                builder.adjust(1)
-
+            if not has_options:
                 if from_callback:
-                    await message_obj.edit_text(
-                        "💳 Выберите ребенка для оплаты:",
-                        reply_markup=builder.as_markup()
-                    )
+                    await message.answer("❌ У вас нет доступных опций для оплаты", show_alert=True)
                 else:
-                    await message_obj.answer(
-                        "💳 Выберите ребенка для оплаты:",
-                        reply_markup=builder.as_markup()
-                    )
+                    await message_obj.answer("❌ У вас нет доступных опций для оплаты")
+                return
 
-            elif 'student' in user_roles:
-                # Для ученика - сразу выбираем себя
-                await state.update_data(
-                    target_user_id=user_id,
-                    target_user_name=storage.get_user_name(user_id)
+            builder.add(types.InlineKeyboardButton(
+                text="❌ Отмена",
+                callback_data="cancel_payment"
+            ))
+            builder.adjust(1)
+
+            message_text = "💳 Выберите, для кого производится оплата:"
+            if 'student' in user_roles and 'parent' in user_roles:
+                message_text += "\n\n👤 - для себя\n👶 - для ребенка"
+
+            if from_callback:
+                await message_obj.edit_text(
+                    message_text,
+                    reply_markup=builder.as_markup()
                 )
-                
-                if from_callback:
-                    await PaymentHandlers._show_subjects(message_obj, state)
-                else:
-                    await PaymentHandlers._show_subjects(message_obj, state)
-
             else:
-                if from_callback:
-                    await message.answer("❌ У вас нет ролей для оплаты", show_alert=True)
-                else:
-                    await message_obj.answer("❌ У вас нет ролей для оплаты")
+                await message_obj.answer(
+                    message_text,
+                    reply_markup=builder.as_markup()
+                )
 
         except Exception as e:
             logger.error(f"Ошибка в handle_payment_start: {e}")
@@ -208,7 +211,10 @@ class PaymentHandlers:
             ))
             builder.adjust(2)
 
+            target_name = data.get('target_user_name', 'Пользователь')
+
             await message.answer(
+                f"💳 Оплата для: {target_name}\n"
                 "📚 Выберите предмет для оплаты:",
                 reply_markup=builder.as_markup()
             )
@@ -274,6 +280,28 @@ class PaymentHandlers:
 
         except Exception as e:
             logger.error(f"Ошибка в handle_subject_selection: {e}")
+            await callback.answer("❌ Произошла ошибка", show_alert=True)
+
+    @staticmethod
+    async def handle_self_selection(callback: types.CallbackQuery, state: FSMContext):
+        """Обрабатывает выбор себя для оплаты"""
+        try:
+            user_id = callback.from_user.id
+
+            # Импортируем storage из main
+            from main import storage
+            user_name = storage.get_user_name(user_id)
+
+            await state.update_data(
+                target_user_id=user_id,
+                target_user_name=user_name
+            )
+
+            await PaymentHandlers._show_subjects(callback.message, state)
+            await callback.answer()
+
+        except Exception as e:
+            logger.error(f"Ошибка в handle_self_selection: {e}")
             await callback.answer("❌ Произошла ошибка", show_alert=True)
 
     @staticmethod
