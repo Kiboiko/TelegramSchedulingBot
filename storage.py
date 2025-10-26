@@ -472,3 +472,9 @@ class JSONStorage:
                 self.gsheets.update_student_balance(student_id, amount)
         except Exception as e:
             logger.error(f"Error updating balance for student {student_id}: {e}")
+
+    def get_student_balance_by_subjects(self, student_id: int) -> Dict[str, float]:
+        """Получает баланс студента разбитый по предметам"""
+        if hasattr(self, 'gsheets') and self.gsheets:
+            return self.gsheets.get_student_balance_by_subjects(student_id)
+        return {}

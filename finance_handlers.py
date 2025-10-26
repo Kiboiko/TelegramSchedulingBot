@@ -161,11 +161,14 @@ class FinanceHandlers:
             await callback.answer("❌ Произошла ошибка", show_alert=True)
 
     async def balance_show_self(self, callback: types.CallbackQuery, state: FSMContext):
-        """Показывает детальную информацию о балансе для себя"""
+        """Показывает детальную информацию о балансе для себя с разбивкой по предметам"""
         try:
             user_id = callback.from_user.id
             user_name = self.storage.get_user_name(user_id)
             balance = self.storage.get_student_balance(user_id)
+            
+            # Получаем баланс по предметам
+            balance_by_subjects = self.storage.get_student_balance_by_subjects(user_id)
             
             # Получаем историю операций
             finance_history = self.gsheets.get_student_finance_history(user_id)
@@ -173,6 +176,16 @@ class FinanceHandlers:
             # Рассчитываем итоги
             total_replenished = sum(op["replenished"] for op in finance_history)
             total_withdrawn = sum(op["withdrawn"] for op in finance_history)
+            
+            # Форматируем баланс по предметам
+            subjects_balance_text = ""
+            if balance_by_subjects:
+                for subject_id, subject_balance in balance_by_subjects.items():
+                    subject_name = self.subjects_config.get(subject_id, f"Предмет {subject_id}")
+                    balance_emoji = "🟢" if subject_balance >= 0 else "🔴"
+                    subjects_balance_text += f"{balance_emoji} {subject_name}: {subject_balance:.2f} руб.\n"
+            else:
+                subjects_balance_text = "Информация по предметам отсутствует\n"
             
             # Форматируем историю для отображения
             history_text = ""
@@ -192,7 +205,9 @@ class FinanceHandlers:
             message_text = (
                 f"💰 Детальная информация о балансе\n\n"
                 f"👤 Студент: {user_name}\n"
-                f"💳 Текущий баланс: {balance:.2f} руб.\n\n"
+                f"💳 Общий баланс: {balance:.2f} руб.\n\n"
+                f"📊 Баланс по предметам:\n"
+                f"{subjects_balance_text}\n"
                 f"Баланс = Все пополнения - Все списания\n\n"
                 f"Остаток средств переносится на следующие занятия."
             )
@@ -212,8 +227,9 @@ class FinanceHandlers:
             logger.error(f"Error in balance_show_self: {e}")
             await callback.answer("❌ Произошла ошибка", show_alert=True)
 
+
     async def balance_show_child(self, callback: types.CallbackQuery, state: FSMContext):
-        """Показывает детальную информацию о балансе для ребенка"""
+        """Показывает детальную информацию о балансе для ребенка с разбивкой по предметам"""
         try:
             child_id = int(callback.data.replace("balance_child_", ""))
             child_info = self.storage.get_child_info(child_id)
@@ -225,12 +241,25 @@ class FinanceHandlers:
             child_name = child_info.get('user_name', f'Ученик {child_id}')
             balance = self.storage.get_student_balance(child_id)
             
+            # Получаем баланс по предметам
+            balance_by_subjects = self.storage.get_student_balance_by_subjects(child_id)
+            
             # Получаем историю операций
             finance_history = self.gsheets.get_student_finance_history(child_id)
             
             # Рассчитываем итоги
             total_replenished = sum(op["replenished"] for op in finance_history)
             total_withdrawn = sum(op["withdrawn"] for op in finance_history)
+            
+            # Форматируем баланс по предметам
+            subjects_balance_text = ""
+            if balance_by_subjects:
+                for subject_id, subject_balance in balance_by_subjects.items():
+                    subject_name = self.subjects_config.get(subject_id, f"Предмет {subject_id}")
+                    balance_emoji = "🟢" if subject_balance >= 0 else "🔴"
+                    subjects_balance_text += f"{balance_emoji} {subject_name}: {subject_balance:.2f} руб.\n"
+            else:
+                subjects_balance_text = "Информация по предметам отсутствует\n"
             
             # Форматируем историю для отображения
             history_text = ""
@@ -250,7 +279,9 @@ class FinanceHandlers:
             message_text = (
                 f"💰 Детальная информация о балансе\n\n"
                 f"👶 Ребенок: {child_name}\n"
-                f"💳 Текущий баланс: {balance:.2f} руб.\n\n"
+                f"💳 Общий баланс: {balance:.2f} руб.\n\n"
+                f"📊 Баланс по предметам:\n"
+                f"{subjects_balance_text}\n"
                 f"Баланс = Все пополнения - Все списания\n\n"
                 f"Остаток средств переносится на следующие занятия."
             )
