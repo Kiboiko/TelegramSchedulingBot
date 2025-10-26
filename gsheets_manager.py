@@ -1456,3 +1456,153 @@ class GoogleSheetsManager:
             return True
         except ValueError:
             return False
+        
+    def get_subject_with_lowest_balance(self, user_id: int) -> str:
+        """Определяет предмет с наименьшим балансом для ученика"""
+        try:
+            # Используем кэш
+            cache_key = f"lowest_balance_subject_{user_id}"
+            cached_result = self._get_cached_data(cache_key)
+            if cached_result:
+                return cached_result
+
+            worksheet = self._get_or_create_worksheet("Ученики бот")
+            data = worksheet.get_all_values()
+
+            if len(data) < 2:
+                logger.info(f"В таблице 'Ученики бот' недостаточно данных для user_id {user_id}")
+                return ""
+
+            # Находим все строки ученика
+            student_rows = []
+            for row_idx, row in enumerate(data[1:], start=2):
+                if len(row) > 0 and str(row[0]).strip() == str(user_id):
+                    student_rows.append({
+                        'row_idx': row_idx,
+                        'subject_id': row[2].strip() if len(row) > 2 and row[2] else "",
+                        'row_data': row
+                    })
+
+            if not student_rows:
+                logger.info(f"Не найдено строк для user_id {user_id}")
+                return ""
+
+            headers = [str(h).strip().lower() for h in data[0]]
+            
+            # Получаем текущую дату для поиска актуальных финансовых данных
+            from datetime import datetime
+            current_date = datetime.now()
+            current_month = current_date.strftime("%m.%Y")
+            current_month_short = current_date.strftime("%m.%y")
+
+            subject_balances = {}
+
+            # Для каждой строки ученика (каждого предмета) вычисляем баланс
+            for student_row in student_rows:
+                subject_id = student_row['subject_id']
+                if not subject_id:
+                    continue
+
+                total_balance = 0.0
+                row_data = student_row['row_data']
+
+                # Ищем финансовые столбцы (начиная с 245)
+                for i in range(245, min(len(headers), 500)):
+                    if i >= len(headers) or not headers[i]:
+                        continue
+
+                    # Проверяем, относится ли столбец к текущему или предыдущим месяцам
+                    header_date = headers[i].split()[0] if ' ' in headers[i] else headers[i]
+                    
+                    # Пропускаем столбцы не с датами
+                    if not any(char.isdigit() for char in header_date):
+                        continue
+
+                    try:
+                        # Парсим дату из заголовка
+                        date_formats = ["%d.%m.%Y", "%d.%m", "%d.%m.%y"]
+                        date_obj = None
+
+                        for date_format in date_formats:
+                            try:
+                                date_obj = datetime.strptime(header_date, date_format)
+                                if date_format == "%d.%m":
+                                    date_obj = date_obj.replace(year=current_date.year)
+                                break
+                            except ValueError:
+                                continue
+
+                        if not date_obj:
+                            continue
+
+                        # Учитываем данные за последние 3 месяца для актуальности
+                        months_diff = (current_date.year - date_obj.year) * 12 + current_date.month - date_obj.month
+                        if months_diff > 3:
+                            continue
+
+                    except Exception:
+                        continue
+
+                    # Обрабатываем значение ячейки
+                    if len(row_data) > i and row_data[i]:
+                        try:
+                            cell_value = str(row_data[i]).strip()
+                            
+                            # Очищаем строку от лишних символов
+                            clean_str = cell_value.replace('\xa0', '').replace(' ', '').replace(',', '.')
+                            import re
+                            clean_str = re.sub(r'[^\d.-]', '', clean_str)
+                            
+                            if clean_str and self._is_float(clean_str):
+                                amount = float(clean_str)
+                                total_balance += amount
+                        except (ValueError, TypeError) as e:
+                            logger.debug(f"Ошибка обработки значения '{cell_value}': {e}")
+                            continue
+
+                # Также учитываем тариф и проведенные занятия (списания)
+                tariff = 0.0
+                if len(row_data) > 13 and row_data[13]:
+                    try:
+                        tariff_str = str(row_data[13]).replace(',', '.').strip()
+                        tariff_str = tariff_str.replace('\xa0', '').replace(' ', '')
+                        tariff = float(tariff_str) if tariff_str else 0.0
+                    except ValueError:
+                        tariff = 0.0
+
+                # Учитываем списания за занятия (расписание в столбцах 14-244)
+                total_withdrawn = 0.0
+                for i in range(14, min(245, len(headers)), 2):
+                    if (i < len(headers) and headers[i] and 
+                        len(row_data) > i + 1 and row_data[i] and row_data[i + 1]):
+                        # Если есть время начала и окончания - занятие было проведено
+                        start_time = row_data[i].strip()
+                        end_time = row_data[i + 1].strip()
+                        if start_time and end_time:
+                            total_withdrawn += tariff
+
+                # Итоговый баланс = пополнения - списания
+                final_balance = total_balance - total_withdrawn
+                subject_balances[subject_id] = final_balance
+
+                logger.info(f"Предмет {subject_id}: баланс {final_balance:.2f} руб. (пополнения: {total_balance:.2f}, списания: {total_withdrawn:.2f})")
+
+            if not subject_balances:
+                logger.info(f"Не найдено финансовых данных для user_id {user_id}")
+                return ""
+
+            # Находим предмет с минимальным балансом
+            min_balance = min(subject_balances.values())
+            min_balance_subjects = [subj for subj, bal in subject_balances.items() if bal == min_balance]
+            
+            # Если несколько предметов с одинаковым минимальным балансом, выбираем первый
+            result = min_balance_subjects[0] if min_balance_subjects else ""
+            
+            logger.info(f"Предмет с наименьшим балансом для user_id {user_id}: {result} (баланс: {min_balance:.2f} руб.)")
+            
+            self._set_cached_data(cache_key, result)
+            return result
+
+        except Exception as e:
+            logger.error(f"Ошибка определения предмета с наименьшим балансом для user_id {user_id}: {e}")
+            return ""

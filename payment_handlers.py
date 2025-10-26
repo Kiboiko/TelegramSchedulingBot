@@ -470,7 +470,7 @@ class PaymentHandlers:
             data = await state.get_data()
             amount = data.get('amount')
             target_user_id = data.get('target_user_id')
-            subject_id = data.get('subject_id')
+            # subject_id = data.get('subject_id')
 
             if not amount:
                 await callback.message.edit_text("❌ Ошибка: сумма не найдена")
@@ -492,7 +492,6 @@ class PaymentHandlers:
                 "metadata": {
                     "user_id": callback.from_user.id,
                     "target_user_id": target_user_id,
-                    "subject_id": subject_id
                 }
             }, str(uuid.uuid4()))
 
@@ -631,11 +630,11 @@ class PaymentHandlers:
                 # ЗАПИСЫВАЕМ СУММУ В ТАБЛИЦУ ТОЛЬКО ПОСЛЕ УСПЕШНОЙ ОПЛАТЫ
                 metadata = payment.metadata
                 target_user_id = metadata.get('target_user_id')
-                subject_id = metadata.get('subject_id')
+                # subject_id = metadata.get('subject_id')
 
-                if target_user_id and subject_id:
+                if target_user_id:
                     success = await PaymentHandlers._write_payment_to_sheets(
-                        target_user_id, subject_id, amount
+                        target_user_id, amount
                     )
 
                     if success:
@@ -697,12 +696,27 @@ class PaymentHandlers:
             await callback.answer(f"Ошибка: {str(e)}", show_alert=True)
 
     @staticmethod
-    async def _write_payment_to_sheets(user_id: int, subject_id: str, amount: float) -> bool:
-        """Записывает платеж в Google Sheets (сумма прибавляется к текущему значению)"""
+    async def _write_payment_to_sheets(user_id: int, amount: float) -> bool:
+        """Записывает платеж в Google Sheets на предмет с наименьшим балансом"""
         try:
-            from main import gsheets
+            from main import gsheets, storage
+            
             if not gsheets:
                 logger.error("Google Sheets не доступен")
+                return False
+
+            # Получаем доступные предметы для ученика
+            available_subjects = storage.get_available_subjects_for_student(user_id)
+            
+            if not available_subjects:
+                logger.error(f"Нет доступных предметов для user_id {user_id}")
+                return False
+
+            # Автоматически определяем предмет с наименьшим балансом
+            subject_id = await PaymentHandlers._get_subject_with_lowest_balance(user_id, available_subjects)
+            
+            if not subject_id:
+                logger.error(f"Не удалось определить предмет для оплаты user_id {user_id}")
                 return False
 
             from datetime import datetime
@@ -758,9 +772,18 @@ class PaymentHandlers:
             # Записываем новое значение в ячейку
             worksheet.update_cell(target_row, target_col + 1, f"{new_value:.2f}")
 
+            # Получаем название предмета для логов
+            from config import SUBJECTS
+            subject_name = SUBJECTS.get(subject_id, f"Предмет {subject_id}")
+            user_name = storage.get_user_name(user_id)
+
             logger.info(
-                f"Платеж записан в таблицу: user_id={user_id}, subject={subject_id}, "
-                f"amount={amount}, current_value={current_value}, new_value={new_value}, date={formatted_date}")
+                f"💰 Платеж записан в таблицу: {user_name} (ID:{user_id}), "
+                f"предмет: {subject_name} (ID:{subject_id}), "
+                f"сумма: {amount:.2f} руб., дата: {formatted_date}, "
+                f"было: {current_value:.2f}, стало: {new_value:.2f}"
+            )
+            
             return True
 
         except Exception as e:
@@ -779,3 +802,35 @@ class PaymentHandlers:
         except Exception as e:
             logger.error(f"Ошибка обновления статуса платежа: {e}")
             return False
+        
+    @staticmethod
+    async def _get_subject_with_lowest_balance(user_id: int, available_subjects: List[str]) -> str:
+        """Определяет предмет с наименьшим балансом (использует новый метод из gsheets)"""
+        try:
+            from main import gsheets
+            
+            if not gsheets:
+                logger.warning("Google Sheets недоступен, используем первый доступный предмет")
+                return available_subjects[0] if available_subjects else None
+            
+            # Используем новый метод из gsheets_manager для точного определения
+            lowest_balance_subject = gsheets.get_subject_with_lowest_balance(user_id)
+            
+            logger.info(f"Предмет с наименьшим балансом для user_id {user_id}: {lowest_balance_subject}")
+            
+            # Проверяем, что найденный предмет доступен для оплаты
+            if lowest_balance_subject and lowest_balance_subject in available_subjects:
+                logger.info(f"Используем предмет с наименьшим балансом: {lowest_balance_subject}")
+                return lowest_balance_subject
+            elif available_subjects:
+                # Если метод не нашел предмет или он недоступен, используем первый доступный
+                logger.warning(f"Предмет {lowest_balance_subject} недоступен, используем первый из доступных: {available_subjects[0]}")
+                return available_subjects[0]
+            else:
+                logger.error("Нет доступных предметов для оплаты")
+                return None
+            
+        except Exception as e:
+            logger.error(f"Ошибка при определении предмета с наименьшим балансом: {e}")
+            # Fallback: возвращаем первый доступный предмет
+            return available_subjects[0] if available_subjects else None
