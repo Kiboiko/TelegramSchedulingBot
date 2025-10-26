@@ -281,7 +281,7 @@ class PaymentHandlers:
 
     @staticmethod
     async def handle_direct_transfer(callback: types.CallbackQuery, state: FSMContext):
-        """Обработка выбора прямого перевода (заглушка)"""
+        """Обработка выбора прямого перевода с поиском самозанятого с наименьшим балансом"""
         try:
             # Получаем данные из состояния
             data = await state.get_data()
@@ -293,27 +293,86 @@ class PaymentHandlers:
                 await callback.answer("❌ Ошибка: недостаточно данных", show_alert=True)
                 return
 
-            from main import storage
+            from main import storage, gsheets
             target_name = storage.get_user_name(target_user_id)
             from config import SUBJECTS
             subject_name = SUBJECTS.get(subject_id, f"Предмет {subject_id}")
 
-            # Сообщение с инструкциями для прямого перевода
-            message_text = (
-                "💳 *Прямой перевод*\n\n"
-                f"👤 Для: {target_name}\n"
-                f"📚 Предмет: {subject_name}\n"
-                f"💰 Сумма: {amount:.2f} руб.\n\n"
-                "📋 *Инструкции для перевода:*\n"
-                "1. Переведите деньги на карту:\n"
-                "   • **2202 2014 3545 3405** (Тинькофф)\n"
-                "   • **5536 9138 3257 7700** (Сбербанк)\n\n"
+            # Ищем самозанятого с наименьшим балансом
+            self_employed_info = {}
+            if gsheets:
+                self_employed_info = gsheets.get_self_employed_with_lowest_balance()
+
+            # Проверяем, есть ли какие-либо данные для перевода (телефон ИЛИ карта)
+            has_contact_info = (self_employed_info and
+                                (self_employed_info.get('card_number') or
+                                 self_employed_info.get('phone')))
+
+            # Формируем сообщение
+            if has_contact_info:
+                # Есть данные для перевода - показываем все доступные данные
+                message_text = (
+                    "💳 *Прямой перевод преподавателю*\n\n"
+                    f"👤 Для: {target_name}\n"
+                    f"📚 Предмет: {subject_name}\n"
+                    f"💰 Сумма: {amount:.2f} руб.\n\n"
+                    "🎯 *Переведите деньги преподавателю:*\n"
+                    f"👨‍🏫 Преподаватель: *{self_employed_info['name']}*\n"
+                )
+
+                # Добавляем доступные данные для перевода
+                if self_employed_info.get('card_number'):
+                    message_text += f"💳 Карта: *{self_employed_info['card_number']}*\n"
+                if self_employed_info.get('bank'):
+                    message_text += f"🏦 Банк: {self_employed_info['bank']}\n"
+                if self_employed_info.get('phone'):
+                    message_text += f"📞 Телефон: *{self_employed_info['phone']}*\n"
+
+            else:
+                # Нет данных для перевода
+                message_text = (
+                    "💳 *Прямой перевод*\n\n"
+                    f"👤 Для: {target_name}\n"
+                    f"📚 Предмет: {subject_name}\n"
+                    f"💰 Сумма: {amount:.2f} руб.\n\n"
+                )
+
+                if self_employed_info and self_employed_info.get('name'):
+                    message_text += (
+                        f"🎯 Рекомендуемый преподаватель: *{self_employed_info['name']}*\n\n"
+                        "❌ *Но нет контактных данных для перевода!*\n"
+                    )
+                else:
+                    message_text += "❌ *Не найдено самозанятых преподавателей!*\n"
+
+                message_text += "Обратитесь к администратору для получения реквизитов.\n\n"
+
+            # Общая часть сообщения с инструкциями
+            message_text += (
+                "\n📋 *Инструкции для перевода:*\n"
+                "1. Переведите деньги преподавателю по указанным реквизитам\n"
                 "2. В комментарии к переводу укажите:\n"
                 f"   *{target_name} - {subject_name}*\n\n"
-                "3. После перевода сообщите администратору:\n"
-                "   • Сумму перевода\n"
-                "   • Дату и время\n"
-                "   • ФИО ученика и предмет\n\n"
+            )
+
+            # Если есть данные для перевода, добавляем информацию о подтверждении
+            if has_contact_info:
+                message_text += (
+                    "3. После перевода НЕОБХОДИМО сообщить администратору:\n"
+                    "   • Сумму перевода\n"
+                    "   • Дату и время\n"
+                    "   • ФИО ученика и предмет\n"
+                    "   • ФИО преподавателя, которому перевели\n\n"
+                )
+            else:
+                message_text += (
+                    "3. После перевода сообщите администратору:\n"
+                    "   • Сумму перевода\n"
+                    "   • Дату и время\n"
+                    "   • ФИО ученика и предмет\n\n"
+                )
+
+            message_text += (
                 "📞 *Контакт администратора:*\n"
                 "+79001372727\n\n"
                 "💰 Баланс будет пополнен после подтверждения получения денег администратором."
@@ -342,6 +401,36 @@ class PaymentHandlers:
         except Exception as e:
             logger.error(f"Ошибка в handle_direct_transfer: {e}")
             await callback.answer("❌ Произошла ошибка", show_alert=True)
+
+    @staticmethod
+    async def handle_debug_self_employed(callback: types.CallbackQuery):
+        """Отладочная функция для проверки данных самозанятых"""
+        try:
+            from main import gsheets
+            if not gsheets:
+                await callback.answer("❌ Google Sheets не доступен", show_alert=True)
+                return
+
+            self_employed_info = gsheets.get_self_employed_with_lowest_balance()
+
+            if not self_employed_info:
+                await callback.answer("❌ Нет данных самозанятых", show_alert=True)
+                return
+
+            message = (
+                f"👨‍🏫 Самозанятый с наименьшим балансом:\n"
+                f"Имя: {self_employed_info.get('name', 'Не указано')}\n"
+                f"Баланс: {self_employed_info.get('balance', 0):.2f} руб.\n"
+                f"Карта: {self_employed_info.get('card_number', 'Не указана')}\n"
+                f"Банк: {self_employed_info.get('bank', 'Не указан')}\n"
+                f"Телефон: {self_employed_info.get('phone', 'Не указан')}"
+            )
+
+            await callback.answer(message, show_alert=True)
+
+        except Exception as e:
+            logger.error(f"Ошибка в debug_self_employed: {e}")
+            await callback.answer("❌ Ошибка отладки", show_alert=True)
 
     @staticmethod
     async def _get_subject_with_lowest_balance(user_id: int, available_subjects: List[str]) -> str:

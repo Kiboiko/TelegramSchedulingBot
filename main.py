@@ -2024,6 +2024,12 @@ async def cancel_time_selection_handler(callback: types.CallbackQuery, state: FS
     await callback.answer()
 
 
+@dp.callback_query(F.data == "direct_transfer")
+async def handle_direct_transfer_direct(callback: types.CallbackQuery, state: FSMContext):
+    """Обрабатывает прямой перевод (временный обработчик)"""
+    from payment_handlers import PaymentHandlers
+    await PaymentHandlers.handle_direct_transfer(callback, state)
+
 @dp.callback_query(BookingStates.SELECT_TIME_RANGE, F.data.startswith("time_point_"))
 async def process_time_point(callback: types.CallbackQuery, state: FSMContext):
     time_str = callback.data.replace("time_point_", "")
@@ -2707,6 +2713,7 @@ async def handle_reminder_book_now(callback: types.CallbackQuery, state: FSMCont
     except Exception as e:
         logger.error(f"Error handling reminder book now: {e}")
         await callback.answer("Произошла ошибка, попробуйте позже", show_alert=True)
+
 async def main():
     await background_tasks.startup_tasks()
 

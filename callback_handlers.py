@@ -84,7 +84,8 @@ class CallbackHandlers:
         "cancel_payment": "handle_cancel_payment",
         "payment_self": "handle_payment_self",
         "confirm_yookassa_payment": "handle_yookassa_payment",
-        "direct_transfer": "handle_direct_transfer"
+        "direct_transfer": "handle_direct_transfer",
+        "debug_self_employed": "handle_debug_self_employed"
     }
 
     @staticmethod
@@ -478,3 +479,9 @@ class CallbackHandlers:
         """Обрабатывает прямой перевод"""
         from payment_handlers import PaymentHandlers
         await PaymentHandlers.handle_direct_transfer(callback, state)
+
+    @staticmethod
+    async def handle_debug_self_employed(callback: types.CallbackQuery, state: FSMContext):
+        """Обрабатывает отладку данных самозанятых"""
+        from payment_handlers import PaymentHandlers
+        await PaymentHandlers.handle_debug_self_employed(callback)

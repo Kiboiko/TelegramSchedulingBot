@@ -1697,3 +1697,256 @@ class GoogleSheetsManager:
         except Exception as e:
             logger.error(f"Ошибка получения баланса по предметам для student_id {student_id}: {e}")
             return {}
+
+    def get_self_employed_with_lowest_balance(self) -> Dict[str, any]:
+        """Находит самозанятого преподавателя с наименьшим балансом"""
+        try:
+            # Используем кэш
+            cache_key = "self_employed_lowest_balance"
+            cached_result = self._get_cached_data(cache_key)
+            if cached_result:
+                return cached_result
+
+            logger.info("=== ПОИСК САМОЗАНЯТОГО С НАИМЕНЬШИМ БАЛАНСОМ ===")
+
+            # Получаем список самозанятых
+            self_employed_worksheet = self._get_or_create_worksheet("Самозанятые бот")
+            self_employed_data = self_employed_worksheet.get_all_values()
+
+            logger.info(f"Найдено строк в 'Самозанятые бот': {len(self_employed_data)}")
+
+            if len(self_employed_data) < 2:
+                logger.warning("В листе 'Самозанятые бот' нет данных")
+                return {}
+
+            # Получаем данные преподавателей для балансов
+            teachers_worksheet = self._get_or_create_worksheet("Преподаватели бот")
+            teachers_data = teachers_worksheet.get_all_values()
+
+            logger.info(f"Найдено строк в 'Преподаватели бот': {len(teachers_data)}")
+
+            if len(teachers_data) < 2:
+                logger.warning("В листе 'Преподаватели бот' нет данных")
+                return {}
+
+            # Собираем имена самозанятых
+            self_employed_names = []
+            logger.info("Самозанятые в таблице:")
+            for row in self_employed_data[1:]:  # Пропускаем заголовок
+                if len(row) > 0 and row[0].strip():
+                    name = row[0].strip()
+                    self_employed_names.append(name.lower())
+                    logger.info(f"  - {name}")
+
+            if not self_employed_names:
+                logger.warning("Не найдено имен самозанятых")
+                return {}
+
+            # Получаем заголовки преподавателей
+            teachers_headers = [str(h).strip().lower() for h in teachers_data[0]]
+
+            # Ищем столбец с балансом (столбец F, индекс 5)
+            balance_col_index = -1
+            for i, header in enumerate(teachers_headers):
+                if 'баланс' in header or i == 5:  # Столбец F
+                    balance_col_index = i
+                    logger.info(f"Найден столбец баланса: индекс {i}, заголовок '{header}'")
+                    break
+
+            if balance_col_index == -1:
+                logger.error("Не найден столбец с балансом в листе 'Преподаватели бот'")
+                # Пробуем по индексу 5 как запасной вариант
+                if len(teachers_headers) > 5:
+                    balance_col_index = 5
+                    logger.info(f"Используем столбец по индексу {balance_col_index}")
+                else:
+                    return {}
+
+            self_employed_list = []
+
+            # Ищем самозанятых в листе преподавателей и получаем их балансы
+            logger.info("Поиск самозанятых в листе преподавателей:")
+            for row in teachers_data[1:]:  # Пропускаем заголовок
+                if len(row) <= max(1, balance_col_index):
+                    continue
+
+                name = row[1].strip() if len(row) > 1 and row[1] else ""
+                if not name:
+                    continue
+
+                name_lower = name.lower()
+
+                # Проверяем, есть ли этот преподаватель в списке самозанятых
+                if name_lower not in self_employed_names:
+                    continue
+
+                # Парсим баланс (берем модуль значения)
+                balance_str = row[balance_col_index] if len(row) > balance_col_index else "0"
+                try:
+                    # Обрабатываем формулу или числовое значение
+                    balance_value = self._parse_balance_from_cell(balance_str)
+                    # Берем модуль значения
+                    balance_abs = abs(balance_value)
+
+                    logger.info(f"  - Найден: {name}, баланс: {balance_abs:.2f} (оригинал: {balance_value:.2f})")
+
+                    self_employed_list.append({
+                        'name': name,
+                        'balance': balance_abs,  # Используем только для внутренней сортировки
+                        'original_balance': balance_value,
+                        'row_data': row
+                    })
+
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Ошибка парсинга баланса для {name}: '{balance_str}', ошибка: {e}")
+                    continue
+
+            if not self_employed_list:
+                logger.info("Не найдено самозанятых с балансами в листе преподавателей")
+                return {}
+
+            # Находим самозанятого с наименьшим балансом
+            lowest_balance_person = min(self_employed_list, key=lambda x: x['balance'])
+            logger.info(
+                f"Самозанятый с наименьшим балансом: {lowest_balance_person['name']} - {lowest_balance_person['balance']:.2f} руб.")
+
+            # Получаем дополнительные данные из листа самозанятых
+            result = self._extract_self_employed_details(lowest_balance_person['name'], self_employed_data)
+            # НЕ включаем баланс в результат - пользователю не нужно его видеть
+            # result.update({
+            #     'balance': lowest_balance_person['balance'],
+            #     'original_balance': lowest_balance_person['original_balance']
+            # })
+
+            logger.info(
+                f"Данные для перевода: карта={result.get('card_number', 'нет')}, телефон={result.get('phone', 'нет')}, банк={result.get('bank', 'нет')}")
+
+            self._set_cached_data(cache_key, result)
+            return result
+
+        except Exception as e:
+            logger.error(f"Ошибка поиска самозанятого с наименьшим балансом: {e}")
+            return {}
+
+    def _parse_balance_from_cell(self, balance_str: str) -> float:
+        """Парсит значение баланса из ячейки, может содержать формулы"""
+        try:
+            clean_str = str(balance_str).strip()
+
+            # Если это формула, пробуем извлечь числовое значение
+            if '=' in clean_str:
+                # Упрощенная обработка формул - ищем числовые значения
+                import re
+                numbers = re.findall(r'-?\d+[,.]?\d*', clean_str)
+                if numbers:
+                    # Берем последнее число в формуле (часто это результат)
+                    number_str = numbers[-1]
+                    clean_str = number_str
+
+            # Очищаем строку
+            clean_str = clean_str.replace('\xa0', '').replace(' ', '').replace(',', '.')
+            import re
+            clean_str = re.sub(r'[^\d.-]', '', clean_str)
+
+            if not clean_str:
+                return 0.0
+
+            return float(clean_str)
+
+        except Exception as e:
+            logger.error(f"Ошибка парсинга баланса '{balance_str}': {e}")
+            return 0.0
+
+    def _extract_self_employed_details(self, name: str, self_employed_data: List[List]) -> Dict:
+        """Извлекает детальную информацию о самозанятом из листа самозанятых"""
+        try:
+            # Ищем строку с данным именем в листе самозанятых
+            target_name_lower = name.lower()
+
+            logger.info(f"Поиск данных для: {name}")
+
+            for i, row in enumerate(self_employed_data[1:], start=2):  # Пропускаем заголовок
+                if not row or len(row) == 0:
+                    continue
+
+                row_name = row[0].strip() if row[0] else ""
+                if row_name.lower() == target_name_lower:
+                    # Нашли совпадение - извлекаем данные
+                    # Структура: A-Имя, B-Телефон, C-Карта, D-Банк
+                    details = {
+                        'name': row_name,
+                        'phone': row[1] if len(row) > 1 and row[1] else "",
+                        'card_number': row[2] if len(row) > 2 and row[2] else "",
+                        'bank': row[3] if len(row) > 3 and row[3] else "",
+                    }
+
+                    # Очищаем данные
+                    for key in ['phone', 'card_number', 'bank']:
+                        if details[key]:
+                            details[key] = str(details[key]).strip()
+
+                    # Проверяем, есть ли хоть какие-то контактные данные
+                    has_contact = bool(details['phone'] or details['card_number'])
+                    logger.info(
+                        f"Найдены данные в строке {i}: телефон='{details['phone']}', карта='{details['card_number']}', банк='{details['bank']}', есть_контакты={has_contact}")
+
+                    return details
+
+            # Если не нашли, возвращаем базовую информацию
+            logger.warning(f"Не найдены контактные данные для: {name}")
+            return {
+                'name': name,
+                'phone': '',
+                'card_number': '',
+                'bank': ''
+            }
+
+        except Exception as e:
+            logger.error(f"Ошибка извлечения деталей самозанятого: {e}")
+            return {
+                'name': name,
+                'phone': '',
+                'card_number': '',
+                'bank': ''
+            }
+
+    def debug_self_employed_structure(self):
+        """Отладочный метод для просмотра структуры таблиц самозанятых"""
+        try:
+            logger.info("=== ОТЛАДКА СТРУКТУРЫ САМОЗАНЯТЫХ ===")
+
+            # Смотрим структуру листа самозанятых
+            self_employed_worksheet = self._get_or_create_worksheet("Самозанятые бот")
+            self_employed_data = self_employed_worksheet.get_all_values()
+
+            logger.info(f"Лист 'Самозанятые бот': {len(self_employed_data)} строк")
+            if self_employed_data:
+                logger.info(f"Заголовки: {self_employed_data[0]}")
+                for i, row in enumerate(self_employed_data[1:6], start=2):  # Первые 5 строк данных
+                    logger.info(f"Строка {i}: {row}")
+
+            # Смотрим структуру листа преподавателей
+            teachers_worksheet = self._get_or_create_worksheet("Преподаватели бот")
+            teachers_data = teachers_worksheet.get_all_values()
+
+            logger.info(f"Лист 'Преподаватели бот': {len(teachers_data)} строк")
+            if teachers_data:
+                headers = [str(h).strip() for h in teachers_data[0]]
+                logger.info(f"Заголовки: {headers}")
+
+                # Ищем столбец баланса
+                balance_col_index = -1
+                for i, header in enumerate(headers):
+                    if 'баланс' in header.lower() or i == 5:
+                        balance_col_index = i
+                        logger.info(f"Столбец баланса найден: индекс {i}, заголовок '{header}'")
+                        break
+
+                # Показываем первые 5 преподавателей с балансами
+                for i, row in enumerate(teachers_data[1:6], start=2):
+                    balance = row[balance_col_index] if len(row) > balance_col_index else "N/A"
+                    name = row[1] if len(row) > 1 else "N/A"
+                    logger.info(f"Преподаватель {i}: {name}, баланс: {balance}")
+
+        except Exception as e:
+            logger.error(f"Ошибка при отладке структуры: {e}")
