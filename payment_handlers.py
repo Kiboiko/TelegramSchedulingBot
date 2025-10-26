@@ -280,6 +280,70 @@ class PaymentHandlers:
             await callback.answer("❌ Произошла ошибка", show_alert=True)
 
     @staticmethod
+    async def handle_direct_transfer(callback: types.CallbackQuery, state: FSMContext):
+        """Обработка выбора прямого перевода (заглушка)"""
+        try:
+            # Получаем данные из состояния
+            data = await state.get_data()
+            target_user_id = data.get('target_user_id')
+            subject_id = data.get('subject_id')
+            amount = data.get('amount')
+
+            if not all([target_user_id, subject_id, amount]):
+                await callback.answer("❌ Ошибка: недостаточно данных", show_alert=True)
+                return
+
+            from main import storage
+            target_name = storage.get_user_name(target_user_id)
+            from config import SUBJECTS
+            subject_name = SUBJECTS.get(subject_id, f"Предмет {subject_id}")
+
+            # Сообщение с инструкциями для прямого перевода
+            message_text = (
+                "💳 *Прямой перевод*\n\n"
+                f"👤 Для: {target_name}\n"
+                f"📚 Предмет: {subject_name}\n"
+                f"💰 Сумма: {amount:.2f} руб.\n\n"
+                "📋 *Инструкции для перевода:*\n"
+                "1. Переведите деньги на карту:\n"
+                "   • **2202 2014 3545 3405** (Тинькофф)\n"
+                "   • **5536 9138 3257 7700** (Сбербанк)\n\n"
+                "2. В комментарии к переводу укажите:\n"
+                f"   *{target_name} - {subject_name}*\n\n"
+                "3. После перевода сообщите администратору:\n"
+                "   • Сумму перевода\n"
+                "   • Дату и время\n"
+                "   • ФИО ученика и предмет\n\n"
+                "📞 *Контакт администратора:*\n"
+                "+79001372727\n\n"
+                "💰 Баланс будет пополнен после подтверждения получения денег администратором."
+            )
+
+            # Кнопки для возврата
+            keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(
+                    text="🔄 Новый платеж",
+                    callback_data="new_payment"
+                )],
+                [types.InlineKeyboardButton(
+                    text="📊 Проверить баланс",
+                    callback_data="finance_start"
+                )]
+            ])
+
+            await callback.message.edit_text(
+                message_text,
+                reply_markup=keyboard,
+                parse_mode="Markdown"
+            )
+            await state.clear()
+            await callback.answer()
+
+        except Exception as e:
+            logger.error(f"Ошибка в handle_direct_transfer: {e}")
+            await callback.answer("❌ Произошла ошибка", show_alert=True)
+
+    @staticmethod
     async def _get_subject_with_lowest_balance(user_id: int, available_subjects: List[str]) -> str:
         """Определяет предмет с наименьшим балансом"""
         try:
@@ -421,40 +485,43 @@ class PaymentHandlers:
                 await state.clear()
                 return
 
-            # УДАЛЯЕМ ЗАПИСЬ В ТАБЛИЦУ - сумма будет записываться только после успешной оплаты
-            # success = await PaymentHandlers._write_payment_to_sheets(
-            #     target_user_id, subject_id, amount
-            # )
-
-            # if success:
-            #     logger.info(f"Сумма {amount} руб. записана в таблицу для user_id {target_user_id}, subject {subject_id}")
-            # else:
-            #     logger.error(f"Ошибка записи суммы в таблицу для user_id {target_user_id}, subject {subject_id}")
-
             # Сохраняем сумму в состоянии для дальнейшей оплаты
             await state.update_data(amount=amount)
 
-            # Создаем клавиатуру подтверждения
-            keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text="✅ Подтвердить оплату", callback_data="confirm_payment")],
-                [types.InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_payment")]
-            ])
-
+            # Переходим к выбору способа оплаты (новый этап)
             from main import storage
             target_name = storage.get_user_name(target_user_id)
             from config import SUBJECTS
             subject_name = SUBJECTS.get(subject_id, f"Предмет {subject_id}")
 
+            # Клавиатура с выбором способа оплаты
+            keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(
+                    text="💳 Оплатить через ЮKassa",
+                    callback_data="confirm_yookassa_payment"
+                )],
+                [types.InlineKeyboardButton(
+                    text="🔄 Сделать перевод напрямую",
+                    callback_data="direct_transfer"
+                )],
+                [types.InlineKeyboardButton(
+                    text="❌ Отменить",
+                    callback_data="cancel_payment"
+                )]
+            ])
+
             await message.answer(
-                f"📋 Подтвердите данные платежа:\n\n"
+                f"💳 *Выберите способ оплаты:*\n\n"
                 f"👤 Для: {target_name}\n"
                 f"📚 Предмет: {subject_name}\n"
                 f"💰 Сумма: {amount:.2f} руб.\n\n"
-                f"💳 Тестовые карты для оплаты:\n"
-                f"• 5555 5555 5555 4477 - успешный платеж\n"
-                f"• 5555 5555 5555 4444 - отказ в оплате",
-                reply_markup=keyboard
+                f"*Варианты оплаты:*\n"
+                f"• 💳 ЮKassa - онлайн оплата картой\n"
+                f"• 🔄 Прямой перевод - на карту администратора",
+                reply_markup=keyboard,
+                parse_mode="Markdown"
             )
+            # Устанавливаем состояние для ожидания выбора способа оплаты
             await state.set_state(PaymentStates.CONFIRM_PAYMENT)
 
         except ValueError:
@@ -470,14 +537,64 @@ class PaymentHandlers:
             data = await state.get_data()
             amount = data.get('amount')
             target_user_id = data.get('target_user_id')
-            # subject_id = data.get('subject_id')
 
             if not amount:
                 await callback.message.edit_text("❌ Ошибка: сумма не найдена")
                 await state.clear()
                 return
 
-            # Создаем платеж в ЮKassa
+            from main import storage
+            target_name = storage.get_user_name(target_user_id)
+            from config import SUBJECTS
+            subject_name = SUBJECTS.get(data.get('subject_id'), "Предмет")
+
+            # Создаем клавиатуру с двумя вариантами оплаты
+            keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(
+                    text="💳 Оплатить через ЮKassa",
+                    callback_data="confirm_yookassa_payment"
+                )],
+                [types.InlineKeyboardButton(
+                    text="🔄 Сделать перевод напрямую",
+                    callback_data="direct_transfer"
+                )],
+                [types.InlineKeyboardButton(
+                    text="❌ Отменить",
+                    callback_data="cancel_payment"
+                )]
+            ])
+
+            await callback.message.edit_text(
+                f"💳 *Выберите способ оплаты:*\n\n"
+                f"👤 Для: {target_name}\n"
+                f"📚 Предмет: {subject_name}\n"
+                f"💰 Сумма: {amount:.2f} руб.\n\n"
+                f"*Варианты оплаты:*\n"
+                f"• 💳 ЮKassa - онлайн оплата картой\n"
+                f"• 🔄 Прямой перевод - на карту администратора",
+                reply_markup=keyboard,
+                parse_mode="Markdown"
+            )
+
+        except Exception as e:
+            logger.error(f"Ошибка в handle_confirm_payment: {e}")
+            await callback.message.edit_text(f"❌ Ошибка при создании платежа: {str(e)}")
+            await state.clear()
+
+    @staticmethod
+    async def handle_yookassa_payment(callback: types.CallbackQuery, state: FSMContext):
+        """Создание платежа через ЮKassa после выбора этого способа"""
+        try:
+            data = await state.get_data()
+            amount = data.get('amount')
+            target_user_id = data.get('target_user_id')
+
+            if not amount:
+                await callback.message.edit_text("❌ Ошибка: сумма не найдена")
+                await state.clear()
+                return
+
+            # Создаем платеж в ЮKassa (существующий функционал)
             payment = Payment.create({
                 "amount": {
                     "value": f"{amount:.2f}",
@@ -498,7 +615,7 @@ class PaymentHandlers:
             # Сохраняем в базу
             save_payment(callback.from_user.id, payment.id, amount)
 
-            # Создаем кнопки
+            # Создаем кнопки (существующий функционал)
             keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
                 [types.InlineKeyboardButton(
                     text=f"💳 Оплатить {amount:.2f} руб.",
@@ -514,7 +631,6 @@ class PaymentHandlers:
                 )]
             ])
 
-            # СООБЩЕНИЕ С ЯРКИМ ПРЕДУПРЕЖДЕНИЕМ
             warning_text = "🚨🚨🚨 ВАЖНОЕ ПРЕДУПРЕЖДЕНИЕ 🚨🚨🚨\n\n"
             warning_text += "❌ НЕ ЗАКРЫВАЙТЕ ЭТОТ ДИАЛОГ И НЕ УДАЛЯЙТЕ ЭТО СООБЩЕНИЕ!\n\n"
             warning_text += "📋 ПОСЛЕ ОПЛАТЫ ВЫ ДОЛЖНЫ:\n"

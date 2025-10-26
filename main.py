@@ -1,7 +1,7 @@
 # main.py
 import sys
 
-sys.path.append(r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.session.aiohttp import AiohttpSession
 from payment_handlers import PaymentStates
