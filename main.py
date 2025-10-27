@@ -404,7 +404,10 @@ async def handle_interval_contains_unavailable(callback: types.CallbackQuery, st
         "Выберите другой интервал, который не содержит значков 🔒",
         show_alert=True
     )
-
+dp.callback_query.register(
+    PaymentHandlers.handle_payment_confirmation,
+    F.data == "confirm_direct_payment"
+)
 
 def has_teacher_booking_conflict(user_id, date, time_start, time_end, exclude_id=None):
     """Проверяет конфликты бронирований только для преподавателей"""
@@ -2713,6 +2716,8 @@ async def handle_reminder_book_now(callback: types.CallbackQuery, state: FSMCont
     except Exception as e:
         logger.error(f"Error handling reminder book now: {e}")
         await callback.answer("Произошла ошибка, попробуйте позже", show_alert=True)
+
+
 
 async def main():
     await background_tasks.startup_tasks()

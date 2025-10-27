@@ -10,7 +10,7 @@ from yookassa import Configuration, Payment
 from dotenv import load_dotenv
 import logging
 from typing import List, Dict
-
+from config import ADMIN_IDS
 logger = logging.getLogger(__name__)
 
 load_dotenv()
@@ -381,6 +381,10 @@ class PaymentHandlers:
             # Кнопки для возврата
             keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
                 [types.InlineKeyboardButton(
+                    text="✅ Я оплатил",
+                    callback_data="confirm_direct_payment"
+                )],
+                [types.InlineKeyboardButton(
                     text="🔄 Новый платеж",
                     callback_data="new_payment"
                 )],
@@ -395,7 +399,7 @@ class PaymentHandlers:
                 reply_markup=keyboard,
                 parse_mode="Markdown"
             )
-            await state.clear()
+            # await state.clear()
             await callback.answer()
 
         except Exception as e:
@@ -1039,3 +1043,147 @@ class PaymentHandlers:
             logger.error(f"Ошибка при определении предмета с наименьшим балансом: {e}")
             # Fallback: возвращаем первый доступный предмет
             return available_subjects[0] if available_subjects else None
+        
+    # payment_handlers.py - добавить в класс PaymentHandlers
+
+    @staticmethod
+    async def handle_payment_confirmation(callback: types.CallbackQuery, state: FSMContext):
+        """Обработка подтверждения оплаты и уведомление преподавателя"""
+        try:
+            # Получаем данные из состояния
+            data = await state.get_data()
+            amount = data.get('amount')
+            target_user_id = data.get('target_user_id')
+            subject_id = data.get('subject_id')
+
+            if not all([amount, target_user_id, subject_id]):
+                await callback.answer("❌ Ошибка: недостаточно данных", show_alert=True)
+                return
+
+            from main import storage, gsheets, bot
+            target_name = storage.get_user_name(target_user_id)
+            from config import SUBJECTS
+            subject_name = SUBJECTS.get(subject_id, f"Предмет {subject_id}")
+
+            # Ищем самозанятого с наименьшим балансом для уведомления
+            self_employed_info = {}
+            if gsheets:
+                self_employed_info = gsheets.get_self_employed_with_lowest_balance()
+
+            # Формируем сообщение для пользователя
+            user_message = (
+                "✅ *Подтверждение оплаты получено!*\n\n"
+                f"👤 Для: {target_name}\n"
+                f"📚 Предмет: {subject_name}\n"
+                f"💰 Сумма: {amount:.2f} руб.\n\n"
+                "📋 Ваш платеж передан администратору для обработки.\n"
+                "💰 Баланс будет пополнен после подтверждения получения денег.\n\n"
+                "📞 Контакт администратора: +79001372727"
+            )
+
+            # Отправляем сообщение пользователю
+            await callback.message.edit_text(
+                user_message,
+                parse_mode="Markdown",
+                reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(
+                        text="🔄 Новый платеж",
+                        callback_data="new_payment"
+                    )],
+                    [types.InlineKeyboardButton(
+                        text="📊 Проверить баланс",
+                        callback_data="finance_start"
+                    )]
+                ])
+            )
+
+            # Уведомляем администратора о новом платеже
+            admin_message = (
+                "💰 *НОВЫЙ ПРЯМОЙ ПЛАТЕЖ*\n\n"
+                f"👤 Ученик: {target_name} (ID: {target_user_id})\n"
+                f"📚 Предмет: {subject_name}\n"
+                f"💸 Сумма: {amount:.2f} руб.\n"
+            )
+
+            if self_employed_info and self_employed_info.get('name'):
+                admin_message += f"👨‍🏫 Преподаватель: {self_employed_info['name']}\n\n"
+            else:
+                admin_message += "👨‍🏫 Преподаватель: не определен\n\n"
+
+            admin_message += (
+                "⚠️ Требуется подтверждение получения денег!\n"
+                "💰 После подтверждения пополните баланс ученика."
+            )
+
+            # ID администратора (замените на реальный ID)
+            # ADMIN_ID = [973231400]  # Замените на реальный ID администратора
+            
+            try:
+                for i in range(len(ADMIN_IDS)):
+                    await bot.send_message(
+                        ADMIN_IDS[i],
+                        admin_message,
+                        parse_mode="Markdown"
+                    )
+            except Exception as e:
+                logger.error(f"Ошибка отправки уведомления администратору: {e}")
+
+            # Уведомляем преподавателя (если найден и есть контактные данные)
+            if self_employed_info and self_employed_info.get('name'):
+                # Ищем ID преподавателя по имени
+                teacher_id = await PaymentHandlers._find_teacher_id_by_name(self_employed_info['name'])
+                
+                if teacher_id:
+                    teacher_message = (
+                        "💰 *УВЕДОМЛЕНИЕ О ПЛАТЕЖЕ*\n\n"
+                        f"На ваш баланс должно было поступить *{amount:.2f} рублей*\n\n"
+                        f"👤 От ученика: {target_name}\n"
+                        f"📚 По предмету: {subject_name}\n\n"
+                        "💳 После получения денег подтвердите оплату администратору."
+                    )
+
+                    try:
+                        await bot.send_message(
+                            teacher_id,
+                            teacher_message,
+                            parse_mode="Markdown"
+                        )
+                        logger.info(f"Уведомление отправлено преподавателю {self_employed_info['name']} (ID: {teacher_id})")
+                    except Exception as e:
+                        logger.error(f"Ошибка отправки уведомления преподавателю: {e}")
+
+            await state.clear()
+            await callback.answer()
+
+        except Exception as e:
+            logger.error(f"Ошибка в handle_payment_confirmation: {e}")
+            await callback.answer("❌ Произошла ошибка", show_alert=True)
+
+    @staticmethod
+    async def _find_teacher_id_by_name(teacher_name: str) -> int:
+        """Находит ID преподавателя по имени"""
+        try:
+            from main import gsheets
+            
+            if not gsheets:
+                return None
+                
+            # Получаем данные из листа преподавателей
+            worksheet = gsheets._get_or_create_worksheet("Преподаватели бот")
+            data = worksheet.get_all_values()
+            
+            if len(data) < 2:
+                return None
+                
+            # Ищем преподавателя по имени (столбец B, индекс 1)
+            for row in data[1:]:  # Пропускаем заголовок
+                if len(row) > 1 and row[1].strip() == teacher_name:
+                    # Возвращаем user_id из столбца A (индекс 0)
+                    if row[0] and row[0].strip().isdigit():
+                        return int(row[0].strip())
+                        
+            return None
+            
+        except Exception as e:
+            logger.error(f"Ошибка поиска ID преподавателя: {e}")
+            return None

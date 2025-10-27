@@ -1786,7 +1786,7 @@ class GoogleSheetsManager:
                     # Обрабатываем формулу или числовое значение
                     balance_value = self._parse_balance_from_cell(balance_str)
                     # Берем модуль значения
-                    balance_abs = abs(balance_value)
+                    balance_abs = balance_value
 
                     logger.info(f"  - Найден: {name}, баланс: {balance_abs:.2f} (оригинал: {balance_value:.2f})")
 
