@@ -421,7 +421,7 @@ class PaymentHandlers:
 
             student_user_id = int(data_parts[0])
             amount = float(data_parts[1])
-            
+            teacher_user_id = callback.from_user.id
             from main import storage, gsheets, bot
             
             # Получаем информацию о студенте
@@ -436,9 +436,13 @@ class PaymentHandlers:
                 return
 
             # Записываем платеж в таблицу
-            success = await PaymentHandlers._write_payment_to_sheets(
-                student_user_id, amount, subject_id
-            )
+            # success = await PaymentHandlers._write_payment_to_sheets(
+            #     student_user_id, amount, subject_id
+            # )
+            success = all([
+                await PaymentHandlers._write_payment_to_sheets(student_user_id, amount, subject_id),
+                await PaymentHandlers._write_teacher_payment_to_sheets(teacher_user_id, amount)
+            ])
             
             if success:
                 # Уведомляем студента
@@ -1112,6 +1116,95 @@ class PaymentHandlers:
             logger.info(
                 f"💰 ПОДТВЕРЖДЕННЫЙ платеж записан в таблицу: {user_name} (ID:{user_id}), "
                 f"предмет: {subject_name} (ID:{subject_id}), "
+                f"сумма: {amount:.2f} руб., дата: {formatted_date}"
+            )
+            
+            return True
+
+        except Exception as e:
+            logger.error(f"Ошибка записи подтвержденного платежа в таблицу: {e}")
+            return False
+    
+    @staticmethod
+    async def _write_teacher_payment_to_sheets(user_id: int, amount: float) -> bool:
+        """Записывает зарплату преподу от ученика в Google Sheets"""
+        try:
+            from main import gsheets, storage
+            
+            if not gsheets:
+                logger.error("Google Sheets не доступен")
+                return False
+
+            # Если subject_id не указан, определяем автоматически
+            # if not subject_id:
+            #     available_subjects = storage.get_available_subjects_for_student(user_id)
+            #     if not available_subjects:
+            #         logger.error(f"Нет доступных предметов для user_id {user_id}")
+            #         return False
+                
+            #     # Автоматически определяем предмет с наименьшим балансом
+            #     subject_id = await PaymentHandlers._get_subject_with_lowest_balance(user_id, available_subjects)
+            #     if not subject_id:
+            #         logger.error(f"Не удалось определить предмет для оплаты user_id {user_id}")
+            #         return False
+
+            from datetime import datetime
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            formatted_date = gsheets.format_date(current_date)
+
+            worksheet = gsheets._get_or_create_worksheet("Преподаватели бот")
+            data = worksheet.get_all_values()
+
+            if len(data) < 1:
+                logger.error("Таблица 'Преподаватели бот' пустая")
+                return False
+
+            headers = [str(h).strip().lower() for h in data[1]]
+
+            # Ищем финансовый столбец для текущей даты
+            target_col = -1
+            for i in range(244, len(headers)):
+                header = headers[i]
+                if formatted_date.lower() in header:
+                    target_col = i
+                    break
+
+            if target_col == -1:
+                logger.error(f"Не найден финансовый столбец для даты {formatted_date}")
+                return False
+
+            # Ищем строку пользователя с указанным subject_id
+            target_row = -1
+            for row_idx, row in enumerate(data[1:], start=2):
+                if (len(row) > 0 and str(row[0]).strip() == str(user_id)):
+                    target_row = row_idx
+                    break
+
+            if target_row == -1:
+                logger.error(f"Не найдена строка для препода с user_id {user_id}")
+                return False
+
+            # Получаем текущее значение ячейки
+            current_value = 0.0
+            if len(data[target_row - 1]) > target_col:
+                cell_value = data[target_row - 1][target_col].strip()
+                if cell_value and cell_value.replace('.', '').replace(',', '').isdigit():
+                    try:
+                        current_value = float(cell_value.replace(',', '.'))
+                    except ValueError:
+                        current_value = 0.0
+
+            # Вычисляем новое значение (прибавляем к текущему)
+            new_value = current_value + amount
+
+            # Записываем новое значение в ячейку
+            worksheet.update_cell(target_row, target_col + 1, f"{new_value:.2f}")
+
+            # Получаем название предмета для логов
+            user_name = storage.get_user_name(user_id)
+
+            logger.info(
+                f"💰 ПОДТВЕРЖДЕННАЯ зарплата записана в таблицу: {user_name} (ID:{user_id}), "
                 f"сумма: {amount:.2f} руб., дата: {formatted_date}"
             )
             
