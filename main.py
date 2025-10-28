@@ -301,6 +301,14 @@ def get_subject_distribution_by_time(loader, target_date: str, condition_check: 
 
     return time_slots
 
+dp.callback_query.register(
+    PaymentHandlers.handle_teacher_payment_confirmation,
+    F.data.startswith("teacher_confirm_")
+)
+dp.callback_query.register(
+    PaymentHandlers.handle_teacher_payment_rejection,
+    F.data.startswith("teacher_reject_")
+)
 
 def check_student_availability_for_slots(
     student: Student,

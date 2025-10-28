@@ -281,8 +281,9 @@ class PaymentHandlers:
 
     @staticmethod
     async def handle_direct_transfer(callback: types.CallbackQuery, state: FSMContext):
-        """Обработка выбора прямого перевода с поиском самозанятого с наименьшим балансом"""
+        """Обработка выбора прямого перевода с ожиданием подтверждения от преподавателя"""
         try:
+            from datetime import datetime 
             # Получаем данные из состояния
             data = await state.get_data()
             target_user_id = data.get('target_user_id')
@@ -293,97 +294,54 @@ class PaymentHandlers:
                 await callback.answer("❌ Ошибка: недостаточно данных", show_alert=True)
                 return
 
-            from main import storage, gsheets
+            from main import storage, gsheets, bot
             target_name = storage.get_user_name(target_user_id)
             from config import SUBJECTS
             subject_name = SUBJECTS.get(subject_id, f"Предмет {subject_id}")
 
             # Ищем самозанятого с наименьшим балансом
             self_employed_info = {}
+            teacher_id = None
             if gsheets:
                 self_employed_info = gsheets.get_self_employed_with_lowest_balance()
+                # Ищем ID преподавателя по имени
+                teacher_id = await PaymentHandlers._find_teacher_id_by_name(self_employed_info.get('name', ''))
 
-            # Проверяем, есть ли какие-либо данные для перевода (телефон ИЛИ карта)
-            has_contact_info = (self_employed_info and
-                                (self_employed_info.get('card_number') or
-                                 self_employed_info.get('phone')))
+            # Сохраняем данные платежа в состоянии для подтверждения
+            payment_data = {
+                'target_user_id': target_user_id,
+                'target_user_name': target_name,
+                'subject_id': subject_id,
+                'subject_name': subject_name,
+                'amount': amount,
+                'teacher_id': teacher_id,
+                'teacher_name': self_employed_info.get('name', ''),
+                'created_at': datetime.now().isoformat()
+            }
+            
+            await state.update_data(payment_data=payment_data)
 
-            # Формируем сообщение
-            if has_contact_info:
-                # Есть данные для перевода - показываем все доступные данные
-                message_text = (
-                    "💳 *Прямой перевод преподавателю*\n\n"
-                    f"👤 Для: {target_name}\n"
-                    f"📚 Предмет: {subject_name}\n"
-                    f"💰 Сумма: {amount:.2f} руб.\n\n"
-                    "🎯 *Переведите деньги преподавателю:*\n"
-                    f"👨‍🏫 Преподаватель: *{self_employed_info['name']}*\n"
-                )
-
-                # Добавляем доступные данные для перевода
-                if self_employed_info.get('card_number'):
-                    message_text += f"💳 Карта: *{self_employed_info['card_number']}*\n"
-                if self_employed_info.get('bank'):
-                    message_text += f"🏦 Банк: {self_employed_info['bank']}\n"
-                if self_employed_info.get('phone'):
-                    message_text += f"📞 Телефон: *{self_employed_info['phone']}*\n"
-
-            else:
-                # Нет данных для перевода
-                message_text = (
-                    "💳 *Прямой перевод*\n\n"
-                    f"👤 Для: {target_name}\n"
-                    f"📚 Предмет: {subject_name}\n"
-                    f"💰 Сумма: {amount:.2f} руб.\n\n"
-                )
-
-                if self_employed_info and self_employed_info.get('name'):
-                    message_text += (
-                        f"🎯 Рекомендуемый преподаватель: *{self_employed_info['name']}*\n\n"
-                        "❌ *Но нет контактных данных для перевода!*\n"
-                    )
-                else:
-                    message_text += "❌ *Не найдено самозанятых преподавателей!*\n"
-
-                message_text += "Обратитесь к администратору для получения реквизитов.\n\n"
-
-            # Общая часть сообщения с инструкциями
-            message_text += (
-                "\n📋 *Инструкции для перевода:*\n"
-                "1. Переведите деньги преподавателю по указанным реквизитам\n"
-                "2. В комментарии к переводу укажите:\n"
-                f"   *{target_name} - {subject_name}*\n\n"
+            # Формируем сообщение для пользователя
+            message_text = (
+                "💳 *Прямой перевод преподавателю*\n\n"
+                f"👤 Для: {target_name}\n"
+                f"📚 Предмет: {subject_name}\n"
+                f"💰 Сумма: {amount:.2f} руб.\n\n"
             )
 
-            # Если есть данные для перевода, добавляем информацию о подтверждении
-            if has_contact_info:
-                message_text += (
-                    "3. После перевода НЕОБХОДИМО сообщить администратору:\n"
-                    "   • Сумму перевода\n"
-                    "   • Дату и время\n"
-                    "   • ФИО ученика и предмет\n"
-                    "   • ФИО преподавателя, которому перевели\n\n"
-                )
-            else:
-                message_text += (
-                    "3. После перевода сообщите администратору:\n"
-                    "   • Сумму перевода\n"
-                    "   • Дату и время\n"
-                    "   • ФИО ученика и предмет\n\n"
-                )
+            if self_employed_info and self_employed_info.get('name'):
+                message_text += f"👨‍🏫 Преподаватель: *{self_employed_info['name']}*\n\n"
 
             message_text += (
-                "📞 *Контакт администратора:*\n"
-                "+79001372727\n\n"
-                "💰 Баланс будет пополнен после подтверждения получения денег администратором."
+                "📋 *Инструкции:*\n"
+                "1. Переведите деньги преподавателю\n"
+                "2. Преподаватель подтвердит получение\n"
+                "3. После подтверждения баланс будет пополнен\n\n"
+                "⏳ Ожидайте подтверждения от преподавателя"
             )
 
-            # Кнопки для возврата
-            keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(
-                    text="✅ Я оплатил",
-                    callback_data="confirm_direct_payment"
-                )],
+            # Кнопки
+            keyboard_buttons = [
                 [types.InlineKeyboardButton(
                     text="🔄 Новый платеж",
                     callback_data="new_payment"
@@ -392,18 +350,184 @@ class PaymentHandlers:
                     text="📊 Проверить баланс",
                     callback_data="finance_start"
                 )]
-            ])
+            ]
+
+            keyboard = types.InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
 
             await callback.message.edit_text(
                 message_text,
                 reply_markup=keyboard,
                 parse_mode="Markdown"
             )
-            # await state.clear()
+
+            # Уведомляем преподавателя о новом платеже
+            if teacher_id and self_employed_info:
+                await PaymentHandlers._notify_teacher_about_payment(
+                    teacher_id, target_name, subject_name, amount, callback.from_user.id
+                )
+
             await callback.answer()
 
         except Exception as e:
             logger.error(f"Ошибка в handle_direct_transfer: {e}")
+            await callback.answer("❌ Произошла ошибка", show_alert=True)
+
+    @staticmethod
+    async def _notify_teacher_about_payment(teacher_id: int, student_name: str, subject_name: str, amount: float, student_user_id: int):
+        """Уведомляет преподавателя о новом платеже, требующем подтверждения"""
+        try:
+            from main import bot
+            
+            message = (
+                "💰 *НОВЫЙ ПЛАТЕЖ ТРЕБУЕТ ПОДТВЕРЖДЕНИЯ*\n\n"
+                f"👤 Ученик: {student_name}\n"
+                f"📚 Предмет: {subject_name}\n"
+                f"💸 Сумма: {amount:.2f} руб.\n\n"
+                "✅ *Подтвердите получение денег:*"
+            )
+
+            keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(
+                    text="✅ Деньги получены",
+                    callback_data=f"teacher_confirm_{student_user_id}_{amount}"
+                )],
+                [types.InlineKeyboardButton(
+                    text="❌ Деньги не получены", 
+                    callback_data=f"teacher_reject_{student_user_id}_{amount}"
+                )]
+            ])
+
+            await bot.send_message(
+                teacher_id,
+                message,
+                reply_markup=keyboard,
+                parse_mode="Markdown"
+            )
+            
+            logger.info(f"Уведомление отправлено преподавателю {teacher_id} о платеже от {student_user_id}")
+
+        except Exception as e:
+            logger.error(f"Ошибка уведомления преподавателя: {e}")
+    
+    @staticmethod
+    async def handle_teacher_payment_confirmation(callback: types.CallbackQuery):
+        """Обработка подтверждения платежа преподавателем"""
+        try:
+            # Извлекаем данные из callback_data: teacher_confirm_{student_user_id}_{amount}
+            data_parts = callback.data.replace("teacher_confirm_", "").split("_")
+            if len(data_parts) < 2:
+                await callback.answer("❌ Ошибка: некорректные данные", show_alert=True)
+                return
+
+            student_user_id = int(data_parts[0])
+            amount = float(data_parts[1])
+            
+            from main import storage, gsheets, bot
+            
+            # Получаем информацию о студенте
+            student_name = storage.get_user_name(student_user_id)
+            
+            # Автоматически определяем предмет с наименьшим балансом
+            available_subjects = storage.get_available_subjects_for_student(student_user_id)
+            subject_id = await PaymentHandlers._get_subject_with_lowest_balance(student_user_id, available_subjects)
+            
+            if not subject_id:
+                await callback.answer("❌ Не удалось определить предмет для оплаты", show_alert=True)
+                return
+
+            # Записываем платеж в таблицу
+            success = await PaymentHandlers._write_payment_to_sheets(
+                student_user_id, amount, subject_id
+            )
+            
+            if success:
+                # Уведомляем студента
+                try:
+                    student_message = (
+                        "✅ *Платеж подтвержден преподавателем!*\n\n"
+                        f"💰 Сумма: {amount:.2f} руб.\n"
+                        f"📊 Деньги зачислены на ваш баланс!\n"
+                        f"🎉 Услуга активирована!"
+                    )
+                    
+                    await bot.send_message(
+                        student_user_id,
+                        student_message,
+                        parse_mode="Markdown"
+                    )
+                except Exception as e:
+                    logger.error(f"Не удалось отправить уведомление студенту {student_user_id}: {e}")
+
+                # Сообщение преподавателю
+                await callback.message.edit_text(
+                    f"✅ *Платеж подтвержден!*\n\n"
+                    f"👤 Ученик: {student_name}\n"
+                    f"💰 Сумма: {amount:.2f} руб.\n"
+                    f"📊 Деньги записаны в таблицу\n\n"
+                    f"Ученик уведомлен о пополнении баланса.",
+                    parse_mode="Markdown"
+                )
+                
+                await callback.answer("✅ Платеж подтвержден и записан")
+            else:
+                await callback.answer("❌ Ошибка записи платежа", show_alert=True)
+
+        except Exception as e:
+            logger.error(f"Ошибка подтверждения платежа преподавателем: {e}")
+            await callback.answer("❌ Произошла ошибка", show_alert=True)
+
+    @staticmethod
+    async def handle_teacher_payment_rejection(callback: types.CallbackQuery):
+        """Обработка отклонения платежа преподавателем"""
+        try:
+            # Извлекаем данные из callback_data: teacher_reject_{student_user_id}_{amount}
+            data_parts = callback.data.replace("teacher_reject_", "").split("_")
+            if len(data_parts) < 2:
+                await callback.answer("❌ Ошибка: некорректные данные", show_alert=True)
+                return
+
+            student_user_id = int(data_parts[0])
+            amount = float(data_parts[1])
+            
+            from main import storage, bot
+            
+            # Получаем информацию о студенте
+            student_name = storage.get_user_name(student_user_id)
+
+            # Уведомляем студента
+            try:
+                student_message = (
+                    "❌ *Проблема с платежом*\n\n"
+                    f"💰 Сумма: {amount:.2f} руб.\n\n"
+                    f"Преподаватель не подтвердил получение денег.\n"
+                    f"Пожалуйста, проверьте:\n"
+                    f"• Правильность реквизитов\n"
+                    f"• Статус перевода в банке\n"
+                    f"• Свяжитесь с администратором\n\n"
+                    f"📞 Контакт: +79001372727"
+                )
+                
+                await bot.send_message(
+                    student_user_id,
+                    student_message,
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                logger.error(f"Не удалось отправить уведомление студенту {student_user_id}: {e}")
+
+            # Сообщение преподавателю
+            await callback.message.edit_text(
+                f"❌ *Платеж отклонен*\n\n"
+                f"👤 Ученик: {student_name}\n"
+                f"💰 Сумма: {amount:.2f} руб.\n\n"
+                f"Ученик уведомлен о проблеме с платежом.",
+                parse_mode="Markdown"
+            )
+            
+            await callback.answer("❌ Платеж отклонен")
+
+        except Exception as e:
+            logger.error(f"Ошибка отклонения платежа: {e}")
             await callback.answer("❌ Произошла ошибка", show_alert=True)
 
     @staticmethod
@@ -905,8 +1029,8 @@ class PaymentHandlers:
             await callback.answer(f"Ошибка: {str(e)}", show_alert=True)
 
     @staticmethod
-    async def _write_payment_to_sheets(user_id: int, amount: float) -> bool:
-        """Записывает платеж в Google Sheets на предмет с наименьшим балансом"""
+    async def _write_payment_to_sheets(user_id: int, amount: float, subject_id: str = None) -> bool:
+        """Записывает подтвержденный платеж в Google Sheets"""
         try:
             from main import gsheets, storage
             
@@ -914,19 +1038,18 @@ class PaymentHandlers:
                 logger.error("Google Sheets не доступен")
                 return False
 
-            # Получаем доступные предметы для ученика
-            available_subjects = storage.get_available_subjects_for_student(user_id)
-            
-            if not available_subjects:
-                logger.error(f"Нет доступных предметов для user_id {user_id}")
-                return False
-
-            # Автоматически определяем предмет с наименьшим балансом
-            subject_id = await PaymentHandlers._get_subject_with_lowest_balance(user_id, available_subjects)
-            
+            # Если subject_id не указан, определяем автоматически
             if not subject_id:
-                logger.error(f"Не удалось определить предмет для оплаты user_id {user_id}")
-                return False
+                available_subjects = storage.get_available_subjects_for_student(user_id)
+                if not available_subjects:
+                    logger.error(f"Нет доступных предметов для user_id {user_id}")
+                    return False
+                
+                # Автоматически определяем предмет с наименьшим балансом
+                subject_id = await PaymentHandlers._get_subject_with_lowest_balance(user_id, available_subjects)
+                if not subject_id:
+                    logger.error(f"Не удалось определить предмет для оплаты user_id {user_id}")
+                    return False
 
             from datetime import datetime
             current_date = datetime.now().strftime("%Y-%m-%d")
@@ -941,7 +1064,7 @@ class PaymentHandlers:
 
             headers = [str(h).strip().lower() for h in data[0]]
 
-            # Ищем финансовый столбец для текущей даты (первый из двух)
+            # Ищем финансовый столбец для текущей даты
             target_col = -1
             for i in range(245, len(headers)):
                 header = headers[i]
@@ -987,16 +1110,15 @@ class PaymentHandlers:
             user_name = storage.get_user_name(user_id)
 
             logger.info(
-                f"💰 Платеж записан в таблицу: {user_name} (ID:{user_id}), "
+                f"💰 ПОДТВЕРЖДЕННЫЙ платеж записан в таблицу: {user_name} (ID:{user_id}), "
                 f"предмет: {subject_name} (ID:{subject_id}), "
-                f"сумма: {amount:.2f} руб., дата: {formatted_date}, "
-                f"было: {current_value:.2f}, стало: {new_value:.2f}"
+                f"сумма: {amount:.2f} руб., дата: {formatted_date}"
             )
             
             return True
 
         except Exception as e:
-            logger.error(f"Ошибка записи платежа в таблицу: {e}")
+            logger.error(f"Ошибка записи подтвержденного платежа в таблицу: {e}")
             return False
 
     @staticmethod
