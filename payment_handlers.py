@@ -286,7 +286,7 @@ class PaymentHandlers:
             from datetime import datetime 
             # Получаем данные из состояния
             data = await state.get_data()
-            target_user_id = data.get('target_user_id')
+            target_user_id = data.get('target_user_id')  # ID ребенка
             subject_id = data.get('subject_id')
             amount = data.get('amount')
 
@@ -295,7 +295,7 @@ class PaymentHandlers:
                 return
 
             from main import storage, gsheets, bot
-            target_name = storage.get_user_name(target_user_id)
+            target_name = storage.get_user_name(target_user_id)  # Имя ребенка
             from config import SUBJECTS
             subject_name = SUBJECTS.get(subject_id, f"Предмет {subject_id}")
 
@@ -308,14 +308,16 @@ class PaymentHandlers:
                 teacher_id = await PaymentHandlers._find_teacher_id_by_name(self_employed_info.get('name', ''))
 
             # Сохраняем данные платежа в состоянии для подтверждения
+            # ВАЖНО: сохраняем target_user_id (ID ребенка), а не callback.from_user.id (ID родителя)
             payment_data = {
-                'target_user_id': target_user_id,
-                'target_user_name': target_name,
+                'target_user_id': target_user_id,  # ID ребенка
+                'target_user_name': target_name,   # Имя ребенка
                 'subject_id': subject_id,
                 'subject_name': subject_name,
                 'amount': amount,
                 'teacher_id': teacher_id,
                 'teacher_name': self_employed_info.get('name', ''),
+                'parent_user_id': callback.from_user.id,  # ID родителя для уведомлений
                 'created_at': datetime.now().isoformat()
             }
             
@@ -361,9 +363,10 @@ class PaymentHandlers:
             )
 
             # Уведомляем преподавателя о новом платеже
+            # Передаем target_user_id (ID ребенка), а не parent_user_id
             if teacher_id and self_employed_info:
                 await PaymentHandlers._notify_teacher_about_payment(
-                    teacher_id, target_name, subject_name, amount, callback.from_user.id
+                    teacher_id, target_name, subject_name, amount, target_user_id  # target_user_id вместо callback.from_user.id
                 )
 
             await callback.answer()
@@ -380,7 +383,7 @@ class PaymentHandlers:
             
             message = (
                 "💰 *НОВЫЙ ПЛАТЕЖ ТРЕБУЕТ ПОДТВЕРЖДЕНИЯ*\n\n"
-                f"👤 Ученик: {student_name}\n"
+                f"👤 Ученик: {student_name} (ID: {student_user_id})\n"  # Добавил ID для отладки
                 f"📚 Предмет: {subject_name}\n"
                 f"💸 Сумма: {amount:.2f} руб.\n\n"
                 "✅ *Подтвердите получение денег:*"
@@ -389,11 +392,11 @@ class PaymentHandlers:
             keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
                 [types.InlineKeyboardButton(
                     text="✅ Деньги получены",
-                    callback_data=f"teacher_confirm_{student_user_id}_{amount}"
+                    callback_data=f"teacher_confirm_{student_user_id}_{amount}"  # Используем student_user_id (ID ребенка)
                 )],
                 [types.InlineKeyboardButton(
                     text="❌ Деньги не получены", 
-                    callback_data=f"teacher_reject_{student_user_id}_{amount}"
+                    callback_data=f"teacher_reject_{student_user_id}_{amount}"  # Используем student_user_id (ID ребенка)
                 )]
             ])
 
@@ -404,7 +407,7 @@ class PaymentHandlers:
                 parse_mode="Markdown"
             )
             
-            logger.info(f"Уведомление отправлено преподавателю {teacher_id} о платеже от {student_user_id}")
+            logger.info(f"Уведомление отправлено преподавателю {teacher_id} о платеже для ученика {student_user_id} ({student_name})")
 
         except Exception as e:
             logger.error(f"Ошибка уведомления преподавателя: {e}")
@@ -422,6 +425,7 @@ class PaymentHandlers:
             student_user_id = int(data_parts[0])
             amount = float(data_parts[1])
             teacher_user_id = callback.from_user.id
+            
             from main import storage, gsheets, bot
             
             # Получаем информацию о студенте
@@ -435,16 +439,13 @@ class PaymentHandlers:
                 await callback.answer("❌ Не удалось определить предмет для оплаты", show_alert=True)
                 return
 
-            # Записываем платеж в таблицу
-            # success = await PaymentHandlers._write_payment_to_sheets(
-            #     student_user_id, amount, subject_id
-            # )
-            success = all([
-                await PaymentHandlers._write_payment_to_sheets(student_user_id, amount, subject_id),
-                await PaymentHandlers._write_teacher_payment_to_sheets(teacher_user_id, amount)
-            ])
+            # ЗАПИСЫВАЕМ ПЛАТЕЖ ДЛЯ УЧЕНИКА (студента)
+            success_student = await PaymentHandlers._write_payment_to_sheets(student_user_id, amount, subject_id)
             
-            if success:
+            # ЗАПИСЫВАЕМ ЗАРПЛАТУ ДЛЯ ПРЕПОДАВАТЕЛЯ
+            success_teacher = await PaymentHandlers._write_teacher_payment_to_sheets(teacher_user_id, amount)
+            
+            if success_student and success_teacher:
                 # Уведомляем студента
                 try:
                     student_message = (
