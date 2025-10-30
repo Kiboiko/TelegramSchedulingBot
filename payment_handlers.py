@@ -3,6 +3,7 @@ import os
 import sqlite3
 import uuid
 from aiogram import types
+import traceback
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -303,7 +304,16 @@ class PaymentHandlers:
             self_employed_info = {}
             teacher_id = None
             if gsheets:
-                self_employed_info = gsheets.get_self_employed_with_lowest_balance()
+                self_employed_info = gsheets.get_self_employed_with_lowest_balance(amount)
+                if self_employed_info and self_employed_info.get('remaining_limit', 0) < amount:
+                    await callback.answer(
+                        f"❌ Превышен лимит самозанятого!\n"
+                        f"Доступно: {self_employed_info.get('remaining_limit', 0):.2f} руб.\n"
+                        f"Требуется: {amount:.2f} руб.\n\n"
+                        f"Пожалуйста, выберите другого преподавателя или уменьшите сумму.",
+                        show_alert=True
+                    )
+                    return
                 # Ищем ID преподавателя по имени
                 teacher_id = await PaymentHandlers._find_teacher_id_by_name(self_employed_info.get('name', ''))
 
@@ -366,7 +376,7 @@ class PaymentHandlers:
             # Передаем target_user_id (ID ребенка), а не parent_user_id
             if teacher_id and self_employed_info:
                 await PaymentHandlers._notify_teacher_about_payment(
-                    teacher_id, target_name, subject_name, amount, target_user_id  # target_user_id вместо callback.from_user.id
+                    teacher_id, target_name, subject_name, amount, target_user_id, callback.from_user.id  # Добавляем parent_user_id
                 )
 
             await callback.answer()
@@ -376,14 +386,14 @@ class PaymentHandlers:
             await callback.answer("❌ Произошла ошибка", show_alert=True)
 
     @staticmethod
-    async def _notify_teacher_about_payment(teacher_id: int, student_name: str, subject_name: str, amount: float, student_user_id: int):
+    async def _notify_teacher_about_payment(teacher_id: int, student_name: str, subject_name: str, amount: float, student_user_id: int, parent_user_id: int):
         """Уведомляет преподавателя о новом платеже, требующем подтверждения"""
         try:
             from main import bot
             
             message = (
                 "💰 *НОВЫЙ ПЛАТЕЖ ТРЕБУЕТ ПОДТВЕРЖДЕНИЯ*\n\n"
-                f"👤 Ученик: {student_name} (ID: {student_user_id})\n"  # Добавил ID для отладки
+                f"👤 Ученик: {student_name} (ID: {student_user_id})\n"
                 f"📚 Предмет: {subject_name}\n"
                 f"💸 Сумма: {amount:.2f} руб.\n\n"
                 "✅ *Подтвердите получение денег:*"
@@ -392,11 +402,11 @@ class PaymentHandlers:
             keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
                 [types.InlineKeyboardButton(
                     text="✅ Деньги получены",
-                    callback_data=f"teacher_confirm_{student_user_id}_{amount}"  # Используем student_user_id (ID ребенка)
+                    callback_data=f"teacher_confirm_{student_user_id}_{amount}_{parent_user_id}"
                 )],
                 [types.InlineKeyboardButton(
                     text="❌ Деньги не получены", 
-                    callback_data=f"teacher_reject_{student_user_id}_{amount}"  # Используем student_user_id (ID ребенка)
+                    callback_data=f"teacher_reject_{student_user_id}_{amount}_{parent_user_id}"
                 )]
             ])
 
@@ -407,7 +417,7 @@ class PaymentHandlers:
                 parse_mode="Markdown"
             )
             
-            logger.info(f"Уведомление отправлено преподавателю {teacher_id} о платеже для ученика {student_user_id} ({student_name})")
+            logger.info(f"Уведомление отправлено преподавателю {teacher_id} о платеже для ученика {student_user_id} ({student_name}) от родителя {parent_user_id}")
 
         except Exception as e:
             logger.error(f"Ошибка уведомления преподавателя: {e}")
@@ -416,21 +426,61 @@ class PaymentHandlers:
     async def handle_teacher_payment_confirmation(callback: types.CallbackQuery):
         """Обработка подтверждения платежа преподавателем"""
         try:
-            # Извлекаем данные из callback_data: teacher_confirm_{student_user_id}_{amount}
-            data_parts = callback.data.replace("teacher_confirm_", "").split("_")
-            if len(data_parts) < 2:
-                await callback.answer("❌ Ошибка: некорректные данные", show_alert=True)
+            # Извлекаем данные из callback_data: teacher_confirm_{student_user_id}_{amount}_{parent_user_id}
+            data_str = callback.data.replace("teacher_confirm_", "")
+            logger.info(f"Получены данные для подтверждения: {data_str}")
+            
+            # Разбиваем по символу подчеркивания
+            parts = data_str.split('_')
+            logger.info(f"Разбитые части: {parts}")
+            
+            # Должно быть минимум 3 части: student_id, amount, parent_id
+            if len(parts) < 3:
+                await callback.answer("❌ Ошибка: некорректные данные (мало частей)", show_alert=True)
                 return
 
-            student_user_id = int(data_parts[0])
-            amount = float(data_parts[1])
+            # Первая часть - student_user_id
+            student_user_id = int(parts[0])
+            
+            # Вторая часть - amount (может содержать точку для дробных чисел)
+            amount_str = parts[1]
+            # Если есть третья часть и вторая часть содержит точку, объединяем
+            if len(parts) > 2 and '.' in amount_str:
+                # Ищем где заканчивается число с точкой
+                amount_parts = []
+                for i, part in enumerate(parts[1:], start=1):
+                    amount_parts.append(part)
+                    if '.' in part:
+                        break
+                amount_str = '_'.join(amount_parts)
+                # Оставшиеся части - это parent_id
+                parent_user_id = int(parts[len(amount_parts) + 1])
+            else:
+                # Обычный случай без дробей
+                amount_str = parts[1]
+                parent_user_id = int(parts[2])
+            
+            # Преобразуем amount в число
+            try:
+                amount = float(amount_str.replace(',', '.'))
+            except ValueError as e:
+                logger.error(f"Ошибка преобразования суммы '{amount_str}': {e}")
+                await callback.answer("❌ Ошибка: некорректная сумма", show_alert=True)
+                return
+
             teacher_user_id = callback.from_user.id
             
             from main import storage, gsheets, bot
             
-            # Получаем информацию о студенте
+            # Получаем информацию о студенте и родителе
             student_name = storage.get_user_name(student_user_id)
+            parent_name = storage.get_user_name(parent_user_id)
             
+            # Получаем имя преподавателя для обновления выплат
+            teacher_name = storage.get_user_name(teacher_user_id)
+            
+            logger.info(f"Обработка подтверждения: student_id={student_user_id}, amount={amount}, parent_id={parent_user_id}, teacher_id={teacher_user_id}")
+
             # Автоматически определяем предмет с наименьшим балансом
             available_subjects = storage.get_available_subjects_for_student(student_user_id)
             subject_id = await PaymentHandlers._get_subject_with_lowest_balance(student_user_id, available_subjects)
@@ -439,37 +489,64 @@ class PaymentHandlers:
                 await callback.answer("❌ Не удалось определить предмет для оплаты", show_alert=True)
                 return
 
-            # ЗАПИСЫВАЕМ ПЛАТЕЖ ДЛЯ УЧЕНИКА (студента)
+            # Записываем платеж в таблицу для СТУДЕНТА
             success_student = await PaymentHandlers._write_payment_to_sheets(student_user_id, amount, subject_id)
             
-            # ЗАПИСЫВАЕМ ЗАРПЛАТУ ДЛЯ ПРЕПОДАВАТЕЛЯ
+            # Записываем зарплату для преподавателя
             success_teacher = await PaymentHandlers._write_teacher_payment_to_sheets(teacher_user_id, amount)
             
+            # ОБНОВЛЯЕМ ВЫПЛАТЫ ДЛЯ САМОЗАНЯТОГО
+            success_payment_update = False
+            if gsheets and teacher_name:
+                success_payment_update = gsheets.update_self_employed_payment(teacher_name, amount)
+                if success_payment_update:
+                    logger.info(f"Успешно обновлены выплаты для самозанятого {teacher_name}")
+                else:
+                    logger.error(f"Ошибка обновления выплат для самозанятого {teacher_name}")
+            
             if success_student and success_teacher:
-                # Уведомляем студента
+                # Уведомляем РОДИТЕЛЯ (а не ученика)
                 try:
-                    student_message = (
+                    from config import SUBJECTS
+                    subject_name = SUBJECTS.get(subject_id, f"Предмет {subject_id}")
+                    
+                    parent_message = (
                         "✅ *Платеж подтвержден преподавателем!*\n\n"
+                        f"👤 Для ребенка: {student_name}\n"
+                        f"📚 Предмет: {subject_name}\n"
                         f"💰 Сумма: {amount:.2f} руб.\n"
-                        f"📊 Деньги зачислены на ваш баланс!\n"
+                        f"📊 Деньги зачислены на баланс ребенка!\n"
                         f"🎉 Услуга активирована!"
                     )
                     
                     await bot.send_message(
-                        student_user_id,
-                        student_message,
+                        parent_user_id,  # Отправляем родителю, а не ученику
+                        parent_message,
                         parse_mode="Markdown"
                     )
+                    logger.info(f"Уведомление о подтверждении платежа отправлено родителю {parent_user_id}")
+                    
                 except Exception as e:
-                    logger.error(f"Не удалось отправить уведомление студенту {student_user_id}: {e}")
+                    logger.error(f"Не удалось отправить уведомление родителю {parent_user_id}: {e}")
 
                 # Сообщение преподавателю
-                await callback.message.edit_text(
+                confirmation_message = (
                     f"✅ *Платеж подтвержден!*\n\n"
                     f"👤 Ученик: {student_name}\n"
+                    f"👨‍👩‍👧‍👦 Родитель: {parent_name}\n"
                     f"💰 Сумма: {amount:.2f} руб.\n"
-                    f"📊 Деньги записаны в таблицу\n\n"
-                    f"Ученик уведомлен о пополнении баланса.",
+                    f"📊 Деньги записаны в таблицу\n"
+                )
+                
+                if success_payment_update:
+                    confirmation_message += f"💰 Выплата {amount:.2f} руб. добавлена к вашему балансу\n\n"
+                else:
+                    confirmation_message += f"⚠️ Ошибка обновления выплат (сообщите администратору)\n\n"
+                    
+                confirmation_message += f"Родитель уведомлен о пополнении баланса."
+
+                await callback.message.edit_text(
+                    confirmation_message,
                     parse_mode="Markdown"
                 )
                 
@@ -479,30 +556,68 @@ class PaymentHandlers:
 
         except Exception as e:
             logger.error(f"Ошибка подтверждения платежа преподавателем: {e}")
-            await callback.answer("❌ Произошла ошибка", show_alert=True)
+            logger.error(f"Трассировка: {traceback.format_exc()}")
+            await callback.answer("❌ Произошла ошибка при подтверждении платежа", show_alert=True)
 
     @staticmethod
     async def handle_teacher_payment_rejection(callback: types.CallbackQuery):
         """Обработка отклонения платежа преподавателем"""
         try:
-            # Извлекаем данные из callback_data: teacher_reject_{student_user_id}_{amount}
-            data_parts = callback.data.replace("teacher_reject_", "").split("_")
-            if len(data_parts) < 2:
-                await callback.answer("❌ Ошибка: некорректные данные", show_alert=True)
+            # Извлекаем данные из callback_data: teacher_reject_{student_user_id}_{amount}_{parent_user_id}
+            data_str = callback.data.replace("teacher_reject_", "")
+            logger.info(f"Получены данные для отклонения: {data_str}")
+            
+            # Разбиваем по символу подчеркивания
+            parts = data_str.split('_')
+            logger.info(f"Разбитые части: {parts}")
+            
+            # Должно быть минимум 3 части: student_id, amount, parent_id
+            if len(parts) < 3:
+                await callback.answer("❌ Ошибка: некорректные данные (мало частей)", show_alert=True)
                 return
 
-            student_user_id = int(data_parts[0])
-            amount = float(data_parts[1])
+            # Первая часть - student_user_id
+            student_user_id = int(parts[0])
+            
+            # Вторая часть - amount (может содержать точку для дробных чисел)
+            amount_str = parts[1]
+            # Если есть третья часть и вторая часть содержит точку, объединяем
+            if len(parts) > 2 and '.' in amount_str:
+                # Ищем где заканчивается число с точкой
+                amount_parts = []
+                for i, part in enumerate(parts[1:], start=1):
+                    amount_parts.append(part)
+                    if '.' in part:
+                        break
+                amount_str = '_'.join(amount_parts)
+                # Оставшиеся части - это parent_id
+                parent_user_id = int(parts[len(amount_parts) + 1])
+            else:
+                # Обычный случай без дробей
+                amount_str = parts[1]
+                parent_user_id = int(parts[2])
+            
+            # Преобразуем amount в число
+            try:
+                amount = float(amount_str.replace(',', '.'))
+            except ValueError as e:
+                logger.error(f"Ошибка преобразования суммы '{amount_str}': {e}")
+                await callback.answer("❌ Ошибка: некорректная сумма", show_alert=True)
+                return
             
             from main import storage, bot
             
-            # Получаем информацию о студенте
+            # Получаем информацию о студенте и родителе
             student_name = storage.get_user_name(student_user_id)
+            parent_name = storage.get_user_name(parent_user_id)
 
-            # Уведомляем студента
+            logger.info(f"Обработка отклонения: student_id={student_user_id}, amount={amount}, parent_id={parent_user_id}")
+
+            # Уведомляем РОДИТЕЛЯ (а не ученика)
             try:
-                student_message = (
+                parent_message = (
                     "❌ *Проблема с платежом*\n\n"
+                    f"👤 Для ребенка: {student_name}\n"
                     f"💰 Сумма: {amount:.2f} руб.\n\n"
                     f"Преподаватель не подтвердил получение денег.\n"
                     f"Пожалуйста, проверьте:\n"
@@ -513,19 +628,22 @@ class PaymentHandlers:
                 )
                 
                 await bot.send_message(
-                    student_user_id,
-                    student_message,
+                    parent_user_id,  # Отправляем родителю, а не ученику
+                    parent_message,
                     parse_mode="Markdown"
                 )
+                logger.info(f"Уведомление об отклонении платежа отправлено родителю {parent_user_id}")
+                
             except Exception as e:
-                logger.error(f"Не удалось отправить уведомление студенту {student_user_id}: {e}")
+                logger.error(f"Не удалось отправить уведомление родителю {parent_user_id}: {e}")
 
             # Сообщение преподавателю
             await callback.message.edit_text(
                 f"❌ *Платеж отклонен*\n\n"
                 f"👤 Ученик: {student_name}\n"
+                f"👨‍👩‍👧‍👦 Родитель: {parent_name}\n"
                 f"💰 Сумма: {amount:.2f} руб.\n\n"
-                f"Ученик уведомлен о проблеме с платежом.",
+                f"Родитель уведомлен о проблеме с платежом.",
                 parse_mode="Markdown"
             )
             
@@ -533,7 +651,8 @@ class PaymentHandlers:
 
         except Exception as e:
             logger.error(f"Ошибка отклонения платежа: {e}")
-            await callback.answer("❌ Произошла ошибка", show_alert=True)
+            logger.error(f"Трассировка: {traceback.format_exc()}")
+            await callback.answer("❌ Произошла ошибка при отклонении платежа", show_alert=True)
 
     @staticmethod
     async def handle_debug_self_employed(callback: types.CallbackQuery):
@@ -544,7 +663,7 @@ class PaymentHandlers:
                 await callback.answer("❌ Google Sheets не доступен", show_alert=True)
                 return
 
-            self_employed_info = gsheets.get_self_employed_with_lowest_balance()
+            self_employed_info = gsheets.get_self_employed_with_lowest_balance(0)
 
             if not self_employed_info:
                 await callback.answer("❌ Нет данных самозанятых", show_alert=True)
@@ -1284,7 +1403,7 @@ class PaymentHandlers:
             # Ищем самозанятого с наименьшим балансом для уведомления
             self_employed_info = {}
             if gsheets:
-                self_employed_info = gsheets.get_self_employed_with_lowest_balance()
+                self_employed_info = gsheets.get_self_employed_with_lowest_balance(amount)
 
             # Формируем сообщение для пользователя
             user_message = (

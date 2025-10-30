@@ -1698,8 +1698,8 @@ class GoogleSheetsManager:
             logger.error(f"Ошибка получения баланса по предметам для student_id {student_id}: {e}")
             return {}
 
-    def get_self_employed_with_lowest_balance(self) -> Dict[str, any]:
-        """Находит самозанятого преподавателя с наименьшим балансом"""
+    def get_self_employed_with_lowest_balance(self,money:float) -> Dict[str, any]:
+        """Находит самозанятого преподавателя с наименьшим балансом, учитывая лимиты"""
         try:
             # Используем кэш
             cache_key = "self_employed_lowest_balance"
@@ -1707,7 +1707,7 @@ class GoogleSheetsManager:
             if cached_result:
                 return cached_result
 
-            logger.info("=== ПОИСК САМОЗАНЯТОГО С НАИМЕНЬШИМ БАЛАНСОМ ===")
+            logger.info("=== ПОИСК САМОЗАНЯТОГО С НАИМЕНЬШИМ БАЛАНСОМ (С УЧЕТОМ ЛИМИТОВ) ===")
 
             # Получаем список самозанятых
             self_employed_worksheet = self._get_or_create_worksheet("Самозанятые бот")
@@ -1729,16 +1729,42 @@ class GoogleSheetsManager:
                 logger.warning("В листе 'Преподаватели бот' нет данных")
                 return {}
 
-            # Собираем имена самозанятых
-            self_employed_names = []
+            # Собираем имена самозанятых и их лимиты
+            self_employed_info = {}
             logger.info("Самозанятые в таблице:")
             for row in self_employed_data[1:]:  # Пропускаем заголовок
                 if len(row) > 0 and row[0].strip():
                     name = row[0].strip()
-                    self_employed_names.append(name.lower())
-                    logger.info(f"  - {name}")
+                    
+                    # Получаем лимит (столбец E, индекс 4)
+                    monthly_limit = 0
+                    if len(row) > 4 and row[4].strip():
+                        try:
+                            monthly_limit = float(row[4].strip().replace(',', '.'))
+                        except ValueError:
+                            logger.warning(f"Некорректный лимит для {name}: '{row[4]}'")
+                            monthly_limit = 0
+                    
+                    # Получаем выплачено (столбец F, индекс 5)
+                    paid_amount = 0
+                    if len(row) > 5 and row[5].strip():
+                        try:
+                            paid_amount = float(row[5].strip().replace(',', '.'))
+                        except ValueError:
+                            logger.warning(f"Некорректное значение выплачено для {name}: '{row[5]}'")
+                            paid_amount = 0
+                    
+                    self_employed_info[name.lower()] = {
+                        'name': name,
+                        'monthly_limit': monthly_limit,
+                        'paid_amount': paid_amount,
+                        'remaining_limit': monthly_limit - paid_amount,
+                        'row_data': row  # Сохраняем всю строку для обновления
+                    }
+                    
+                    logger.info(f"  - {name}: лимит={monthly_limit}, выплачено={paid_amount}, остаток={monthly_limit - paid_amount}")
 
-            if not self_employed_names:
+            if not self_employed_info:
                 logger.warning("Не найдено имен самозанятых")
                 return {}
 
@@ -1777,9 +1803,12 @@ class GoogleSheetsManager:
                 name_lower = name.lower()
 
                 # Проверяем, есть ли этот преподаватель в списке самозанятых
-                if name_lower not in self_employed_names:
+                if name_lower not in self_employed_info:
                     continue
 
+                # Получаем информацию о лимитах
+                emp_info = self_employed_info[name_lower]
+                
                 # Парсим баланс (берем модуль значения)
                 balance_str = row[balance_col_index] if len(row) > balance_col_index else "0"
                 try:
@@ -1788,12 +1817,15 @@ class GoogleSheetsManager:
                     # Берем модуль значения
                     balance_abs = balance_value
 
-                    logger.info(f"  - Найден: {name}, баланс: {balance_abs:.2f} (оригинал: {balance_value:.2f})")
+                    logger.info(f"  - Найден: {name}, баланс: {balance_abs:.2f} (оригинал: {balance_value:.2f}), остаток лимита: {emp_info['remaining_limit']:.2f}")
 
                     self_employed_list.append({
                         'name': name,
                         'balance': balance_abs,  # Используем только для внутренней сортировки
                         'original_balance': balance_value,
+                        'monthly_limit': emp_info['monthly_limit'],
+                        'paid_amount': emp_info['paid_amount'],
+                        'remaining_limit': emp_info['remaining_limit'],
                         'row_data': row
                     })
 
@@ -1805,21 +1837,36 @@ class GoogleSheetsManager:
                 logger.info("Не найдено самозанятых с балансами в листе преподавателей")
                 return {}
 
-            # Находим самозанятого с наименьшим балансом
-            lowest_balance_person = min(self_employed_list, key=lambda x: x['balance'])
+            # Фильтруем самозанятых с положительным остатком лимита
+            available_self_employed = [emp for emp in self_employed_list if emp['remaining_limit'] - money > 0]
+            
+            if not available_self_employed:
+                logger.warning("Нет самозанятых с доступным лимитом")
+                return {}
+
+            # Находим самозанятого с наименьшим балансом среди доступных
+            lowest_balance_person = min(available_self_employed, key=lambda x: x['balance'])
             logger.info(
-                f"Самозанятый с наименьшим балансом: {lowest_balance_person['name']} - {lowest_balance_person['balance']:.2f} руб.")
+                f"Самозанятый с наименьшим балансом: {lowest_balance_person['name']} - "
+                f"{lowest_balance_person['balance']:.2f} руб., "
+                f"остаток лимита: {lowest_balance_person['remaining_limit']:.2f} руб."
+            )
 
             # Получаем дополнительные данные из листа самозанятых
             result = self._extract_self_employed_details(lowest_balance_person['name'], self_employed_data)
-            # НЕ включаем баланс в результат - пользователю не нужно его видеть
-            # result.update({
-            #     'balance': lowest_balance_person['balance'],
-            #     'original_balance': lowest_balance_person['original_balance']
-            # })
+            
+            # Добавляем информацию о лимитах
+            result.update({
+                'monthly_limit': lowest_balance_person['monthly_limit'],
+                'paid_amount': lowest_balance_person['paid_amount'],
+                'remaining_limit': lowest_balance_person['remaining_limit']
+            })
 
             logger.info(
-                f"Данные для перевода: карта={result.get('card_number', 'нет')}, телефон={result.get('phone', 'нет')}, банк={result.get('bank', 'нет')}")
+                f"Данные для перевода: карта={result.get('card_number', 'нет')}, "
+                f"телефон={result.get('phone', 'нет')}, банк={result.get('bank', 'нет')}, "
+                f"остаток лимита={result.get('remaining_limit', 0):.2f}"
+            )
 
             self._set_cached_data(cache_key, result)
             return result
@@ -1827,7 +1874,7 @@ class GoogleSheetsManager:
         except Exception as e:
             logger.error(f"Ошибка поиска самозанятого с наименьшим балансом: {e}")
             return {}
-
+    
     def _parse_balance_from_cell(self, balance_str: str) -> float:
         """Парсит значение баланса из ячейки, может содержать формулы"""
         try:
@@ -1872,13 +1919,33 @@ class GoogleSheetsManager:
                 row_name = row[0].strip() if row[0] else ""
                 if row_name.lower() == target_name_lower:
                     # Нашли совпадение - извлекаем данные
-                    # Структура: A-Имя, B-Телефон, C-Карта, D-Банк
+                    # Структура: A-Имя, B-Телефон, C-Карта, D-Банк, E-Лимит, F-Выплачено
                     details = {
                         'name': row_name,
                         'phone': row[1] if len(row) > 1 and row[1] else "",
                         'card_number': row[2] if len(row) > 2 and row[2] else "",
                         'bank': row[3] if len(row) > 3 and row[3] else "",
+                        'monthly_limit': 0,
+                        'paid_amount': 0,
+                        'remaining_limit': 0
                     }
+
+                    # Получаем лимит (столбец E)
+                    if len(row) > 4 and row[4]:
+                        try:
+                            details['monthly_limit'] = float(row[4].strip().replace(',', '.'))
+                        except ValueError:
+                            logger.warning(f"Некорректный лимит для {name}: '{row[4]}'")
+
+                    # Получаем выплачено (столбец F)
+                    if len(row) > 5 and row[5]:
+                        try:
+                            details['paid_amount'] = float(row[5].strip().replace(',', '.'))
+                        except ValueError:
+                            logger.warning(f"Некорректное значение выплачено для {name}: '{row[5]}'")
+
+                    # Вычисляем остаток лимита
+                    details['remaining_limit'] = details['monthly_limit'] - details['paid_amount']
 
                     # Очищаем данные
                     for key in ['phone', 'card_number', 'bank']:
@@ -1888,7 +1955,12 @@ class GoogleSheetsManager:
                     # Проверяем, есть ли хоть какие-то контактные данные
                     has_contact = bool(details['phone'] or details['card_number'])
                     logger.info(
-                        f"Найдены данные в строке {i}: телефон='{details['phone']}', карта='{details['card_number']}', банк='{details['bank']}', есть_контакты={has_contact}")
+                        f"Найдены данные в строке {i}: "
+                        f"телефон='{details['phone']}', карта='{details['card_number']}', "
+                        f"банк='{details['bank']}', лимит={details['monthly_limit']:.2f}, "
+                        f"выплачено={details['paid_amount']:.2f}, остаток={details['remaining_limit']:.2f}, "
+                        f"есть_контакты={has_contact}"
+                    )
 
                     return details
 
@@ -1898,7 +1970,10 @@ class GoogleSheetsManager:
                 'name': name,
                 'phone': '',
                 'card_number': '',
-                'bank': ''
+                'bank': '',
+                'monthly_limit': 0,
+                'paid_amount': 0,
+                'remaining_limit': 0
             }
 
         except Exception as e:
@@ -1907,7 +1982,10 @@ class GoogleSheetsManager:
                 'name': name,
                 'phone': '',
                 'card_number': '',
-                'bank': ''
+                'bank': '',
+                'monthly_limit': 0,
+                'paid_amount': 0,
+                'remaining_limit': 0
             }
 
     def debug_self_employed_structure(self):
@@ -1950,3 +2028,51 @@ class GoogleSheetsManager:
 
         except Exception as e:
             logger.error(f"Ошибка при отладке структуры: {e}")
+
+    def update_self_employed_payment(self, teacher_name: str, amount: float) -> bool:
+        """Обновляет столбец 'Выплачено' для самозанятого преподавателя"""
+        try:
+            worksheet = self._get_or_create_worksheet("Самозанятые бот")
+            data = worksheet.get_all_values()
+            
+            if len(data) < 2:
+                logger.error("В листе 'Самозанятые бот' нет данных")
+                return False
+
+            # Ищем строку преподавателя
+            target_row = -1
+            for row_idx, row in enumerate(data[1:], start=2):  # Пропускаем заголовок
+                if len(row) > 0 and row[0].strip().lower() == teacher_name.lower():
+                    target_row = row_idx
+                    break
+
+            if target_row == -1:
+                logger.error(f"Не найдена строка для самозанятого: {teacher_name}")
+                return False
+
+            # Столбец F (индекс 5) - "Выплачено"
+            paid_col_index = 5
+            
+            # Получаем текущее значение выплачено
+            current_paid = 0.0
+            if len(data[target_row - 1]) > paid_col_index and data[target_row - 1][paid_col_index]:
+                try:
+                    current_paid_str = data[target_row - 1][paid_col_index].replace(',', '.').strip()
+                    current_paid_str = current_paid_str.replace('\xa0', '').replace(' ', '')
+                    current_paid = float(current_paid_str) if current_paid_str else 0.0
+                except ValueError as e:
+                    logger.warning(f"Ошибка преобразования текущего выплачено для {teacher_name}: {e}")
+                    current_paid = 0.0
+
+            # Вычисляем новое значение
+            new_paid = current_paid + amount
+            
+            # Обновляем ячейку
+            worksheet.update_cell(target_row, paid_col_index + 1, f"{new_paid:.2f}")
+            
+            logger.info(f"Обновлены выплаты для {teacher_name}: было {current_paid:.2f}, стало {new_paid:.2f}, добавлено {amount:.2f}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Ошибка обновления выплат для самозанятого {teacher_name}: {e}")
+            return False
