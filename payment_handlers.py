@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 import logging
 from typing import List, Dict
 from config import ADMIN_IDS
+from datetime import datetime
 logger = logging.getLogger(__name__)
 
 load_dotenv()
@@ -23,6 +24,7 @@ Configuration.secret_key = os.getenv("YOOKASSA_SECRET_KEY")
 class PaymentStates(StatesGroup):
     WAITING_AMOUNT = State()
     CONFIRM_PAYMENT = State()
+    WAITING_RECEIPT = State()
 
 
 # Инициализация базы данных платежей
@@ -283,7 +285,7 @@ class PaymentHandlers:
     async def handle_direct_transfer(callback: types.CallbackQuery, state: FSMContext):
         """Обработка выбора прямого перевода с ожиданием подтверждения от преподавателя"""
         try:
-            from datetime import datetime 
+            from datetime import datetime
             # Получаем данные из состояния
             data = await state.get_data()
             target_user_id = data.get('target_user_id')  # ID ребенка
@@ -308,10 +310,9 @@ class PaymentHandlers:
                 teacher_id = await PaymentHandlers._find_teacher_id_by_name(self_employed_info.get('name', ''))
 
             # Сохраняем данные платежа в состоянии для подтверждения
-            # ВАЖНО: сохраняем target_user_id (ID ребенка), а не callback.from_user.id (ID родителя)
             payment_data = {
                 'target_user_id': target_user_id,  # ID ребенка
-                'target_user_name': target_name,   # Имя ребенка
+                'target_user_name': target_name,  # Имя ребенка
                 'subject_id': subject_id,
                 'subject_name': subject_name,
                 'amount': amount,
@@ -320,7 +321,7 @@ class PaymentHandlers:
                 'parent_user_id': callback.from_user.id,  # ID родителя для уведомлений
                 'created_at': datetime.now().isoformat()
             }
-            
+
             await state.update_data(payment_data=payment_data)
 
             # Формируем сообщение для пользователя
@@ -337,8 +338,10 @@ class PaymentHandlers:
             message_text += (
                 "📋 *Инструкции:*\n"
                 "1. Переведите деньги преподавателю\n"
-                "2. Преподаватель подтвердит получение\n"
-                "3. После подтверждения баланс будет пополнен\n\n"
+                "2. 📸 Сделайте скриншот или фото чека перевода\n"
+                "3. Отправьте чек в этот чат\n"
+                "4. Преподаватель подтвердит получение\n"
+                "5. После подтверждения баланс будет пополнен\n\n"
                 "⏳ Ожидайте подтверждения от преподавателя"
             )
 
@@ -362,12 +365,8 @@ class PaymentHandlers:
                 parse_mode="Markdown"
             )
 
-            # Уведомляем преподавателя о новом платеже
-            # Передаем target_user_id (ID ребенка), а не parent_user_id
-            if teacher_id and self_employed_info:
-                await PaymentHandlers._notify_teacher_about_payment(
-                    teacher_id, target_name, subject_name, amount, target_user_id  # target_user_id вместо callback.from_user.id
-                )
+            # Переходим в состояние ожидания чека
+            await state.set_state(PaymentStates.WAITING_RECEIPT)
 
             await callback.answer()
 
@@ -376,14 +375,168 @@ class PaymentHandlers:
             await callback.answer("❌ Произошла ошибка", show_alert=True)
 
     @staticmethod
-    async def _notify_teacher_about_payment(teacher_id: int, student_name: str, subject_name: str, amount: float, student_user_id: int):
+    async def handle_receipt_upload(message: types.Message, state: FSMContext):
+        """Обрабатывает загрузку чека перевода"""
+        try:
+            # Проверяем, что сообщение содержит документ или фото
+            if not (message.photo or message.document):
+                await message.answer(
+                    "❌ Пожалуйста, отправьте скриншот или фото чека перевода.\n"
+                    "📸 Сделайте скриншот из приложения банка или сфотографируйте чек."
+                )
+                return
+
+            # Получаем данные платежа из состояния
+            data = await state.get_data()
+            payment_data = data.get('payment_data', {})
+
+            if not payment_data:
+                await message.answer("❌ Ошибка: данные платежа не найдены")
+                await state.clear()
+                return
+
+            # Получаем информацию о файле
+            file_id = None
+            file_type = None
+
+            if message.photo:
+                file_id = message.photo[-1].file_id
+                file_type = "photo"
+            elif message.document:
+                file_id = message.document.file_id
+                file_type = "document"
+
+            if not file_id:
+                await message.answer("❌ Не удалось получить файл")
+                return
+
+            # Уведомляем пользователя
+            await message.answer("✅ Чек получен! Отправляем уведомление преподавателю...")
+
+            # Уведомляем преподавателя о новом платеже с чеком
+            teacher_id = payment_data.get('teacher_id')
+            if teacher_id:
+                await PaymentHandlers._notify_teacher_about_payment_with_receipt(
+                    teacher_id,
+                    payment_data['target_user_name'],
+                    payment_data['subject_name'],
+                    payment_data['amount'],
+                    payment_data['target_user_id'],
+                    file_id,
+                    file_type
+                )
+
+                await message.answer("✅ Чек отправлен преподавателю. Ожидайте подтверждения.")
+            else:
+                await message.answer("⚠️ Преподаватель не найден. Обратитесь к администратору.")
+
+            # Очищаем состояние
+            await state.clear()
+
+        except Exception as e:
+            logger.error(f"Ошибка обработки чека: {e}")
+            await message.answer("❌ Произошла ошибка при обработке чека")
+            await state.clear()
+
+    @staticmethod
+    async def _notify_teacher_about_payment_with_receipt(teacher_id: int, student_name: str, subject_name: str,
+                                                         amount: float, student_user_id: int, file_id: str,
+                                                         file_type: str):
+        """Уведомляет преподавателя о новом платеже с чеком"""
+        try:
+            from main import bot
+
+            message = (
+                "💰 *НОВЫЙ ПЛАТЕЖ С ЧЕКОМ ТРЕБУЕТ ПОДТВЕРЖДЕНИЯ*\n\n"
+                f"👤 Ученик: {student_name} (ID: {student_user_id})\n"
+                f"📚 Предмет: {subject_name}\n"
+                f"💸 Сумма: {amount:.2f} руб.\n\n"
+                "📎 Чек перевода прикреплен ниже\n\n"
+                "✅ *Подтвердите получение денег:*"
+            )
+
+            keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(
+                    text="✅ Деньги получены",
+                    callback_data=f"teacher_confirm_{student_user_id}_{amount}"
+                )],
+                [types.InlineKeyboardButton(
+                    text="❌ Деньги не получены",
+                    callback_data=f"teacher_reject_{student_user_id}_{amount}"
+                )]
+            ])
+
+            # Отправляем сообщение с чеком
+            if file_type == "photo":
+                await bot.send_photo(
+                    teacher_id,
+                    file_id,
+                    caption=message,
+                    reply_markup=keyboard,
+                    parse_mode="Markdown"
+                )
+            else:  # document
+                await bot.send_document(
+                    teacher_id,
+                    file_id,
+                    caption=message,
+                    reply_markup=keyboard,
+                    parse_mode="Markdown"
+                )
+
+            logger.info(f"Уведомление с чеком отправлено преподавателю {teacher_id}")
+
+        except Exception as e:
+            logger.error(f"Ошибка уведомления преподавателя с чеком: {e}")
+
+    @staticmethod
+    async def _notify_admin_about_payment_with_receipt(payment_data: dict, file_id: str, file_type: str):
+        """Уведомляет администратора о платеже с чеком (если преподаватель не найден)"""
+        try:
+            from main import bot
+
+            message = (
+                "💰 *ПЛАТЕЖ С ЧЕКОМ - ПРЕПОДАВАТЕЛЬ НЕ НАЙДЕН*\n\n"
+                f"👤 Ученик: {payment_data['target_user_name']} (ID: {payment_data['target_user_id']})\n"
+                f"👨‍👩‍👧‍👦 Родитель: {payment_data.get('parent_user_name', 'Не указан')} (ID: {payment_data['parent_user_id']})\n"
+                f"📚 Предмет: {payment_data['subject_name']}\n"
+                f"💸 Сумма: {payment_data['amount']:.2f} руб.\n\n"
+                "⚠️ Требуется ручная обработка платежа!"
+            )
+
+            # Отправляем администраторам
+            for admin_id in ADMIN_IDS:
+                try:
+                    if file_type == "photo":
+                        await bot.send_photo(
+                            admin_id,
+                            file_id,
+                            caption=message,
+                            parse_mode="Markdown"
+                        )
+                    else:
+                        await bot.send_document(
+                            admin_id,
+                            file_id,
+                            caption=message,
+                            parse_mode="Markdown"
+                        )
+                except Exception as e:
+                    logger.error(f"Ошибка отправки уведомления администратору {admin_id}: {e}")
+
+        except Exception as e:
+            logger.error(f"Ошибка уведомления администратора: {e}")
+
+    @staticmethod
+    async def _notify_teacher_about_payment(teacher_id: int, student_name: str, subject_name: str, amount: float,
+                                            student_user_id: int):
         """Уведомляет преподавателя о новом платеже, требующем подтверждения"""
         try:
             from main import bot
-            
+
             message = (
                 "💰 *НОВЫЙ ПЛАТЕЖ ТРЕБУЕТ ПОДТВЕРЖДЕНИЯ*\n\n"
-                f"👤 Ученик: {student_name} (ID: {student_user_id})\n"  # Добавил ID для отладки
+                f"👤 Ученик: {student_name} (ID: {student_user_id})\n"
                 f"📚 Предмет: {subject_name}\n"
                 f"💸 Сумма: {amount:.2f} руб.\n\n"
                 "✅ *Подтвердите получение денег:*"
@@ -392,11 +545,11 @@ class PaymentHandlers:
             keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
                 [types.InlineKeyboardButton(
                     text="✅ Деньги получены",
-                    callback_data=f"teacher_confirm_{student_user_id}_{amount}"  # Используем student_user_id (ID ребенка)
+                    callback_data=f"teacher_confirm_{student_user_id}_{amount}"
                 )],
                 [types.InlineKeyboardButton(
-                    text="❌ Деньги не получены", 
-                    callback_data=f"teacher_reject_{student_user_id}_{amount}"  # Используем student_user_id (ID ребенка)
+                    text="❌ Деньги не получены",
+                    callback_data=f"teacher_reject_{student_user_id}_{amount}"
                 )]
             ])
 
@@ -406,12 +559,13 @@ class PaymentHandlers:
                 reply_markup=keyboard,
                 parse_mode="Markdown"
             )
-            
-            logger.info(f"Уведомление отправлено преподавателю {teacher_id} о платеже для ученика {student_user_id} ({student_name})")
+
+            logger.info(
+                f"Уведомление отправлено преподавателю {teacher_id} о платеже для ученика {student_user_id} ({student_name})")
 
         except Exception as e:
             logger.error(f"Ошибка уведомления преподавателя: {e}")
-    
+
     @staticmethod
     async def handle_teacher_payment_confirmation(callback: types.CallbackQuery):
         """Обработка подтверждения платежа преподавателем"""
@@ -425,26 +579,26 @@ class PaymentHandlers:
             student_user_id = int(data_parts[0])
             amount = float(data_parts[1])
             teacher_user_id = callback.from_user.id
-            
+
             from main import storage, gsheets, bot
-            
+
             # Получаем информацию о студенте
             student_name = storage.get_user_name(student_user_id)
-            
+
             # Автоматически определяем предмет с наименьшим балансом
             available_subjects = storage.get_available_subjects_for_student(student_user_id)
             subject_id = await PaymentHandlers._get_subject_with_lowest_balance(student_user_id, available_subjects)
-            
+
             if not subject_id:
                 await callback.answer("❌ Не удалось определить предмет для оплаты", show_alert=True)
                 return
 
             # ЗАПИСЫВАЕМ ПЛАТЕЖ ДЛЯ УЧЕНИКА (студента)
             success_student = await PaymentHandlers._write_payment_to_sheets(student_user_id, amount, subject_id)
-            
+
             # ЗАПИСЫВАЕМ ЗАРПЛАТУ ДЛЯ ПРЕПОДАВАТЕЛЯ
             success_teacher = await PaymentHandlers._write_teacher_payment_to_sheets(teacher_user_id, amount)
-            
+
             if success_student and success_teacher:
                 # Уведомляем студента
                 try:
@@ -454,7 +608,7 @@ class PaymentHandlers:
                         f"📊 Деньги зачислены на ваш баланс!\n"
                         f"🎉 Услуга активирована!"
                     )
-                    
+
                     await bot.send_message(
                         student_user_id,
                         student_message,
@@ -463,16 +617,28 @@ class PaymentHandlers:
                 except Exception as e:
                     logger.error(f"Не удалось отправить уведомление студенту {student_user_id}: {e}")
 
-                # Сообщение преподавателю
-                await callback.message.edit_text(
+                # Сообщение преподавателю - ОТПРАВЛЯЕМ НОВОЕ СООБЩЕНИЕ вместо редактирования
+                success_message = (
                     f"✅ *Платеж подтвержден!*\n\n"
                     f"👤 Ученик: {student_name}\n"
                     f"💰 Сумма: {amount:.2f} руб.\n"
                     f"📊 Деньги записаны в таблицу\n\n"
-                    f"Ученик уведомлен о пополнении баланса.",
+                    f"Ученик уведомлен о пополнении баланса."
+                )
+
+                # Отправляем новое сообщение вместо редактирования
+                await bot.send_message(
+                    teacher_user_id,
+                    success_message,
                     parse_mode="Markdown"
                 )
-                
+
+                # Удаляем клавиатуру с исходного сообщения
+                try:
+                    await callback.message.edit_reply_markup(reply_markup=None)
+                except:
+                    pass  # Игнорируем ошибку если не удалось удалить клавиатуру
+
                 await callback.answer("✅ Платеж подтвержден и записан")
             else:
                 await callback.answer("❌ Ошибка записи платежа", show_alert=True)
@@ -493,9 +659,9 @@ class PaymentHandlers:
 
             student_user_id = int(data_parts[0])
             amount = float(data_parts[1])
-            
+
             from main import storage, bot
-            
+
             # Получаем информацию о студенте
             student_name = storage.get_user_name(student_user_id)
 
@@ -511,7 +677,7 @@ class PaymentHandlers:
                     f"• Свяжитесь с администратором\n\n"
                     f"📞 Контакт: +79001372727"
                 )
-                
+
                 await bot.send_message(
                     student_user_id,
                     student_message,
@@ -520,15 +686,26 @@ class PaymentHandlers:
             except Exception as e:
                 logger.error(f"Не удалось отправить уведомление студенту {student_user_id}: {e}")
 
-            # Сообщение преподавателю
-            await callback.message.edit_text(
+            # Сообщение преподавателю - ОТПРАВЛЯЕМ НОВОЕ СООБЩЕНИЕ
+            rejection_message = (
                 f"❌ *Платеж отклонен*\n\n"
                 f"👤 Ученик: {student_name}\n"
                 f"💰 Сумма: {amount:.2f} руб.\n\n"
-                f"Ученик уведомлен о проблеме с платежом.",
+                f"Ученик уведомлен о проблеме с платежом."
+            )
+
+            await bot.send_message(
+                callback.from_user.id,
+                rejection_message,
                 parse_mode="Markdown"
             )
-            
+
+            # Удаляем клавиатуру с исходного сообщения
+            try:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            except:
+                pass  # Игнорируем ошибку если не удалось удалить клавиатуру
+
             await callback.answer("❌ Платеж отклонен")
 
         except Exception as e:

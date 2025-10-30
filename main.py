@@ -1,7 +1,7 @@
 # main.py
 import sys
 
-sys.path.append(r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.session.aiohttp import AiohttpSession
 from payment_handlers import PaymentStates
@@ -1198,6 +1198,23 @@ async def back_to_menu_from_past(callback: types.CallbackQuery):
     )
     await callback.answer()
 
+
+@dp.message(PaymentStates.WAITING_RECEIPT, F.content_type.in_({'photo', 'document'}))
+async def handle_payment_receipt(message: types.Message, state: FSMContext):
+    """Обрабатывает загрузку чека для прямого перевода"""
+    from payment_handlers import PaymentHandlers
+    await PaymentHandlers.handle_receipt_upload(message, state)
+
+@dp.message(PaymentStates.WAITING_RECEIPT)
+async def handle_waiting_receipt_text(message: types.Message):
+    """Обрабатывает текстовые сообщения в состоянии ожидания чека"""
+    await message.answer(
+        "📎 Пожалуйста, отправьте скриншот или фото чека перевода.\n\n"
+        "📸 Как сделать скриншот:\n"
+        "• В приложении банка найдите операцию перевода\n"
+        "• Сделайте скриншот экрана с информацией о переводе\n"
+        "• Отправьте его в этот чат"
+    )
 
 @dp.message(BookingStates.INPUT_NAME)
 async def process_name(message: types.Message, state: FSMContext):
