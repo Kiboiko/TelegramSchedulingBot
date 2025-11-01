@@ -1698,11 +1698,11 @@ class GoogleSheetsManager:
             logger.error(f"Ошибка получения баланса по предметам для student_id {student_id}: {e}")
             return {}
 
-    def get_self_employed_with_lowest_balance(self,money:float) -> Dict[str, any]:
+    def get_self_employed_with_lowest_balance(self, money: float) -> Dict[str, any]:
         """Находит самозанятого преподавателя с наименьшим балансом, учитывая лимиты"""
         try:
             # Используем кэш
-            cache_key = "self_employed_lowest_balance"
+            cache_key = f"self_employed_lowest_balance_{money}"
             cached_result = self._get_cached_data(cache_key)
             if cached_result:
                 return cached_result
@@ -1729,9 +1729,26 @@ class GoogleSheetsManager:
                 logger.warning("В листе 'Преподаватели бот' нет данных")
                 return {}
 
+            # Получаем текущий месяц
+            from datetime import datetime
+            current_month = datetime.now().month
+            logger.info(f"Текущий месяц: {current_month}")
+
             # Собираем имена самозанятых и их лимиты
             self_employed_info = {}
             logger.info("Самозанятые в таблице:")
+            
+            # Анализируем заголовки для определения столбцов месяцев
+            headers = self_employed_data[0]
+            month_columns = {}  # {номер_месяца: индекс_столбца}
+            
+            for i, header in enumerate(headers):
+                header_str = str(header).strip()
+                if header_str.isdigit():
+                    month_num = int(header_str)
+                    month_columns[month_num] = i
+                    logger.info(f"Найден столбец для месяца {month_num}: индекс {i}")
+
             for row in self_employed_data[1:]:  # Пропускаем заголовок
                 if len(row) > 0 and row[0].strip():
                     name = row[0].strip()
@@ -1745,21 +1762,24 @@ class GoogleSheetsManager:
                             logger.warning(f"Некорректный лимит для {name}: '{row[4]}'")
                             monthly_limit = 0
                     
-                    # Получаем выплачено (столбец F, индекс 5)
+                    # Получаем выплачено за текущий месяц
                     paid_amount = 0
-                    if len(row) > 5 and row[5].strip():
-                        try:
-                            paid_amount = float(row[5].strip().replace(',', '.'))
-                        except ValueError:
-                            logger.warning(f"Некорректное значение выплачено для {name}: '{row[5]}'")
-                            paid_amount = 0
+                    if current_month in month_columns:
+                        col_index = month_columns[current_month]
+                        if len(row) > col_index and row[col_index].strip():
+                            try:
+                                paid_amount = float(row[col_index].strip().replace(',', '.'))
+                            except ValueError:
+                                logger.warning(f"Некорректное значение выплачено для {name} за месяц {current_month}: '{row[col_index]}'")
+                                paid_amount = 0
                     
                     self_employed_info[name.lower()] = {
                         'name': name,
                         'monthly_limit': monthly_limit,
                         'paid_amount': paid_amount,
                         'remaining_limit': monthly_limit - paid_amount,
-                        'row_data': row  # Сохраняем всю строку для обновления
+                        'row_data': row,  # Сохраняем всю строку для обновления
+                        'month_column': month_columns.get(current_month)  # Сохраняем индекс столбца месяца
                     }
                     
                     logger.info(f"  - {name}: лимит={monthly_limit}, выплачено={paid_amount}, остаток={monthly_limit - paid_amount}")
@@ -1826,6 +1846,7 @@ class GoogleSheetsManager:
                         'monthly_limit': emp_info['monthly_limit'],
                         'paid_amount': emp_info['paid_amount'],
                         'remaining_limit': emp_info['remaining_limit'],
+                        'month_column': emp_info['month_column'],  # Добавляем индекс столбца месяца
                         'row_data': row
                     })
 
@@ -1855,17 +1876,19 @@ class GoogleSheetsManager:
             # Получаем дополнительные данные из листа самозанятых
             result = self._extract_self_employed_details(lowest_balance_person['name'], self_employed_data)
             
-            # Добавляем информацию о лимитах
+            # Добавляем информацию о лимитах и столбце месяца
             result.update({
                 'monthly_limit': lowest_balance_person['monthly_limit'],
                 'paid_amount': lowest_balance_person['paid_amount'],
-                'remaining_limit': lowest_balance_person['remaining_limit']
+                'remaining_limit': lowest_balance_person['remaining_limit'],
+                'month_column': lowest_balance_person['month_column']  # Добавляем индекс столбца месяца
             })
 
             logger.info(
                 f"Данные для перевода: карта={result.get('card_number', 'нет')}, "
                 f"телефон={result.get('phone', 'нет')}, банк={result.get('bank', 'нет')}, "
-                f"остаток лимита={result.get('remaining_limit', 0):.2f}"
+                f"остаток лимита={result.get('remaining_limit', 0):.2f}, "
+                f"столбец_месяца={result.get('month_column', 'нет')}"
             )
 
             self._set_cached_data(cache_key, result)
@@ -1874,6 +1897,73 @@ class GoogleSheetsManager:
         except Exception as e:
             logger.error(f"Ошибка поиска самозанятого с наименьшим балансом: {e}")
             return {}
+
+    def update_self_employed_payment(self, teacher_name: str, amount: float) -> bool:
+        """Обновляет столбец текущего месяца для самозанятого преподавателя"""
+        try:
+            worksheet = self._get_or_create_worksheet("Самозанятые бот")
+            data = worksheet.get_all_values()
+            
+            if len(data) < 2:
+                logger.error("В листе 'Самозанятые бот' нет данных")
+                return False
+
+            # Получаем текущий месяц
+            from datetime import datetime
+            current_month = datetime.now().month
+            logger.info(f"Текущий месяц для обновления: {current_month}")
+
+            # Анализируем заголовки для определения столбца текущего месяца
+            headers = data[0]
+            current_month_col = None
+            
+            for i, header in enumerate(headers):
+                header_str = str(header).strip()
+                if header_str.isdigit():
+                    month_num = int(header_str)
+                    if month_num == current_month:
+                        current_month_col = i
+                        logger.info(f"Найден столбец для текущего месяца {current_month}: индекс {i}")
+                        break
+
+            if current_month_col is None:
+                logger.error(f"Не найден столбец для текущего месяца {current_month}")
+                return False
+
+            # Ищем строку преподавателя
+            target_row = -1
+            for row_idx, row in enumerate(data[1:], start=2):  # Пропускаем заголовок
+                if len(row) > 0 and row[0].strip().lower() == teacher_name.lower():
+                    target_row = row_idx
+                    break
+
+            if target_row == -1:
+                logger.error(f"Не найдена строка для самозанятого: {teacher_name}")
+                return False
+
+            # Получаем текущее значение выплачено за текущий месяц
+            current_paid = 0.0
+            if len(data[target_row - 1]) > current_month_col and data[target_row - 1][current_month_col]:
+                try:
+                    current_paid_str = data[target_row - 1][current_month_col].replace(',', '.').strip()
+                    current_paid_str = current_paid_str.replace('\xa0', '').replace(' ', '')
+                    current_paid = float(current_paid_str) if current_paid_str else 0.0
+                except ValueError as e:
+                    logger.warning(f"Ошибка преобразования текущего выплачено для {teacher_name}: {e}")
+                    current_paid = 0.0
+
+            # Вычисляем новое значение
+            new_paid = current_paid + amount
+            
+            # Обновляем ячейку
+            worksheet.update_cell(target_row, current_month_col + 1, f"{new_paid:.2f}")
+            
+            logger.info(f"Обновлены выплаты для {teacher_name} за месяц {current_month}: было {current_paid:.2f}, стало {new_paid:.2f}, добавлено {amount:.2f}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Ошибка обновления выплат для самозанятого {teacher_name}: {e}")
+            return False
     
     def _parse_balance_from_cell(self, balance_str: str) -> float:
         """Парсит значение баланса из ячейки, может содержать формулы"""
@@ -1919,7 +2009,7 @@ class GoogleSheetsManager:
                 row_name = row[0].strip() if row[0] else ""
                 if row_name.lower() == target_name_lower:
                     # Нашли совпадение - извлекаем данные
-                    # Структура: A-Имя, B-Телефон, C-Карта, D-Банк, E-Лимит, F-Выплачено
+                    # Структура: A-Имя, B-Телефон, C-Карта, D-Банк, E-Лимит, F-... месяцы
                     details = {
                         'name': row_name,
                         'phone': row[1] if len(row) > 1 and row[1] else "",
@@ -1930,20 +2020,14 @@ class GoogleSheetsManager:
                         'remaining_limit': 0
                     }
 
-                    # Получаем лимит (столбец E)
+                    # Получаем лимит (столбец E, индекс 4)
                     if len(row) > 4 and row[4]:
                         try:
                             details['monthly_limit'] = float(row[4].strip().replace(',', '.'))
                         except ValueError:
                             logger.warning(f"Некорректный лимит для {name}: '{row[4]}'")
 
-                    # Получаем выплачено (столбец F)
-                    if len(row) > 5 and row[5]:
-                        try:
-                            details['paid_amount'] = float(row[5].strip().replace(',', '.'))
-                        except ValueError:
-                            logger.warning(f"Некорректное значение выплачено для {name}: '{row[5]}'")
-
+                    # Получаем выплачено за текущий месяц (будет вычислено в основном методе)
                     # Вычисляем остаток лимита
                     details['remaining_limit'] = details['monthly_limit'] - details['paid_amount']
 
@@ -1958,7 +2042,6 @@ class GoogleSheetsManager:
                         f"Найдены данные в строке {i}: "
                         f"телефон='{details['phone']}', карта='{details['card_number']}', "
                         f"банк='{details['bank']}', лимит={details['monthly_limit']:.2f}, "
-                        f"выплачено={details['paid_amount']:.2f}, остаток={details['remaining_limit']:.2f}, "
                         f"есть_контакты={has_contact}"
                     )
 
@@ -2029,50 +2112,4 @@ class GoogleSheetsManager:
         except Exception as e:
             logger.error(f"Ошибка при отладке структуры: {e}")
 
-    def update_self_employed_payment(self, teacher_name: str, amount: float) -> bool:
-        """Обновляет столбец 'Выплачено' для самозанятого преподавателя"""
-        try:
-            worksheet = self._get_or_create_worksheet("Самозанятые бот")
-            data = worksheet.get_all_values()
-            
-            if len(data) < 2:
-                logger.error("В листе 'Самозанятые бот' нет данных")
-                return False
-
-            # Ищем строку преподавателя
-            target_row = -1
-            for row_idx, row in enumerate(data[1:], start=2):  # Пропускаем заголовок
-                if len(row) > 0 and row[0].strip().lower() == teacher_name.lower():
-                    target_row = row_idx
-                    break
-
-            if target_row == -1:
-                logger.error(f"Не найдена строка для самозанятого: {teacher_name}")
-                return False
-
-            # Столбец F (индекс 5) - "Выплачено"
-            paid_col_index = 5
-            
-            # Получаем текущее значение выплачено
-            current_paid = 0.0
-            if len(data[target_row - 1]) > paid_col_index and data[target_row - 1][paid_col_index]:
-                try:
-                    current_paid_str = data[target_row - 1][paid_col_index].replace(',', '.').strip()
-                    current_paid_str = current_paid_str.replace('\xa0', '').replace(' ', '')
-                    current_paid = float(current_paid_str) if current_paid_str else 0.0
-                except ValueError as e:
-                    logger.warning(f"Ошибка преобразования текущего выплачено для {teacher_name}: {e}")
-                    current_paid = 0.0
-
-            # Вычисляем новое значение
-            new_paid = current_paid + amount
-            
-            # Обновляем ячейку
-            worksheet.update_cell(target_row, paid_col_index + 1, f"{new_paid:.2f}")
-            
-            logger.info(f"Обновлены выплаты для {teacher_name}: было {current_paid:.2f}, стало {new_paid:.2f}, добавлено {amount:.2f}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Ошибка обновления выплат для самозанятого {teacher_name}: {e}")
-            return False
+    
