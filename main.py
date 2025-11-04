@@ -55,7 +55,7 @@ from feedback import FeedbackManager, FeedbackStates
 from feedback_teachers import FeedbackTeacherManager, FeedbackTeacherStates
 from config import FEEDBACK_CONFIG
 from materials_manager import MaterialsManager
-
+from database import db
 from calendar_utils import generate_calendar,get_time_range_for_date
 from time_utils import generate_time_range_keyboard_with_availability,calculate_lesson_duration
 from datetime import datetime
@@ -2745,6 +2745,13 @@ async def handle_reminder_book_now(callback: types.CallbackQuery, state: FSMCont
 
 
 async def main():
+    try:
+        await db.connect()
+        logger.info("✅ Database initialized successfully")
+    except Exception as e:
+        logger.error(f"❌ Database initialization failed: {e}")
+        return
+
     await background_tasks.startup_tasks()
 
     # Запуск фоновых задач
