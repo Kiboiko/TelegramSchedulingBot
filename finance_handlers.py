@@ -4,7 +4,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.state import State, StatesGroup
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict
 from calendar_utils import generate_finance_calendar
 from config import SUBJECTS
@@ -161,7 +161,7 @@ class FinanceHandlers:
             await callback.answer("❌ Произошла ошибка", show_alert=True)
 
     async def balance_show_self(self, callback: types.CallbackQuery, state: FSMContext):
-        """Показывает детальную информацию о балансе для себя с разбивкой по предметам"""
+        """Показывает детальную информацию о балансе для себя с транзакциями за последний месяц"""
         try:
             user_id = callback.from_user.id
             user_name = self.storage.get_user_name(user_id)
@@ -170,12 +170,13 @@ class FinanceHandlers:
             # Получаем баланс по предметам
             balance_by_subjects = self.storage.get_student_balance_by_subjects(user_id)
             
-            # Получаем историю операций
-            finance_history = self.gsheets.get_student_finance_history(user_id)
+            # Получаем историю операций за последний месяц
+            finance_history = self.gsheets.get_student_finance_history_last_month(user_id)
             
-            # Рассчитываем итоги
-            total_replenished = sum(op["replenished"] for op in finance_history)
-            total_withdrawn = sum(op["withdrawn"] for op in finance_history)
+            # Рассчитываем итоги за последний месяц
+            monthly_replenished = sum(op["replenished"] for op in finance_history)
+            monthly_withdrawn = sum(op["withdrawn"] for op in finance_history)
+            monthly_change = monthly_replenished - monthly_withdrawn
             
             # Форматируем баланс по предметам
             subjects_balance_text = ""
@@ -187,27 +188,42 @@ class FinanceHandlers:
             else:
                 subjects_balance_text = "Информация по предметам отсутствует\n"
             
-            # Форматируем историю для отображения
-            history_text = ""
+            # Форматируем все транзакции за последний месяц
+            transactions_text = ""
             if finance_history:
-                # Берем последние 10 операций
-                recent_operations = finance_history[-10:]
+                # Берем последние 15 операций
+                recent_operations = finance_history[-15:]
                 for op in recent_operations:
-                    date_display = datetime.strptime(op["date"], "%Y-%m-%d").strftime("%d.%m.%Y")
-                    replenished_text = f"+{op['replenished']} руб." if op["replenished"] > 0 else ""
-                    withdrawn_text = f"-{op['withdrawn']} руб." if op["withdrawn"] > 0 else ""
-                    operation_text = replenished_text or withdrawn_text
+                    date_display = datetime.strptime(op["date"], "%Y-%m-%d").strftime("%d.%m")
                     
-                    history_text += f"📅 {date_display}: {operation_text}\n"
+                    # Получаем название предмета
+                    subject_name = self.subjects_config.get(op.get("subject", ""), "Общий")
+                    
+                    # Форматируем операцию
+                    replenished_text = f"+{op['replenished']:.2f} руб." if op["replenished"] > 0 else ""
+                    withdrawn_text = f"-{op['withdrawn']:.2f} руб." if op["withdrawn"] > 0 else ""
+                    
+                    # Показываем операцию только если есть движение средств
+                    if replenished_text or withdrawn_text:
+                        operation_type = "💳 Пополнение" if replenished_text else "📚 Занятие"
+                        operation_text = replenished_text or withdrawn_text
+                        transactions_text += f"📅 {date_display} {operation_type} ({subject_name}): {operation_text}\n"
             else:
-                history_text = "История операций отсутствует\n"
+                transactions_text = "Транзакций за последний месяц нет\n"
+            
+            # Получаем текущий месяц и год для отображения
+            current_month = datetime.now().strftime("%m.%Y")
             
             message_text = (
                 f"💰 Детальная информация о балансе\n\n"
                 f"👤 Студент: {user_name}\n"
-                f"💳 Общий баланс: {balance:.2f} руб.\n\n"
-                f"📊 Баланс по предметам:\n"
+                f"💳 Общий баланс: {balance:.2f} руб.\n"
+                f"📊 Изменение за {current_month}: {monthly_change:+.2f} руб.\n"
+                f"   (Пополнения: +{monthly_replenished:.2f} руб., Списания: -{monthly_withdrawn:.2f} руб.)\n\n"
+                f"📈 Баланс по предметам:\n"
                 f"{subjects_balance_text}\n"
+                f"💸 Транзакции за последний месяц:\n"
+                f"{transactions_text}\n"
                 f"Баланс = Все пополнения - Все списания\n\n"
                 f"Остаток средств переносится на следующие занятия."
             )
@@ -225,11 +241,11 @@ class FinanceHandlers:
             
         except Exception as e:
             logger.error(f"Error in balance_show_self: {e}")
-            await callback.answer("❌ Произошла ошибка", show_alert=True)
+            await callback.answer("❌ Произошла ошибка", show_alert=True)                          
 
 
     async def balance_show_child(self, callback: types.CallbackQuery, state: FSMContext):
-        """Показывает детальную информацию о балансе для ребенка с разбивкой по предметам"""
+        """Показывает детальную информацию о балансе для ребенка с транзакциями за последний месяц"""
         try:
             child_id = int(callback.data.replace("balance_child_", ""))
             child_info = self.storage.get_child_info(child_id)
@@ -244,12 +260,13 @@ class FinanceHandlers:
             # Получаем баланс по предметам
             balance_by_subjects = self.storage.get_student_balance_by_subjects(child_id)
             
-            # Получаем историю операций
-            finance_history = self.gsheets.get_student_finance_history(child_id)
+            # Получаем историю операций за последний месяц
+            finance_history = self.gsheets.get_student_finance_history_last_month(child_id)
             
-            # Рассчитываем итоги
-            total_replenished = sum(op["replenished"] for op in finance_history)
-            total_withdrawn = sum(op["withdrawn"] for op in finance_history)
+            # Рассчитываем итоги за последний месяц
+            monthly_replenished = sum(op["replenished"] for op in finance_history)
+            monthly_withdrawn = sum(op["withdrawn"] for op in finance_history)
+            monthly_change = monthly_replenished - monthly_withdrawn
             
             # Форматируем баланс по предметам
             subjects_balance_text = ""
@@ -261,27 +278,42 @@ class FinanceHandlers:
             else:
                 subjects_balance_text = "Информация по предметам отсутствует\n"
             
-            # Форматируем историю для отображения
-            history_text = ""
+            # Форматируем все транзакции за последний месяц
+            transactions_text = ""
             if finance_history:
-                # Берем последние 10 операций
-                recent_operations = finance_history[-10:]
+                # Берем последние 15 операций
+                recent_operations = finance_history[-15:]
                 for op in recent_operations:
-                    date_display = datetime.strptime(op["date"], "%Y-%m-%d").strftime("%d.%m.%Y")
-                    replenished_text = f"+{op['replenished']} руб." if op["replenished"] > 0 else ""
-                    withdrawn_text = f"-{op['withdrawn']} руб." if op["withdrawn"] > 0 else ""
-                    operation_text = replenished_text or withdrawn_text
+                    date_display = datetime.strptime(op["date"], "%Y-%m-%d").strftime("%d.%m")
                     
-                    history_text += f"📅 {date_display}: {operation_text}\n"
+                    # Получаем название предмета
+                    subject_name = self.subjects_config.get(op.get("subject", ""), "Общий")
+                    
+                    # Форматируем операцию
+                    replenished_text = f"+{op['replenished']:.2f} руб." if op["replenished"] > 0 else ""
+                    withdrawn_text = f"-{op['withdrawn']:.2f} руб." if op["withdrawn"] > 0 else ""
+                    
+                    # Показываем операцию только если есть движение средств
+                    if replenished_text or withdrawn_text:
+                        operation_type = "💳 Пополнение" if replenished_text else "📚 Занятие"
+                        operation_text = replenished_text or withdrawn_text
+                        transactions_text += f"📅 {date_display} {operation_type} ({subject_name}): {operation_text}\n"
             else:
-                history_text = "История операций отсутствует\n"
+                transactions_text = "Транзакций за последний месяц нет\n"
+            
+            # Получаем текущий месяц и год для отображения
+            current_month = datetime.now().strftime("%m.%Y")
             
             message_text = (
                 f"💰 Детальная информация о балансе\n\n"
                 f"👶 Ребенок: {child_name}\n"
-                f"💳 Общий баланс: {balance:.2f} руб.\n\n"
-                f"📊 Баланс по предметам:\n"
+                f"💳 Общий баланс: {balance:.2f} руб.\n"
+                f"📊 Изменение за {current_month}: {monthly_change:+.2f} руб.\n"
+                f"   (Пополнения: +{monthly_replenished:.2f} руб., Списания: -{monthly_withdrawn:.2f} руб.)\n\n"
+                f"📈 Баланс по предметам:\n"
                 f"{subjects_balance_text}\n"
+                f"💸 Транзакции за последний месяц:\n"
+                f"{transactions_text}\n"
                 f"Баланс = Все пополнения - Все списания\n\n"
                 f"Остаток средств переносится на следующие занятия."
             )

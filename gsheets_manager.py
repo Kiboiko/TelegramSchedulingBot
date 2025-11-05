@@ -1278,7 +1278,7 @@ class GoogleSheetsManager:
             logger.error(f"Error processing daily finances: {e}")
 
     def get_student_finance_history(self, student_id: int) -> List[Dict]:
-        """Получает полную историю финансовых операций студента"""
+        """Получает полную историю финансовых операций студента без дублирования"""
         try:
             cache_key = f"finance_history_{student_id}"
             cached_result = self._get_cached_data(cache_key)
@@ -1295,30 +1295,47 @@ class GoogleSheetsManager:
             student_rows = []
             for row_idx, row in enumerate(data[1:], start=2):
                 if len(row) > 0 and str(row[0]).strip() == str(student_id):
-                    student_rows.append((row_idx, row))
+                    student_rows.append({
+                        'row_idx': row_idx,
+                        'subject_id': row[2].strip() if len(row) > 2 and row[2] else "",
+                        'row_data': row
+                    })
 
             if not student_rows:
                 return []
 
             finance_history = []
             headers = [str(h).strip().lower() for h in data[0]]
+            
+            # Словарь для объединения операций по дате и предмету
+            operations_dict = {}
 
-            # Получаем тариф студента
-            tariff = 0.0
-            if student_rows[0][1] and len(student_rows[0][1]) > 13 and student_rows[0][1][13]:
-                try:
-                    tariff_str = str(student_rows[0][1][13]).replace(',', '.').strip()
-                    tariff_str = tariff_str.replace('\xa0', '').replace(' ', '')
-                    tariff = float(tariff_str) if tariff_str else 0.0
-                except ValueError:
-                    tariff = 0.0
+            # Для каждой строки студента (каждого предмета) собираем операции
+            for student_row in student_rows:
+                subject_id = student_row['subject_id']
+                if not subject_id:  # Пропускаем строки без subject_id
+                    continue
+                    
+                row_data = student_row['row_data']
 
-            # Собираем все финансовые столбцы (начиная с 245)
-            for i in range(245, min(len(headers), 500)):
-                if i < len(headers) and headers[i]:
+                # Получаем тариф для этого предмета
+                tariff = 0.0
+                if len(row_data) > 13 and row_data[13]:
+                    try:
+                        tariff_str = str(row_data[13]).replace(',', '.').strip()
+                        tariff_str = tariff_str.replace('\xa0', '').replace(' ', '')
+                        tariff = float(tariff_str) if tariff_str else 0.0
+                    except ValueError:
+                        tariff = 0.0
+
+                # 1. Собираем финансовые операции (столбцы начиная с 245)
+                for i in range(245, min(len(headers), 500)):
+                    if i >= len(headers) or not headers[i]:
+                        continue
+
+                    # Извлекаем дату из заголовка
                     date_header = headers[i].split()[0] if ' ' in headers[i] else headers[i]
                     
-                    # Парсим дату
                     try:
                         date_formats = ["%d.%m.%Y", "%d.%m", "%d.%m.%y"]
                         date_obj = None
@@ -1337,61 +1354,71 @@ class GoogleSheetsManager:
 
                         formatted_date = date_obj.strftime("%Y-%m-%d")
                         
-                        # Для каждой строки студента (каждого предмета)
-                        for row_idx, row in student_rows:
-                            if len(row) <= i:
-                                continue
-
-                            replenishment_str = row[i]
-                            withdrawn = 0.0
-                            replenished = 0.0
-
-                            # Проверяем, было ли занятие в эту дату
-                            # Ищем столбцы расписания (первые 245 столбцов)
-                            schedule_found = False
-                            for schedule_col in range(14, min(245, len(headers)), 2):
-                                if (schedule_col < len(headers) and 
-                                    formatted_date.lower() in headers[schedule_col].lower()):
-                                    
-                                    if (len(row) > schedule_col + 1 and 
-                                        row[schedule_col] and row[schedule_col + 1]):
-                                        start_time = row[schedule_col]
-                                        end_time = row[schedule_col + 1]
-                                        if start_time.strip() and end_time.strip():
-                                            withdrawn = tariff
-                                            schedule_found = True
-                                            break
-
-                            # Обрабатываем пополнение
-                            if replenishment_str and str(replenishment_str).strip():
-                                try:
-                                    clean_str = str(replenishment_str)
-                                    clean_str = clean_str.replace('\xa0', '')
-                                    clean_str = clean_str.replace(' ', '')
-                                    clean_str = clean_str.replace(',', '.')
-                                    import re
-                                    clean_str = re.sub(r'[^\d.-]', '', clean_str)
-                                    
-                                    if clean_str:
-                                        replenished = float(clean_str)
-                                except ValueError:
-                                    replenished = 0.0
-
-                            # Добавляем операцию только если есть движение средств
-                            if replenished != 0 or withdrawn != 0:
-                                finance_history.append({
-                                    "date": formatted_date,
-                                    "replenished": replenished,
-                                    "withdrawn": withdrawn,
-                                    "tariff": tariff,
-                                    "subject": row[2] if len(row) > 2 else ""
-                                })
-
                     except ValueError:
                         continue
 
+                    # Обрабатываем значение ячейки пополнения
+                    replenished = 0.0
+                    if len(row_data) > i and row_data[i]:
+                        try:
+                            cell_value = str(row_data[i]).strip()
+                            
+                            # Очищаем строку от лишних символов
+                            clean_str = cell_value.replace('\xa0', '').replace(' ', '').replace(',', '.')
+                            import re
+                            clean_str = re.sub(r'[^\d.-]', '', clean_str)
+                            
+                            if clean_str and self._is_float(clean_str):
+                                replenished = float(clean_str)
+                        except (ValueError, TypeError):
+                            continue
+
+                    # 2. Проверяем, было ли занятие в эту дату (списание)
+                    withdrawn = 0.0
+                    # Ищем столбцы расписания для этой даты (первые 245 столбцов)
+                    for schedule_col in range(14, min(245, len(headers)), 2):
+                        if schedule_col >= len(headers) or not headers[schedule_col]:
+                            continue
+                        
+                        # Проверяем, совпадает ли дата в заголовке расписания
+                        schedule_date_header = headers[schedule_col].split()[0] if ' ' in headers[schedule_col] else headers[schedule_col]
+                        if schedule_date_header.lower() == date_header.lower():
+                            # Проверяем, есть ли время занятия
+                            if (len(row_data) > schedule_col + 1 and 
+                                row_data[schedule_col] and row_data[schedule_col + 1] and
+                                str(row_data[schedule_col]).strip() and str(row_data[schedule_col + 1]).strip()):
+                                withdrawn = tariff
+                                break
+
+                    # Создаем уникальный ключ для операции (дата + предмет)
+                    operation_key = f"{formatted_date}_{subject_id}"
+                    
+                    # Если операция с таким ключом уже существует, объединяем значения
+                    if operation_key in operations_dict:
+                        existing_op = operations_dict[operation_key]
+                        existing_op["replenished"] += replenished
+                        existing_op["withdrawn"] += withdrawn
+                    else:
+                        # Добавляем операцию только если есть движение средств
+                        if replenished != 0 or withdrawn != 0:
+                            operations_dict[operation_key] = {
+                                "date": formatted_date,
+                                "replenished": replenished,
+                                "withdrawn": withdrawn,
+                                "tariff": tariff,
+                                "subject": subject_id
+                            }
+
+            # Преобразуем словарь обратно в список
+            finance_history = list(operations_dict.values())
+
             # Сортируем по дате
             finance_history.sort(key=lambda x: x["date"])
+            
+            # Логируем для отладки
+            logger.info(f"Найдено {len(finance_history)} уникальных операций для student_id {student_id}")
+            for op in finance_history:
+                logger.info(f"Операция: {op['date']} {op['subject']} +{op['replenished']} -{op['withdrawn']}")
             
             self._set_cached_data(cache_key, finance_history)
             return finance_history
@@ -2112,4 +2139,36 @@ class GoogleSheetsManager:
         except Exception as e:
             logger.error(f"Ошибка при отладке структуры: {e}")
 
-    
+    def get_student_finance_history_last_month(self, student_id: int) -> List[Dict]:
+        """Получает историю финансовых операций студента за последний месяц"""
+        try:
+            cache_key = f"finance_history_last_month_{student_id}"
+            cached_result = self._get_cached_data(cache_key)
+            if cached_result:
+                return cached_result
+
+            # Получаем полную историю
+            full_history = self.get_student_finance_history(student_id)
+            
+            # Фильтруем за последний месяц
+            from datetime import datetime, timedelta
+            one_month_ago = datetime.now() - timedelta(days=30)
+            
+            last_month_history = []
+            for operation in full_history:
+                try:
+                    operation_date = datetime.strptime(operation["date"], "%Y-%m-%d")
+                    if operation_date >= one_month_ago:
+                        last_month_history.append(operation)
+                except ValueError:
+                    continue
+            
+            # Сортируем по дате (от старых к новым)
+            last_month_history.sort(key=lambda x: x["date"])
+            
+            self._set_cached_data(cache_key, last_month_history)
+            return last_month_history
+            
+        except Exception as e:
+            logger.error(f"Error getting last month finance history for student {student_id}: {e}")
+            return []
