@@ -295,11 +295,15 @@ class GoogleSheetsManager:
                         start_time = data[target_row - 1][i] if i < len(data[target_row - 1]) else ""
                         end_time = data[target_row - 1][i + 1] if i + 1 < len(data[target_row - 1]) else ""
 
+                        logger.info(f"Проверяем занятие: дата '{header}', время '{start_time}-{end_time}'")
+                        
                         if start_time and end_time and str(start_time).strip() and str(end_time).strip():
                             withdrawn = tariff
                             schedule_found = True
-                            logger.info(f"Найдено занятие: {start_time}-{end_time}, списание: {withdrawn} руб.")
-                            break
+                            logger.info(f"✅ Найдено занятие: {start_time}-{end_time}, списание: {withdrawn} руб.")
+                            break  # Прерываем после первого найденного занятия
+                        else:
+                            logger.info(f"❌ Занятие не найдено: start_time='{start_time}', end_time='{end_time}'")
 
             if not schedule_found:
                 logger.info(f"Занятие на {formatted_date} не найдено")
@@ -1328,12 +1332,51 @@ class GoogleSheetsManager:
                     except ValueError:
                         tariff = 0.0
 
-                # 1. Собираем финансовые операции (столбцы начиная с 245)
-                for i in range(245, min(len(headers), 500)):
+                # 1. Сначала собираем ВСЕ занятия из расписания (столбцы 14-244)
+                schedule_lessons = {}  # {дата: True} - былоЗанятие
+                for schedule_col in range(14, min(245, len(headers)), 2):
+                    if schedule_col >= len(headers) or not headers[schedule_col]:
+                        continue
+
+                    # Извлекаем дату из заголовка расписания
+                    schedule_date_header = headers[schedule_col].split()[0] if ' ' in headers[schedule_col] else headers[schedule_col]
+                    
+                    try:
+                        date_formats = ["%d.%m.%Y", "%d.%m", "%d.%m.%y"]
+                        date_obj = None
+
+                        for date_format in date_formats:
+                            try:
+                                date_obj = datetime.strptime(schedule_date_header, date_format)
+                                if date_format == "%d.%m":
+                                    date_obj = date_obj.replace(year=datetime.now().year)
+                                break
+                            except ValueError:
+                                continue
+
+                        if not date_obj:
+                            continue
+
+                        formatted_date = date_obj.strftime("%Y-%m-%d")
+                        
+                    except ValueError:
+                        continue
+
+                    # Проверяем, есть ли время занятия
+                    if (len(row_data) > schedule_col + 1 and 
+                        row_data[schedule_col] and row_data[schedule_col + 1] and
+                        str(row_data[schedule_col]).strip() and str(row_data[schedule_col + 1]).strip()):
+                        
+                        # Занятие было - сохраняем в словарь
+                        schedule_lessons[formatted_date] = True
+                        logger.info(f"Найдено занятие в расписании: дата {formatted_date}, время {row_data[schedule_col]}-{row_data[schedule_col + 1]}")
+
+                # 2. Теперь обрабатываем финансовые столбцы (начиная с 245)
+                for i in range(245, min(len(headers), 500), 2):  # Шаг 2 - только столбцы пополнений
                     if i >= len(headers) or not headers[i]:
                         continue
 
-                    # Извлекаем дату из заголовка
+                    # Извлекаем дату из заголовка финансового столбца
                     date_header = headers[i].split()[0] if ' ' in headers[i] else headers[i]
                     
                     try:
@@ -1357,7 +1400,7 @@ class GoogleSheetsManager:
                     except ValueError:
                         continue
 
-                    # Обрабатываем значение ячейки пополнения
+                    # Обрабатываем значение ячейки пополнения (только положительные значения)
                     replenished = 0.0
                     if len(row_data) > i and row_data[i]:
                         try:
@@ -1369,26 +1412,20 @@ class GoogleSheetsManager:
                             clean_str = re.sub(r'[^\d.-]', '', clean_str)
                             
                             if clean_str and self._is_float(clean_str):
-                                replenished = float(clean_str)
+                                raw_value = float(clean_str)
+                                
+                                # Учитываем только положительные пополнения
+                                if raw_value > 0:
+                                    replenished = raw_value
+                                else:
+                                    # Отрицательные значения игнорируем (это могут быть списания в других столбцах)
+                                    logger.debug(f"Игнорируем отрицательное/нулевое значение в столбце пополнений: {raw_value} для даты {formatted_date}")
+                                    
                         except (ValueError, TypeError):
                             continue
 
-                    # 2. Проверяем, было ли занятие в эту дату (списание)
-                    withdrawn = 0.0
-                    # Ищем столбцы расписания для этой даты (первые 245 столбцов)
-                    for schedule_col in range(14, min(245, len(headers)), 2):
-                        if schedule_col >= len(headers) or not headers[schedule_col]:
-                            continue
-                        
-                        # Проверяем, совпадает ли дата в заголовке расписания
-                        schedule_date_header = headers[schedule_col].split()[0] if ' ' in headers[schedule_col] else headers[schedule_col]
-                        if schedule_date_header.lower() == date_header.lower():
-                            # Проверяем, есть ли время занятия
-                            if (len(row_data) > schedule_col + 1 and 
-                                row_data[schedule_col] and row_data[schedule_col + 1] and
-                                str(row_data[schedule_col]).strip() and str(row_data[schedule_col + 1]).strip()):
-                                withdrawn = tariff
-                                break
+                    # 3. Проверяем, было ли занятие в эту дату (используем заранее собранный словарь)
+                    withdrawn = tariff if formatted_date in schedule_lessons else 0.0
 
                     # Создаем уникальный ключ для операции (дата + предмет)
                     operation_key = f"{formatted_date}_{subject_id}"
@@ -1397,7 +1434,9 @@ class GoogleSheetsManager:
                     if operation_key in operations_dict:
                         existing_op = operations_dict[operation_key]
                         existing_op["replenished"] += replenished
-                        existing_op["withdrawn"] += withdrawn
+                        # Списание объединяем только если не было уже списания
+                        if withdrawn > 0 and existing_op["withdrawn"] == 0:
+                            existing_op["withdrawn"] = withdrawn
                     else:
                         # Добавляем операцию только если есть движение средств
                         if replenished != 0 or withdrawn != 0:
@@ -1669,7 +1708,7 @@ class GoogleSheetsManager:
             # Для каждой строки студента (каждого предмета) вычисляем баланс
             for student_row in student_rows:
                 subject_id = student_row['subject_id']
-                total_balance = 0.0
+                total_replenished = 0.0
                 row_data = student_row['row_data']
 
                 # Получаем тариф для этого предмета
@@ -1682,12 +1721,12 @@ class GoogleSheetsManager:
                     except ValueError:
                         tariff = 0.0
 
-                # 1. Учитываем финансовые операции (столбцы начиная с 245)
-                for i in range(245, min(len(headers), 500)):
+                # 1. Учитываем финансовые операции (столбцы пополнений начиная с 245, шаг 2)
+                for i in range(245, min(len(headers), 500), 2):  # Только столбцы пополнений
                     if i >= len(headers) or not headers[i]:
                         continue
 
-                    # Обрабатываем значение ячейки
+                    # Обрабатываем значение ячейки пополнения
                     if len(row_data) > i and row_data[i]:
                         try:
                             cell_value = str(row_data[i]).strip()
@@ -1699,7 +1738,9 @@ class GoogleSheetsManager:
                             
                             if clean_str and self._is_float(clean_str):
                                 amount = float(clean_str)
-                                total_balance += amount
+                                # Учитываем только положительные пополнения
+                                if amount > 0:
+                                    total_replenished += amount
                         except (ValueError, TypeError):
                             continue
 
@@ -1715,8 +1756,10 @@ class GoogleSheetsManager:
                             total_withdrawn += tariff
 
                 # Итоговый баланс = пополнения - списания
-                final_balance = total_balance - total_withdrawn
+                final_balance = total_replenished - total_withdrawn
                 subject_balances[subject_id] = final_balance
+
+                logger.info(f"Баланс по предмету {subject_id}: пополнения={total_replenished}, списания={total_withdrawn}, итого={final_balance}")
 
             self._set_cached_data(cache_key, subject_balances)
             return subject_balances
