@@ -204,6 +204,14 @@ class GoogleSheetsManager:
     def _get_or_create_worksheet(self, sheet_name: str):
         """Получает или создает лист"""
         try:
+            # Исправляем опечатку в названии листа
+            if sheet_name == "Самозанятые бot":
+                sheet_name = "Самозанятые бот"
+            elif sheet_name == "Преподаватели бot":
+                sheet_name = "Преподаватели бот"
+            elif sheet_name == "Ученики бot":
+                sheet_name = "Ученики бот"
+
             return self.spreadsheet.worksheet(sheet_name)
         except gspread.WorksheetNotFound:
             try:
@@ -1901,11 +1909,15 @@ class GoogleSheetsManager:
     def update_self_employed_payment(self, teacher_name: str, amount: float) -> bool:
         """Обновляет столбец текущего месяца для самозанятого преподавателя"""
         try:
-            worksheet = self._get_or_create_worksheet("Самозанятые бот")
+            worksheet = self._get_or_create_worksheet("Самозанятые бot")
+            if not worksheet:
+                logger.error("В листе 'Самозанятые бot' нет данных")
+                return False
+
             data = worksheet.get_all_values()
-            
+
             if len(data) < 2:
-                logger.error("В листе 'Самозанятые бот' нет данных")
+                logger.error("В листе 'Самозанятые бot' нет данных")
                 return False
 
             # Получаем текущий месяц
@@ -1916,7 +1928,7 @@ class GoogleSheetsManager:
             # Анализируем заголовки для определения столбца текущего месяца
             headers = data[0]
             current_month_col = None
-            
+
             for i, header in enumerate(headers):
                 header_str = str(header).strip()
                 if header_str.isdigit():
@@ -1947,19 +1959,26 @@ class GoogleSheetsManager:
                 try:
                     current_paid_str = data[target_row - 1][current_month_col].replace(',', '.').strip()
                     current_paid_str = current_paid_str.replace('\xa0', '').replace(' ', '')
+                    # ПРЕОБРАЗУЕМ В FLOAT
                     current_paid = float(current_paid_str) if current_paid_str else 0.0
                 except ValueError as e:
                     logger.warning(f"Ошибка преобразования текущего выплачено для {teacher_name}: {e}")
                     current_paid = 0.0
 
-            # Вычисляем новое значение
-            new_paid = current_paid + amount
-            
-            # Обновляем ячейку
-            worksheet.update_cell(target_row, current_month_col + 1, f"{new_paid:.2f}")
-            
-            logger.info(f"Обновлены выплаты для {teacher_name} за месяц {current_month}: было {current_paid:.2f}, стало {new_paid:.2f}, добавлено {amount:.2f}")
-            return True
+            # Вычисляем новое значение - ПРЕОБРАЗУЕМ amount в float
+            amount_float = float(amount)
+            new_paid = current_paid + amount_float
+
+            try:
+                # Обновляем ячейку
+                worksheet.update_cell(target_row, current_month_col + 1, f"{new_paid:.2f}")
+
+                logger.info(
+                    f"Обновлены выплаты для {teacher_name} за месяц {current_month}: было {current_paid:.2f}, стало {new_paid:.2f}, добавлено {amount_float:.2f}")
+                return True
+            except Exception as e:
+                logger.error(f"Ошибка обновления ячейки для самозанятого {teacher_name}: {e}")
+                return False
 
         except Exception as e:
             logger.error(f"Ошибка обновления выплат для самозанятого {teacher_name}: {e}")
