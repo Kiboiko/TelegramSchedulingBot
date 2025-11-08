@@ -199,15 +199,18 @@ class FinanceHandlers:
                     # Получаем название предмета
                     subject_name = self.subjects_config.get(op.get("subject", ""), "Общий")
                     
-                    # Форматируем операцию
+                    # Показываем ОБЕ операции (пополнение и списание) если они есть в один день
                     replenished_text = f"+{op['replenished']:.2f} руб." if op["replenished"] > 0 else ""
                     withdrawn_text = f"-{op['withdrawn']:.2f} руб." if op["withdrawn"] > 0 else ""
                     
-                    # Показываем операцию только если есть движение средств
-                    if replenished_text or withdrawn_text:
-                        operation_type = "💳 Пополнение" if replenished_text else "📚 Занятие"
-                        operation_text = replenished_text or withdrawn_text
-                        transactions_text += f"📅 {date_display} {operation_type} ({subject_name}): {operation_text}\n"
+                    # Если есть и пополнение и списание в один день - показываем обе операции отдельно
+                    if replenished_text and withdrawn_text:
+                        transactions_text += f"📅 {date_display} 💳 Пополнение ({subject_name}): {replenished_text}\n"
+                        transactions_text += f"📅 {date_display} 📚 Занятие ({subject_name}): {withdrawn_text}\n"
+                    elif replenished_text:
+                        transactions_text += f"📅 {date_display} 💳 Пополнение ({subject_name}): {replenished_text}\n"
+                    elif withdrawn_text:
+                        transactions_text += f"📅 {date_display} 📚 Занятие ({subject_name}): {withdrawn_text}\n"
             else:
                 transactions_text = "Транзакций за последний месяц нет\n"
             
@@ -222,7 +225,7 @@ class FinanceHandlers:
                 f"   (Пополнения: +{monthly_replenished:.2f} руб., Списания: -{monthly_withdrawn:.2f} руб.)\n\n"
                 f"📈 Баланс по предметам:\n"
                 f"{subjects_balance_text}\n"
-                f"💸 Транзакции за последний месяц:\n"
+                f"💸 Последние транзакции:\n"
                 f"{transactions_text}\n"
                 f"Баланс = Все пополнения - Все списания\n\n"
                 f"Остаток средств переносится на следующие занятия."
@@ -233,15 +236,27 @@ class FinanceHandlers:
             builder.button(text="⬅️ Назад", callback_data="finance_show_balance")
             builder.adjust(2)
             
-            await callback.message.edit_text(
-                message_text,
-                reply_markup=builder.as_markup()
-            )
+            # ИСПРАВЛЕНИЕ: Добавляем timestamp к тексту, чтобы сообщение всегда было разным
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            message_text += f"\n\n🕐 Обновлено: {timestamp}"
+            
+            try:
+                await callback.message.edit_text(
+                    message_text,
+                    reply_markup=builder.as_markup()
+                )
+            except Exception as edit_error:
+                # Если сообщение не изменилось, просто подтверждаем callback
+                if "message is not modified" in str(edit_error):
+                    await callback.answer("✅ Данные актуальны")
+                else:
+                    raise edit_error
+                    
             await callback.answer()
             
         except Exception as e:
             logger.error(f"Error in balance_show_self: {e}")
-            await callback.answer("❌ Произошла ошибка", show_alert=True)                          
+            await callback.answer("❌ Произошла ошибка", show_alert=True)                  
 
 
     async def balance_show_child(self, callback: types.CallbackQuery, state: FSMContext):
@@ -289,15 +304,18 @@ class FinanceHandlers:
                     # Получаем название предмета
                     subject_name = self.subjects_config.get(op.get("subject", ""), "Общий")
                     
-                    # Форматируем операцию
+                    # Показываем ОБЕ операции (пополнение и списание) если они есть в один день
                     replenished_text = f"+{op['replenished']:.2f} руб." if op["replenished"] > 0 else ""
                     withdrawn_text = f"-{op['withdrawn']:.2f} руб." if op["withdrawn"] > 0 else ""
                     
-                    # Показываем операцию только если есть движение средств
-                    if replenished_text or withdrawn_text:
-                        operation_type = "💳 Пополнение" if replenished_text else "📚 Занятие"
-                        operation_text = replenished_text or withdrawn_text
-                        transactions_text += f"📅 {date_display} {operation_type} ({subject_name}): {operation_text}\n"
+                    # Если есть и пополнение и списание в один день - показываем обе операции отдельно
+                    if replenished_text and withdrawn_text:
+                        transactions_text += f"📅 {date_display} 💳 Пополнение ({subject_name}): {replenished_text}\n"
+                        transactions_text += f"📅 {date_display} 📚 Занятие ({subject_name}): {withdrawn_text}\n"
+                    elif replenished_text:
+                        transactions_text += f"📅 {date_display} 💳 Пополнение ({subject_name}): {replenished_text}\n"
+                    elif withdrawn_text:
+                        transactions_text += f"📅 {date_display} 📚 Занятие ({subject_name}): {withdrawn_text}\n"
             else:
                 transactions_text = "Транзакций за последний месяц нет\n"
             
@@ -317,17 +335,28 @@ class FinanceHandlers:
                 f"Баланс = Все пополнения - Все списания\n\n"
                 f"Остаток средств переносится на следующие занятия."
             )
-            self.gsheets.debug_finance_structure(child_id, subject_id)
-            self.gsheets.debug_subject_tariffs(child_id)
+            
             builder = InlineKeyboardBuilder()
             builder.button(text="🔄 Обновить", callback_data=f"balance_child_{child_id}")
             builder.button(text="⬅️ Назад", callback_data="finance_show_balance")
             builder.adjust(2)
             
-            await callback.message.edit_text(
-                message_text,
-                reply_markup=builder.as_markup()
-            )
+            # ИСПРАВЛЕНИЕ: Добавляем timestamp к тексту, чтобы сообщение всегда было разным
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            message_text += f"\n\n🕐 Обновлено: {timestamp}"
+            
+            try:
+                await callback.message.edit_text(
+                    message_text,
+                    reply_markup=builder.as_markup()
+                )
+            except Exception as edit_error:
+                # Если сообщение не изменилось, просто подтверждаем callback
+                if "message is not modified" in str(edit_error):
+                    await callback.answer("✅ Данные актуальны")
+                else:
+                    raise edit_error
+                    
             await callback.answer()
             
         except Exception as e:

@@ -1330,6 +1330,7 @@ class GoogleSheetsManager:
                         tariff_str = str(row_data[13]).replace(',', '.').strip()
                         tariff_str = tariff_str.replace('\xa0', '').replace(' ', '')
                         tariff = float(tariff_str) if tariff_str else 0.0
+                        logger.info(f"Тариф для предмета {subject_id}: {tariff} руб.")
                     except ValueError:
                         tariff = 0.0
 
@@ -1363,17 +1364,22 @@ class GoogleSheetsManager:
                     except ValueError:
                         continue
 
-                    # Проверяем, есть ли время занятия
-                    if (len(row_data) > schedule_col + 1 and 
-                        row_data[schedule_col] and row_data[schedule_col + 1] and
-                        str(row_data[schedule_col]).strip() and str(row_data[schedule_col + 1]).strip()):
+                    # Проверяем, есть ли время занятия - ИСПРАВЛЕННАЯ ЛОГИКА
+                    has_start_time = len(row_data) > schedule_col and row_data[schedule_col] and str(row_data[schedule_col]).strip()
+                    has_end_time = len(row_data) > schedule_col + 1 and row_data[schedule_col + 1] and str(row_data[schedule_col + 1]).strip()
+                    
+                    if has_start_time and has_end_time:
+                        start_time = row_data[schedule_col].strip()
+                        end_time = row_data[schedule_col + 1].strip()
                         
                         # Занятие было - сохраняем в словарь
-                        schedule_lessons[formatted_date] = True
-                        logger.info(f"Найдено занятие в расписании: дата {formatted_date}, время {row_data[schedule_col]}-{row_data[schedule_col + 1]}")
+                        schedule_lessons[formatted_date] = {
+                            'start_time': start_time,
+                            'end_time': end_time
+                        }
+                        logger.info(f"Найдено занятие в расписании: дата {formatted_date}, время {start_time}-{end_time}, предмет {subject_id}")
 
                 # 2. Теперь обрабатываем финансовые столбцы (начиная с 245)
-                # ИСПРАВЛЕНИЕ: Обрабатываем ВСЕ финансовые столбцы, а не только через один
                 for i in range(245, min(len(headers), 500)):
                     if i >= len(headers) or not headers[i]:
                         continue
@@ -1419,17 +1425,18 @@ class GoogleSheetsManager:
                                 # Учитываем только положительные пополнения
                                 if raw_value > 0:
                                     replenished = raw_value
-                                    logger.info(f"Найдено пополнение: дата {formatted_date}, сумма {replenished}")
-                                else:
-                                    # Отрицательные значения игнорируем (это могут быть списания в других столбцах)
-                                    logger.debug(f"Игнорируем отрицательное/нулевое значение: {raw_value} для даты {formatted_date}")
-                                    
+                                    logger.info(f"Найдено пополнение: дата {formatted_date}, сумма {replenished}, предмет {subject_id}")
+                                
                         except (ValueError, TypeError) as e:
                             logger.debug(f"Ошибка обработки пополнения '{cell_value}': {e}")
                             continue
 
                     # 3. Проверяем, было ли занятие в эту дату (используем заранее собранный словарь)
-                    withdrawn = tariff if formatted_date in schedule_lessons else 0.0
+                    withdrawn = 0.0
+                    if formatted_date in schedule_lessons:
+                        withdrawn = tariff
+                        lesson_info = schedule_lessons[formatted_date]
+                        logger.info(f"Найдено списание за занятие: дата {formatted_date}, время {lesson_info['start_time']}-{lesson_info['end_time']}, сумма {withdrawn}, предмет {subject_id}")
 
                     # Создаем уникальный ключ для операции (дата + предмет)
                     operation_key = f"{formatted_date}_{subject_id}"
@@ -1459,7 +1466,7 @@ class GoogleSheetsManager:
             finance_history.sort(key=lambda x: x["date"])
             
             # Логируем для отладки
-            logger.info(f"Найдено {len(finance_history)} уникальных операций для student_id {student_id}")
+            logger.info(f"=== ИТОГОВАЯ ИСТОРИЯ ОПЕРАЦИЙ ДЛЯ {student_id} ===")
             for op in finance_history:
                 logger.info(f"Операция: {op['date']} {op['subject']} +{op['replenished']} -{op['withdrawn']}")
             
@@ -1469,6 +1476,45 @@ class GoogleSheetsManager:
         except Exception as e:
             logger.error(f"Error getting finance history for student {student_id}: {e}")
             return []
+        
+    def debug_specific_date(self, student_id: int, date_str: str):
+        """Отладочный метод для проверки данных по конкретной дате"""
+        try:
+            worksheet = self._get_or_create_worksheet("Ученики бот")
+            data = worksheet.get_all_values()
+
+            if len(data) < 2:
+                return
+
+            logger.info(f"=== ОТЛАДКА ДАТЫ {date_str} ДЛЯ {student_id} ===")
+            
+            # Форматируем дату для поиска
+            formatted_date = self.format_date(date_str)
+            
+            headers = [str(h).strip().lower() for h in data[0]]
+            
+            # Ищем все строки студента
+            for row_idx, row in enumerate(data[1:], start=2):
+                if len(row) > 0 and str(row[0]).strip() == str(student_id):
+                    subject_id = row[2].strip() if len(row) > 2 and row[2] else "N/A"
+                    
+                    logger.info(f"Строка {row_idx}, предмет {subject_id}:")
+                    
+                    # Проверяем расписание (столбцы 14-244)
+                    for i in range(14, min(245, len(headers)), 2):
+                        if i < len(headers) and formatted_date.lower() in headers[i]:
+                            start_time = row[i] if i < len(row) else ""
+                            end_time = row[i + 1] if i + 1 < len(row) else ""
+                            logger.info(f"  Расписание: {headers[i]} = {start_time}-{end_time}")
+                    
+                    # Проверяем финансы (столбцы 245+)
+                    for i in range(245, min(len(headers), 500)):
+                        if i < len(headers) and formatted_date.lower() in headers[i]:
+                            value = row[i] if i < len(row) else ""
+                            logger.info(f"  Финансы: {headers[i]} = {value}")
+
+        except Exception as e:
+            logger.error(f"Ошибка при отладке даты: {e}")
         
     def debug_finance_structure(self, student_id: int, subject_id: str):
         """Отладочный метод для просмотра структуры финансовых данных"""
