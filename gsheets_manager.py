@@ -313,11 +313,14 @@ class GoogleSheetsManager:
             finance_found = False
 
             # Ищем финансовые столбцы для выбранной даты (начиная с столбца 245)
-            for i in range(245, len(headers)):
+            # ОСНОВНОЕ ИСПРАВЛЕНИЕ: Ищем ПЕРВЫЙ столбец с нужной датой для пополнений
+            for i in range(245, len(headers), 2):  # Шаг 2 - только столбцы пополнений
+                if i >= len(headers):
+                    break
+                    
                 header = headers[i]
                 if formatted_date.lower() in header:
-                    # Нашли финансовый столбец для нужной даты
-                    # Это ПЕРВАЯ колонка с датой - в ней должно быть пополнение
+                    # Нашли финансовый столбец для нужной даты - это столбец пополнений
                     if len(data[target_row - 1]) > i:
                         replenishment_str = data[target_row - 1][i]
                         logger.info(
@@ -334,7 +337,6 @@ class GoogleSheetsManager:
                                 clean_str = clean_str.replace(',', '.')  # запятая как разделитель дробей
 
                                 # Убираем все нецифровые символы, кроме точки и минуса
-                                # Но оставляем точку как разделитель дробей
                                 import re
                                 clean_str = re.sub(r'[^\d.-]', '', clean_str)
 
@@ -348,7 +350,7 @@ class GoogleSheetsManager:
                                     finance_found = True
                                     logger.info(f"Пополнение найдено: {replenished} руб.")
 
-                                break
+                                break  # Выходим после нахождения первого совпадения даты
                             except ValueError as e:
                                 logger.error(
                                     f"Ошибка преобразования пополнения '{replenishment_str}' (очищенное: '{clean_str}'): {e}")
@@ -1282,7 +1284,7 @@ class GoogleSheetsManager:
             logger.error(f"Error processing daily finances: {e}")
 
     def get_student_finance_history(self, student_id: int) -> List[Dict]:
-        """Получает полную историю финансовых операций студента без дублирования"""
+        """Получает полную историю финансовых операций студента"""
         try:
             cache_key = f"finance_history_{student_id}"
             cached_result = self._get_cached_data(cache_key)
@@ -1299,11 +1301,13 @@ class GoogleSheetsManager:
             student_rows = []
             for row_idx, row in enumerate(data[1:], start=2):
                 if len(row) > 0 and str(row[0]).strip() == str(student_id):
-                    student_rows.append({
-                        'row_idx': row_idx,
-                        'subject_id': row[2].strip() if len(row) > 2 and row[2] else "",
-                        'row_data': row
-                    })
+                    subject_id = row[2].strip() if len(row) > 2 and row[2] else ""
+                    if subject_id:
+                        student_rows.append({
+                            'row_idx': row_idx,
+                            'subject_id': subject_id,
+                            'row_data': row
+                        })
 
             if not student_rows:
                 return []
@@ -1317,9 +1321,6 @@ class GoogleSheetsManager:
             # Для каждой строки студента (каждого предмета) собираем операции
             for student_row in student_rows:
                 subject_id = student_row['subject_id']
-                if not subject_id:  # Пропускаем строки без subject_id
-                    continue
-                    
                 row_data = student_row['row_data']
 
                 # Получаем тариф для этого предмета
@@ -1372,7 +1373,8 @@ class GoogleSheetsManager:
                         logger.info(f"Найдено занятие в расписании: дата {formatted_date}, время {row_data[schedule_col]}-{row_data[schedule_col + 1]}")
 
                 # 2. Теперь обрабатываем финансовые столбцы (начиная с 245)
-                for i in range(245, min(len(headers), 500), 2):  # Шаг 2 - только столбцы пополнений
+                # ИСПРАВЛЕНИЕ: Обрабатываем ВСЕ финансовые столбцы, а не только через один
+                for i in range(245, min(len(headers), 500)):
                     if i >= len(headers) or not headers[i]:
                         continue
 
@@ -1400,7 +1402,7 @@ class GoogleSheetsManager:
                     except ValueError:
                         continue
 
-                    # Обрабатываем значение ячейки пополнения (только положительные значения)
+                    # Обрабатываем значение ячейки пополнения
                     replenished = 0.0
                     if len(row_data) > i and row_data[i]:
                         try:
@@ -1417,11 +1419,13 @@ class GoogleSheetsManager:
                                 # Учитываем только положительные пополнения
                                 if raw_value > 0:
                                     replenished = raw_value
+                                    logger.info(f"Найдено пополнение: дата {formatted_date}, сумма {replenished}")
                                 else:
                                     # Отрицательные значения игнорируем (это могут быть списания в других столбцах)
-                                    logger.debug(f"Игнорируем отрицательное/нулевое значение в столбце пополнений: {raw_value} для даты {formatted_date}")
+                                    logger.debug(f"Игнорируем отрицательное/нулевое значение: {raw_value} для даты {formatted_date}")
                                     
-                        except (ValueError, TypeError):
+                        except (ValueError, TypeError) as e:
+                            logger.debug(f"Ошибка обработки пополнения '{cell_value}': {e}")
                             continue
 
                     # 3. Проверяем, было ли занятие в эту дату (используем заранее собранный словарь)
@@ -1465,6 +1469,42 @@ class GoogleSheetsManager:
         except Exception as e:
             logger.error(f"Error getting finance history for student {student_id}: {e}")
             return []
+        
+    def debug_finance_structure(self, student_id: int, subject_id: str):
+        """Отладочный метод для просмотра структуры финансовых данных"""
+        try:
+            worksheet = self._get_or_create_worksheet("Ученики бот")
+            data = worksheet.get_all_values()
+
+            if len(data) < 2:
+                return
+
+            # Находим строку ученика
+            target_row = -1
+            for row_idx, row in enumerate(data[1:], start=2):
+                if (len(row) > 0 and str(row[0]).strip() == str(student_id) and
+                        len(row) > 2 and str(row[2]).strip() == str(subject_id)):
+                    target_row = row_idx
+                    break
+
+            if target_row == -1:
+                logger.error(f"Строка не найдена для student_id {student_id}, subject_id {subject_id}")
+                return
+
+            headers = [str(h).strip() for h in data[0]]
+            row_data = data[target_row - 1]
+
+            logger.info("=== ОТЛАДКА ФИНАНСОВОЙ СТРУКТУРЫ ===")
+            logger.info(f"Заголовки финансовых столбцов (245+):")
+            
+            # Показываем финансовые столбцы
+            for i in range(245, min(len(headers), 300)):  # Первые 55 финансовых столбцов
+                if i < len(headers) and headers[i]:
+                    value = row_data[i] if i < len(row_data) else "N/A"
+                    logger.info(f"Столбец {i}: '{headers[i]}' = '{value}'")
+
+        except Exception as e:
+            logger.error(f"Ошибка при отладке структуры: {e}")
         
     def get_student_balance_for_subject(self, user_id: int, subject_id: str) -> float:
         """Получает баланс студента для конкретного предмета"""
@@ -1709,6 +1749,7 @@ class GoogleSheetsManager:
             for student_row in student_rows:
                 subject_id = student_row['subject_id']
                 total_replenished = 0.0
+                total_withdrawn = 0.0
                 row_data = student_row['row_data']
 
                 # Получаем тариф для этого предмета
@@ -1718,11 +1759,13 @@ class GoogleSheetsManager:
                         tariff_str = str(row_data[13]).replace(',', '.').strip()
                         tariff_str = tariff_str.replace('\xa0', '').replace(' ', '')
                         tariff = float(tariff_str) if tariff_str else 0.0
+                        logger.info(f"Тариф для предмета {subject_id}: {tariff}")
                     except ValueError:
                         tariff = 0.0
+                        logger.warning(f"Не удалось получить тариф для предмета {subject_id}")
 
-                # 1. Учитываем финансовые операции (столбцы пополнений начиная с 245, шаг 2)
-                for i in range(245, min(len(headers), 500), 2):  # Только столбцы пополнений
+                # 1. Учитываем финансовые операции (столбцы пополнений начиная с 245)
+                for i in range(245, min(len(headers), 500)):
                     if i >= len(headers) or not headers[i]:
                         continue
 
@@ -1741,11 +1784,12 @@ class GoogleSheetsManager:
                                 # Учитываем только положительные пополнения
                                 if amount > 0:
                                     total_replenished += amount
-                        except (ValueError, TypeError):
+                                    logger.info(f"Найдено пополнение для предмета {subject_id}: {amount} руб. в столбце {i}")
+                        except (ValueError, TypeError) as e:
+                            logger.debug(f"Ошибка обработки пополнения '{cell_value}': {e}")
                             continue
 
                 # 2. Учитываем списания за занятия (расписание в столбцах 14-244)
-                total_withdrawn = 0.0
                 for i in range(14, min(245, len(headers)), 2):
                     if (i < len(headers) and headers[i] and 
                         len(row_data) > i + 1 and row_data[i] and row_data[i + 1]):
@@ -1754,6 +1798,7 @@ class GoogleSheetsManager:
                         end_time = row_data[i + 1].strip()
                         if start_time and end_time:
                             total_withdrawn += tariff
+                            logger.info(f"Найдено занятие для предмета {subject_id}: время {start_time}-{end_time}, списание {tariff} руб.")
 
                 # Итоговый баланс = пополнения - списания
                 final_balance = total_replenished - total_withdrawn
@@ -1767,6 +1812,64 @@ class GoogleSheetsManager:
         except Exception as e:
             logger.error(f"Ошибка получения баланса по предметам для student_id {student_id}: {e}")
             return {}
+    
+    def debug_subject_tariffs(self, student_id: int):
+        """Отладочный метод для проверки тарифов по предметам"""
+        try:
+            worksheet = self._get_or_create_worksheet("Ученики бот")
+            data = worksheet.get_all_values()
+
+            if len(data) < 2:
+                return
+
+            logger.info(f"=== ОТЛАДКА ТАРИФОВ ДЛЯ STUDENT_ID {student_id} ===")
+            
+            for row_idx, row in enumerate(data[1:], start=2):
+                if len(row) > 0 and str(row[0]).strip() == str(student_id):
+                    subject_id = row[2].strip() if len(row) > 2 and row[2] else "N/A"
+                    tariff = row[13] if len(row) > 13 else "N/A"
+                    logger.info(f"Строка {row_idx}: subject_id={subject_id}, tariff={tariff}")
+
+        except Exception as e:
+            logger.error(f"Ошибка при отладке тарифов: {e}")
+
+    def debug_schedule_lessons(self, student_id: int, subject_id: str):
+        """Отладочный метод для проверки занятий в расписании"""
+        try:
+            worksheet = self._get_or_create_worksheet("Ученики бот")
+            data = worksheet.get_all_values()
+
+            if len(data) < 2:
+                return
+
+            # Находим строку студента
+            target_row = -1
+            for row_idx, row in enumerate(data[1:], start=2):
+                if (len(row) > 0 and str(row[0]).strip() == str(student_id) and
+                        len(row) > 2 and str(row[2]).strip() == str(subject_id)):
+                    target_row = row_idx
+                    break
+
+            if target_row == -1:
+                logger.error(f"Строка не найдена")
+                return
+
+            headers = [str(h).strip().lower() for h in data[0]]
+            row_data = data[target_row - 1]
+
+            logger.info(f"=== ОТЛАДКА РАСПИСАНИЯ ДЛЯ {subject_id} ===")
+            
+            # Проверяем столбцы расписания (14-244)
+            for i in range(14, min(245, len(headers)), 2):
+                if i < len(headers) and headers[i]:
+                    start_time = row_data[i] if i < len(row_data) else ""
+                    end_time = row_data[i + 1] if i + 1 < len(row_data) else ""
+                    
+                    if start_time and end_time and str(start_time).strip() and str(end_time).strip():
+                        logger.info(f"Найдено занятие: столбец {i}, время {start_time}-{end_time}, дата '{headers[i]}'")
+
+        except Exception as e:
+            logger.error(f"Ошибка при отладке расписания: {e}")
 
     def get_self_employed_with_lowest_balance(self, money: float) -> Dict[str, any]:
         """Находит самозанятого преподавателя с наименьшим балансом, учитывая лимиты"""
@@ -2208,6 +2311,11 @@ class GoogleSheetsManager:
             
             # Сортируем по дате (от старых к новым)
             last_month_history.sort(key=lambda x: x["date"])
+            
+            # ОТЛАДКА: Логируем найденные операции
+            logger.info(f"=== ОТЛАДКА ИСТОРИИ ЗА ПОСЛЕДНИЙ МЕСЯЦ ДЛЯ {student_id} ===")
+            for op in last_month_history:
+                logger.info(f"Операция: {op['date']} {op['subject']} +{op['replenished']} -{op['withdrawn']}")
             
             self._set_cached_data(cache_key, last_month_history)
             return last_month_history

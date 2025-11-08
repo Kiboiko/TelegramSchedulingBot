@@ -317,7 +317,8 @@ class FinanceHandlers:
                 f"Баланс = Все пополнения - Все списания\n\n"
                 f"Остаток средств переносится на следующие занятия."
             )
-            
+            self.gsheets.debug_finance_structure(child_id, subject_id)
+            self.gsheets.debug_subject_tariffs(child_id)
             builder = InlineKeyboardBuilder()
             builder.button(text="🔄 Обновить", callback_data=f"balance_child_{child_id}")
             builder.button(text="⬅️ Назад", callback_data="finance_show_balance")
