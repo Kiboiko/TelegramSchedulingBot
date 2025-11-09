@@ -1781,7 +1781,12 @@ async def process_student_subject(callback: types.CallbackQuery, state: FSMConte
     await state.set_state(BookingStates.SELECT_DATE)
     await callback.answer()
     
-
+# Обработчик для оплаты через ЮKassa
+@dp.callback_query(F.data == "confirm_yookassa_payment")
+async def handle_yookassa_payment(callback: types.CallbackQuery, state: FSMContext):
+    """Обрабатывает подтверждение оплаты через ЮKassa"""
+    from payment_handlers import PaymentHandlers
+    await PaymentHandlers.handle_yookassa_payment(callback, state)
 
 @dp.callback_query(BookingStates.SELECT_DATE, F.data.startswith("calendar_day_"))
 async def process_calendar(callback: types.CallbackQuery, state: FSMContext):

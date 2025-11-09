@@ -736,13 +736,13 @@ class FinanceHandlers:
         message += f"📋 Тариф: {tariff} руб./занятие\n\n"
 
         # Рассчитываем изменение за день
-        daily_change = replenished - withdrawn
-        if daily_change > 0:
-            message += f"📈 Изменение за день: +{daily_change} руб."
-        elif daily_change < 0:
-            message += f"📉 Изменение за день: {daily_change} руб."
-        else:
-            message += "➖ За день баланс не изменился"
+        # daily_change = replenished - withdrawn
+        # if daily_change > 0:
+        #     message += f"📈 Изменение за день: +{daily_change} руб."
+        # elif daily_change < 0:
+        #     message += f"📉 Изменение за день: {daily_change} руб."
+        # else:
+        #     message += "➖ За день баланс не изменился"
 
         return message
 
