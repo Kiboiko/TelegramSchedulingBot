@@ -206,6 +206,130 @@ class DatabaseManager:
             logger.error(f"❌ Error updating payment status: {e}")
             raise
 
+    async def get_all_receipts(self):
+        """Получает все чеки для администратора"""
+        try:
+            async with self.pool.acquire() as conn:
+                payments = await conn.fetch(
+                    """SELECT p.*, ci.added_by, ci.added_datetime, cd.type as content_type, cd.data as content_data
+                       FROM payments p
+                       JOIN content_info ci ON p.content_id = ci.content_id
+                       JOIN content_data cd ON ci.content_id = cd.content_id
+                       WHERE p.content_id IS NOT NULL
+                       ORDER BY p.payment_date DESC
+                       LIMIT 100"""
+                )
+
+                result = []
+                for payment in payments:
+                    payment_dict = dict(payment)
+
+                    # Извлекаем file_id из данных контента
+                    if payment_dict.get('content_data'):
+                        try:
+                            data_dict = json.loads(payment_dict['content_data'])
+                            payment_dict['file_id'] = data_dict.get('file_id')
+                        except Exception as e:
+                            logger.error(f"Ошибка парсинга content_data: {e}")
+                            payment_dict['file_id'] = None
+
+                    result.append(payment_dict)
+
+                return result
+
+        except Exception as e:
+            logger.error(f"❌ Error getting all receipts: {e}")
+            return []
+
+    async def get_payment_with_file(self, payment_id: int) -> Optional[Dict[str, Any]]:
+        """Получение платежа с информацией о файле"""
+        try:
+            async with self.pool.acquire() as conn:
+                payment = await conn.fetchrow(
+                    """SELECT p.*, ci.added_by, ci.added_datetime, cd.type as content_type, cd.data as content_data
+                       FROM payments p
+                       JOIN content_info ci ON p.content_id = ci.content_id
+                       JOIN content_data cd ON ci.content_id = cd.content_id
+                       WHERE p.payment_id = $1""",
+                    payment_id
+                )
+
+                if payment:
+                    payment_dict = dict(payment)
+
+                    # Извлекаем file_id из данных контента
+                    if payment_dict.get('content_data'):
+                        try:
+                            data_dict = json.loads(payment_dict['content_data'])
+                            payment_dict['file_id'] = data_dict.get('file_id')
+                            # Также пробуем другие возможные ключи
+                            if not payment_dict['file_id']:
+                                payment_dict['file_id'] = data_dict.get('file_unique_id')
+                        except Exception as e:
+                            logger.error(f"Ошибка парсинга content_data: {e}")
+                            payment_dict['file_id'] = None
+
+                    return payment_dict
+                return None
+
+        except Exception as e:
+            logger.error(f"❌ Error getting payment with file: {e}")
+            return None
+
+    async def get_content_file_id(self, content_id: int) -> Optional[str]:
+        """Получает file_id по content_id"""
+        try:
+            async with self.pool.acquire() as conn:
+                content_data = await conn.fetchrow(
+                    "SELECT data FROM content_data WHERE content_id = $1",
+                    content_id
+                )
+
+                if content_data and content_data['data']:
+                    try:
+                        data_dict = json.loads(content_data['data'])
+                        return data_dict.get('file_id')
+                    except Exception as e:
+                        logger.error(f"Ошибка парсинга данных контента: {e}")
+
+                return None
+
+        except Exception as e:
+            logger.error(f"❌ Error getting content file_id: {e}")
+            return None
+
+    async def get_payments_by_date(self, date: datetime.date):
+        """Получает платежи за указанную дату"""
+        try:
+            async with self.pool.acquire() as conn:
+                payments = await conn.fetch(
+                    """SELECT p.*, ci.added_by, ci.added_datetime, cd.type as content_type, cd.data
+                       FROM payments p
+                       JOIN content_info ci ON p.content_id = ci.content_id
+                       JOIN content_data cd ON ci.content_id = cd.content_id
+                       WHERE DATE(p.payment_date) = $1
+                       ORDER BY p.payment_date DESC""",
+                    date
+                )
+
+                result = []
+                for payment in payments:
+                    payment_dict = dict(payment)
+                    # Извлекаем file_id из данных контента
+                    if payment_dict.get('data'):
+                        try:
+                            data_dict = json.loads(payment_dict['data'])
+                            payment_dict['file_id'] = data_dict.get('file_id')
+                        except:
+                            payment_dict['file_id'] = None
+                    result.append(payment_dict)
+
+                return result
+
+        except Exception as e:
+            logger.error(f"❌ Error getting payments by date: {e}")
+            return []
+
     async def get_user_payments(self, user_id: int, limit: int = 10) -> List[Dict[str, Any]]:
         """Получение платежей пользователя"""
         try:

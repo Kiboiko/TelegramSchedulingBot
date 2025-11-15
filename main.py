@@ -75,6 +75,8 @@ from finance_handlers import FinanceHandlers
 from reminder_manager import StudentReminderManager
 from payment_handlers import PaymentHandlers,PaymentStates
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from admin_receipts_handler import AdminReceiptsHandler, AdminReceiptStates
+
 # Настройка логирования
 
 
@@ -716,6 +718,59 @@ async def handle_teacher_feedback_submit(callback: types.CallbackQuery, state: F
     except Exception as e:
         logger.error(f"Ошибка отправки feedback преподавателя: {e}")
         await callback.answer("Ошибка отправки", show_alert=True)
+
+
+@dp.message(F.text == "📋 Просмотреть чеки")
+async def handle_admin_receipts(message: types.Message, state: FSMContext):
+    """Обработчик кнопки просмотра чеков для администратора"""
+    await AdminReceiptsHandler.handle_admin_receipts_start(message, state)
+
+
+# Добавьте обработчики callback'ов
+@dp.callback_query(F.data.startswith("admin_receipt_"))
+async def handle_admin_receipt_callbacks(callback: types.CallbackQuery, state: FSMContext):
+    """Централизованный обработчик callback'ов для админки чеков"""
+    try:
+        data = callback.data
+
+        if data.startswith("admin_receipt_date_"):
+            await AdminReceiptsHandler.handle_date_selection(callback, state)
+
+        elif data.startswith("admin_receipt_view_"):
+            await AdminReceiptsHandler.handle_receipt_view(callback, state)
+
+        elif data.startswith("admin_receipt_refresh_"):
+            await AdminReceiptsHandler.handle_receipt_refresh(callback, state)
+
+        elif data.startswith("admin_receipt_confirm_"):
+            await AdminReceiptsHandler.handle_receipt_confirm(callback)
+
+        elif data.startswith("admin_receipt_reject_"):
+            await AdminReceiptsHandler.handle_receipt_reject(callback)
+
+        elif data == "admin_receipt_back_to_list":
+            await AdminReceiptsHandler.handle_back_to_list(callback, state)
+
+        elif data == "admin_receipt_back_to_dates":
+            await AdminReceiptsHandler.handle_back_to_dates(callback, state)
+
+        elif data == "admin_receipt_show_all":
+            await AdminReceiptsHandler.handle_date_selection(callback, state)
+
+        elif data == "admin_receipt_close":
+            try:
+                await callback.message.delete()
+            except:
+                pass
+            await state.clear()
+
+    except Exception as e:
+        logger.error(f"Ошибка обработки admin_receipt callback: {e}")
+        # Не пытаемся отвечать на устаревший callback
+        try:
+            await callback.answer("❌ Произошла ошибка", show_alert=True)
+        except:
+            pass
 
 @dp.message(FeedbackTeacherStates.WAITING_FEEDBACK_DETAILS)
 async def handle_teacher_feedback_text_input(message: types.Message, state: FSMContext):
