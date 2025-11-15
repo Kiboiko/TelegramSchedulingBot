@@ -732,15 +732,45 @@ async def handle_admin_receipt_callbacks(callback: types.CallbackQuery, state: F
     """Централизованный обработчик callback'ов для админки чеков"""
     try:
         data = callback.data
+        logger.info(f"Обработка admin_receipt callback: {data}")
 
-        if data.startswith("admin_receipt_date_"):
+        if data in ["admin_receipt_mode_date", "admin_receipt_mode_user"]:
+            await AdminReceiptsHandler.handle_view_mode_selection(callback, state)
+
+        elif data.startswith("admin_receipt_select_user_"):
+            await AdminReceiptsHandler.handle_user_selection(callback, state)
+
+        elif data.startswith("admin_receipt_user_date_"):
+            await AdminReceiptsHandler.handle_user_date_selection(callback, state)
+
+        # НОВЫЕ ОБРАБОТЧИКИ
+        elif data.startswith("admin_receipt_user_for_date_"):
+            await AdminReceiptsHandler.handle_user_for_date_selection(callback, state)
+
+        elif data.startswith("admin_receipt_back_to_users_for_date_"):
+            await AdminReceiptsHandler.handle_back_to_users_for_date(callback, state)
+
+        elif data == "admin_receipt_back_to_modes":
+            await AdminReceiptsHandler.handle_back_to_modes(callback, state)
+
+        elif data == "admin_receipt_back_to_users":
+            await AdminReceiptsHandler.handle_back_to_users(callback, state)
+
+        elif data.startswith("admin_receipt_back_to_user_dates_"):
+            await AdminReceiptsHandler.handle_back_to_user_dates(callback, state)
+
+        # ОБРАБОТЧИКИ КАЛЕНДАРЯ ЧЕКОВ
+        elif data.startswith("admin_receipt_date_"):
             await AdminReceiptsHandler.handle_date_selection(callback, state)
+
+        elif data.startswith("admin_receipt_calendar_change_"):
+            await AdminReceiptsHandler.handle_date_selection(callback, state)
+
+        elif data == "admin_receipt_ignore":
+            await callback.answer()
 
         elif data.startswith("admin_receipt_view_"):
             await AdminReceiptsHandler.handle_receipt_view(callback, state)
-
-        elif data.startswith("admin_receipt_refresh_"):
-            await AdminReceiptsHandler.handle_receipt_refresh(callback, state)
 
         elif data.startswith("admin_receipt_confirm_"):
             await AdminReceiptsHandler.handle_receipt_confirm(callback)
@@ -754,9 +784,6 @@ async def handle_admin_receipt_callbacks(callback: types.CallbackQuery, state: F
         elif data == "admin_receipt_back_to_dates":
             await AdminReceiptsHandler.handle_back_to_dates(callback, state)
 
-        elif data == "admin_receipt_show_all":
-            await AdminReceiptsHandler.handle_date_selection(callback, state)
-
         elif data == "admin_receipt_close":
             try:
                 await callback.message.delete()
@@ -766,7 +793,6 @@ async def handle_admin_receipt_callbacks(callback: types.CallbackQuery, state: F
 
     except Exception as e:
         logger.error(f"Ошибка обработки admin_receipt callback: {e}")
-        # Не пытаемся отвечать на устаревший callback
         try:
             await callback.answer("❌ Произошла ошибка", show_alert=True)
         except:
