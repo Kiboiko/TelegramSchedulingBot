@@ -123,7 +123,7 @@
 
 from datetime import time, timedelta
 from typing import List, Dict, Tuple, Optional
-from models import Teacher, Student
+from shedule_app.models import Teacher, Student
 import logging
 
 logging.basicConfig(level=logging.INFO)

@@ -7,7 +7,7 @@ from googleapiclient.errors import HttpError
 import logging
 import re
 # Импортируем ваши модели
-from models import Teacher, Student
+from shedule_app.models import Teacher, Student
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
