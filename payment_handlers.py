@@ -338,7 +338,7 @@ class PaymentHandlers:
 
             await state.update_data(payment_data=payment_data)
 
-            # Формируем сообщение для пользователя
+            # Формируем сообщение для пользователя с ВСЕМИ данными преподавателя
             message_text = (
                 "💳 *Прямой перевод преподавателю*\n\n"
                 f"👤 Для: {target_name}\n"
@@ -346,8 +346,25 @@ class PaymentHandlers:
                 f"💰 Сумма: {amount:.2f} руб.\n\n"
             )
 
+            # ДОБАВЛЯЕМ ВСЕ КОНТАКТНЫЕ ДАННЫЕ ПРЕПОДАВАТЕЛЯ
             if self_employed_info and self_employed_info.get('name'):
-                message_text += f"👨‍🏫 Преподаватель: *{self_employed_info['name']}*\n\n"
+                message_text += f"👨‍🏫 Преподаватель: *{self_employed_info['name']}*\n"
+
+                # Добавляем телефон, если есть
+                if self_employed_info.get('phone'):
+                    message_text += f"📞 Телефон: {self_employed_info['phone']}\n"
+
+                # Добавляем номер карты, если есть
+                if self_employed_info.get('card_number'):
+                    message_text += f"💳 Карта: {self_employed_info['card_number']}\n"
+
+                # Добавляем банк, если есть
+                if self_employed_info.get('bank'):
+                    message_text += f"🏦 Банк: {self_employed_info['bank']}\n"
+
+                message_text += "\n"  # Пустая строка для разделения
+            else:
+                message_text += "👨‍🏫 Преподаватель: *не назначен*\n\n"
 
             message_text += (
                 "📋 *Инструкции:*\n"
