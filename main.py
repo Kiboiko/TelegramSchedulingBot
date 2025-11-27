@@ -126,10 +126,13 @@ storage = JSONStorage(file_path=BOOKINGS_FILE)
 #     gsheets = None
 
 try:
-    # СТАЛО:
-    excel_folder = r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\Ученики тест .xlsx"  # ваша папка
-    gsheets = ExcelManager(excel_folder)
+    # Укажите путь к вашему файлу Excel
+    import os
 
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    excel_file_path = os.path.join(current_dir, "Ученики тест.xlsx")  # ваше имя файла
+
+    gsheets = ExcelManager(excel_file_path)  # передаем путь к файлу, а не к папке
     gsheets.connect()
     storage.set_gsheets_manager(gsheets)
     logger.info("Excel integration initialized successfully")

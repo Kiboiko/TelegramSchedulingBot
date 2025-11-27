@@ -12,23 +12,24 @@ logger = logging.getLogger(__name__)
 
 
 class ExcelManager:
-    def __init__(self, excel_folder: str):
-        self.excel_folder = excel_folder
+    def __init__(self, excel_file_path: str):
+        self.excel_file_path = excel_file_path
         self.qual_map = {}
         self.qual_links = {}
         self._cache = {}
         self._cache_timeout = 60
+        self._workbook = None
 
-        # Имена файлов (аналоги названиям листов в Google Sheets)
-        self.files = {
-            'users': 'Пользователи бот.xlsx',
-            'students': 'Ученики бот.xlsx',
-            'teachers': 'Преподаватели бот.xlsx',
-            'self_employed': 'Самозанятые бот.xlsx',
-            'subjects': 'Предметы бот.xlsx',
-            'parents': 'Родители бот.xlsx',
-            'finances': 'Финансы.xlsx',
-            'balances': 'Балансы.xlsx'
+        # Имена листов в вашем файле Excel
+        self.sheets = {
+            'users': 'Пользователи бот',
+            'students': 'Ученики бот',
+            'teachers': 'Преподаватели бот',
+            'self_employed': 'Самозанятые бот',
+            'subjects': 'Предметы бот',
+            'parents': 'Родители бот',
+            'finances': 'Финансы',
+            'balances': 'Балансы'
         }
 
     def _get_cached_data(self, key):
@@ -44,61 +45,107 @@ class ExcelManager:
         self._cache[key] = (data, time.time())
 
     def connect(self):
-        """Проверяет доступность Excel файлов"""
+        """Подключается к Excel файлу и проверяет листы"""
         try:
-            # Проверяем существование основных файлов
-            required_files = ['users', 'students', 'teachers', 'subjects']
-            for file_key in required_files:
-                file_path = os.path.join(self.excel_folder, self.files[file_key])
-                if not os.path.exists(file_path):
-                    logger.warning(f"Файл {file_path} не найден, будет создан при первой записи")
+            if not os.path.exists(self.excel_file_path):
+                logger.warning(f"Файл {self.excel_file_path} не найден, будет создан при первой записи")
+                # Создаем базовую структуру файла
+                self._create_excel_file()
+                return True
+
+            # Проверяем доступность файла
+            self._workbook = openpyxl.load_workbook(self.excel_file_path)
+            logger.info(f"Успешное подключение к Excel файлу: {self.excel_file_path}")
+
+            # Проверяем наличие всех необходимых листов
+            self._ensure_sheets_exist()
 
             self._load_qualifications()
-            logger.info("Успешное подключение к Excel файлам")
             return True
         except Exception as e:
             logger.error(f"Ошибка подключения к Excel: {e}")
             return False
 
-    def _get_file_path(self, file_key: str) -> str:
-        """Получает полный путь к файлу"""
-        return os.path.join(self.excel_folder, self.files[file_key])
-
-    def _ensure_file_exists(self, file_key: str, headers: List[str] = None):
-        """Создает файл если он не существует"""
-        file_path = self._get_file_path(file_key)
-
-        if not os.path.exists(file_path):
-            logger.info(f"Создаем новый файл: {file_path}")
-            df = pd.DataFrame(columns=headers if headers else [])
-            df.to_excel(file_path, index=False, engine='openpyxl')
-
-    def _load_worksheet_data(self, file_key: str) -> pd.DataFrame:
-        """Загружает данные из Excel файла"""
+    def _create_excel_file(self):
+        """Создает новый Excel файл с базовой структурой"""
         try:
-            file_path = self._get_file_path(file_key)
+            self._workbook = openpyxl.Workbook()
+            # Удаляем лист по умолчанию
+            default_sheet = self._workbook.active
+            self._workbook.remove(default_sheet)
 
-            if not os.path.exists(file_path):
-                self._ensure_file_exists(file_key)
+            # Создаем все необходимые листы
+            for sheet_name in self.sheets.values():
+                self._workbook.create_sheet(sheet_name)
+
+            self._workbook.save(self.excel_file_path)
+            logger.info(f"Создан новый Excel файл: {self.excel_file_path}")
+        except Exception as e:
+            logger.error(f"Ошибка создания Excel файла: {e}")
+
+    def _ensure_sheets_exist(self):
+        """Проверяет и создает отсутствующие листы"""
+        try:
+            existing_sheets = self._workbook.sheetnames
+            sheets_created = False
+
+            for sheet_name in self.sheets.values():
+                if sheet_name not in existing_sheets:
+                    self._workbook.create_sheet(sheet_name)
+                    sheets_created = True
+                    logger.info(f"Создан лист: {sheet_name}")
+
+            if sheets_created:
+                self._workbook.save(self.excel_file_path)
+
+        except Exception as e:
+            logger.error(f"Ошибка проверки листов: {e}")
+
+    def _load_worksheet_data(self, sheet_key: str) -> pd.DataFrame:
+        """Загружает данные из листа Excel файла"""
+        try:
+            if not os.path.exists(self.excel_file_path):
                 return pd.DataFrame()
 
-            return pd.read_excel(file_path, engine='openpyxl')
+            sheet_name = self.sheets[sheet_key]
+            df = pd.read_excel(self.excel_file_path, sheet_name=sheet_name, engine='openpyxl')
+            return df
         except Exception as e:
-            logger.error(f"Ошибка загрузки файла {file_key}: {e}")
+            logger.error(f"Ошибка загрузки листа '{sheet_key}': {e}")
             return pd.DataFrame()
 
-    def _save_worksheet_data(self, file_key: str, df: pd.DataFrame):
-        """Сохраняет данные в Excel файл"""
+    def _save_worksheet_data(self, sheet_key: str, df: pd.DataFrame):
+        """Сохраняет данные в лист Excel файла"""
         try:
-            file_path = self._get_file_path(file_key)
-            df.to_excel(file_path, index=False, engine='openpyxl')
+            sheet_name = self.sheets[sheet_key]
+
+            # Загружаем workbook
+            if self._workbook is None:
+                self._workbook = openpyxl.load_workbook(self.excel_file_path)
+
+            # Удаляем существующий лист и создаем новый
+            if sheet_name in self._workbook.sheetnames:
+                del self._workbook[sheet_name]
+
+            new_sheet = self._workbook.create_sheet(sheet_name)
+
+            # Записываем заголовки
+            for col_idx, column in enumerate(df.columns, 1):
+                new_sheet.cell(row=1, column=col_idx, value=column)
+
+            # Записываем данные
+            for row_idx, row in df.iterrows():
+                for col_idx, value in enumerate(row, 1):
+                    new_sheet.cell(row=row_idx + 2, column=col_idx, value=value)
+
+            self._workbook.save(self.excel_file_path)
             return True
         except Exception as e:
-            logger.error(f"Ошибка сохранения файла {file_key}: {e}")
+            logger.error(f"Ошибка сохранения листа '{sheet_key}': {e}")
             return False
 
     def _load_qualifications(self):
-        """Загружает соответствия предметов из файла предметов"""
+        """Загружает соответствия предметов из листа предметов"""
         try:
             df = self._load_worksheet_data('subjects')
 
@@ -106,10 +153,10 @@ class ExcelManager:
             self.qual_links = {}
 
             if df.empty:
-                logger.warning("Файл предметов пуст или не найден")
+                logger.warning("Лист предметов пуст или не найден")
                 return
 
-            logger.info("=== ДАННЫЕ ИЗ ФАЙЛА 'Предметы бот' ===")
+            logger.info("=== ДАННЫЕ ИЗ ЛИСТА 'Предметы бот' ===")
 
             for _, row in df.iterrows():
                 subject_id = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
@@ -118,18 +165,16 @@ class ExcelManager:
                 if subject_id.isdigit() and subject_name:
                     self.qual_map[subject_name] = subject_id
 
-                    # Загружаем ссылку из третьей колонки
                     if len(row) >= 3 and pd.notna(row.iloc[2]):
                         self.qual_links[subject_id] = str(row.iloc[2]).strip()
 
-                    logger.info(
-                        f"Добавлено: '{subject_name}' -> '{subject_id}', ссылка: {self.qual_links.get(subject_id, 'нет')}")
+                    logger.info(f"Добавлено: '{subject_name}' -> '{subject_id}'")
 
             logger.info(f"Итоговый qual_map: {self.qual_map}")
-            logger.info(f"Ссылки на материалы: {self.qual_links}")
 
         except Exception as e:
             logger.error(f"Ошибка загрузки квалификаций: {e}")
+
 
     def format_date(self, date_str: str) -> str:
         """Форматирует дату из YYYY-MM-DD в DD.MM.YYYY"""
