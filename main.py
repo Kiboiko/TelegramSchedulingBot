@@ -39,7 +39,10 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 import threading
-from gsheets_manager import GoogleSheetsManager
+
+# from gsheets_manager import GoogleSheetsManager
+from excel_manager import ExcelManager
+
 from storage import JSONStorage
 from shedule_app.HelperMethods import School
 from shedule_app.models import Person, Teacher, Student
@@ -110,16 +113,28 @@ dp = Dispatcher()
 storage = JSONStorage(file_path=BOOKINGS_FILE)
 
 # Настройка Google Sheets
+# try:
+#     gsheets = GoogleSheetsManager(
+#         credentials_file='credentials.json',
+#         spreadsheet_id=SPREADSHEET_ID
+#     )
+#     gsheets.connect()
+#     storage.set_gsheets_manager(gsheets)
+#     logger.info("Google Sheets integration initialized successfully")
+# except Exception as e:
+#     logger.error(f"Google Sheets initialization error: {e}")
+#     gsheets = None
+
 try:
-    gsheets = GoogleSheetsManager(
-        credentials_file='credentials.json',
-        spreadsheet_id=SPREADSHEET_ID
-    )
+    # СТАЛО:
+    excel_folder = r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\Ученики тест .xlsx"  # ваша папка
+    gsheets = ExcelManager(excel_folder)
+
     gsheets.connect()
     storage.set_gsheets_manager(gsheets)
-    logger.info("Google Sheets integration initialized successfully")
+    logger.info("Excel integration initialized successfully")
 except Exception as e:
-    logger.error(f"Google Sheets initialization error: {e}")
+    logger.error(f"Excel initialization error: {e}")
     gsheets = None
 
 feedback_manager = FeedbackManager(storage, gsheets, bot)
