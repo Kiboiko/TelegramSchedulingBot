@@ -1,13 +1,12 @@
 import os
 from datetime import datetime, time
 from typing import List, Tuple, Dict, Any, Optional
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
 import logging
 import re
+import pandas as pd
 # Импортируем ваши модели
 from shedule_app.models import Teacher, Student
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -15,47 +14,57 @@ class GoogleSheetsDataLoader:
     SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
     APPLICATION_NAME = 'Schedule App'
 
-    def __init__(self, credentials_path: str, spreadsheet_id: str, target_date: str):
-        self.spreadsheet_id = spreadsheet_id
+    def __init__(self, file_path: str, target_date: str):
+        self.file_path = file_path
         self.target_date = target_date
         self._study_plan_cache = {}
+        self.sheets_data = {}
 
-        # Аутентификация
-        credentials = service_account.Credentials.from_service_account_file(
-            credentials_path, scopes=self.SCOPES
-        )
-
-        self.service = build('sheets', 'v4', credentials=credentials)
+        # Загружаем все листы из Excel файла
+        try:
+            self.excel_file = pd.ExcelFile(file_path)
+            for sheet_name in self.excel_file.sheet_names:
+                df = pd.read_excel(file_path, sheet_name=sheet_name, header=None)
+                # Конвертируем DataFrame в список списков (как из Google Sheets API)
+                self.sheets_data[sheet_name] = df.fillna('').values.tolist()
+            logger.info(f"Загружены листы: {list(self.sheets_data.keys())}")
+        except Exception as e:
+            logger.error(f"Ошибка загрузки Excel файла: {e}")
+            raise
 
     def export_schedule_to_google_sheets(self, matrix: List[List[Any]], combinations: List[List[Any]]):
         try:
             sheet_name = "Расписание_" + datetime.now().strftime("%Y%m%d_%H%M%S")
-            self._create_new_sheet(sheet_name)
-
-            # Преобразуем матрицу в формат для Google Sheets
-            values = []
-            for row in matrix:
-                values_row = [str(cell) if cell is not None else "" for cell in row]
-                values.append(values_row)
-
-            # Записываем данные
-            body = {
-                'values': values
-            }
-
-            request = self.service.spreadsheets().values().update(
-                spreadsheetId=self.spreadsheet_id,
-                range=f"{sheet_name}!A1",
-                valueInputOption='RAW',
-                body=body
-            )
-            response = request.execute()
-
+            
+            # Создаем новый лист в существующем Excel файле
+            with pd.ExcelWriter(self.file_path, mode='a', if_sheet_exists='replace') as writer:
+                # Конвертируем матрицу в DataFrame
+                df = pd.DataFrame(matrix)
+                df.to_excel(writer, sheet_name=sheet_name, index=False, header=False)
+            
             print(f"Данные сохранены в лист: {sheet_name}")
 
         except Exception as ex:
             print(f"Ошибка экспорта: {ex}")
-            raise
+            # Если режим 'a' не работает, пробуем перезаписать весь файл
+            try:
+                self._rewrite_excel_with_new_sheet(matrix, sheet_name)
+            except Exception as ex2:
+                print(f"Ошибка при перезаписи файла: {ex2}")
+                raise
+
+    def _rewrite_excel_with_new_sheet(self, matrix: List[List[Any]], sheet_name: str):
+        """Перезаписывает весь Excel файл с добавлением нового листа"""
+        # Создаем новый Excel writer
+        with pd.ExcelWriter(self.file_path, engine='openpyxl') as writer:
+            # Сохраняем все существующие листы
+            for existing_sheet in self.sheets_data:
+                df = pd.DataFrame(self.sheets_data[existing_sheet])
+                df.to_excel(writer, sheet_name=existing_sheet, index=False, header=False)
+            
+            # Добавляем новый лист с расписанием
+            df = pd.DataFrame(matrix)
+            df.to_excel(writer, sheet_name=sheet_name, index=False, header=False)
 
     def load_data(self) -> Tuple[List[Teacher], List[Student]]:
         teachers = []
@@ -106,6 +115,7 @@ class GoogleSheetsDataLoader:
                 if student:
                     students.append(student)
                     logger.info(f"Добавлен студент {i+3}: {student.name}")
+
             logger.info("\n=== ДЕТАЛЬНАЯ ИНФОРМАЦИЯ О ДАННЫХ ===")
             logger.info("ПРЕПОДАВАТЕЛИ:")
             for teacher in teachers:
@@ -120,16 +130,6 @@ class GoogleSheetsDataLoader:
             logger.info(f"\nСУММАРНАЯ ПОТРЕБНОСТЬ: {sum(s.need_for_attention for s in students)}")
             logger.info(f"СУММАРНАЯ ЕМКОСТЬ: {sum(t.maximum_attention for t in teachers)}")
 
-            logger.info("\n=== ДЕТАЛЬНАЯ ИНФОРМАЦИЯ О ДАННЫХ ===")
-            logger.info("ПРЕПОДАВАТЕЛИ:")
-            for teacher in teachers:
-                logger.info(
-                    f"  {teacher.name}: предметы {teacher.subjects_id}, время {teacher.start_of_studying_time}-{teacher.end_of_studying_time}")  # Исправлено имя
-
-            logger.info("\nСТУДЕНТЫ:")
-            for student in students:
-                logger.info(
-                    f"  {student.name}: предмет {student.subject_id}, потребность {student.need_for_attention}, время {student.start_of_studying_time}-{student.end_of_studying_time}")  # Исправлено имя
         except Exception as ex:
             logger.error(f"Ошибка при загрузке данных: {ex}", exc_info=True)
 
@@ -139,7 +139,7 @@ class GoogleSheetsDataLoader:
     def _find_date_columns(self, sheet: List[List[Any]], date: str) -> Tuple[int, int]:
         if not sheet:
             return (-1, -1)
-        # logger.info(f"Заголовки таблицы: {sheet[0]}")
+        
         header_row = sheet[0]
         start_col = -1
         end_col = -1
@@ -174,8 +174,6 @@ class GoogleSheetsDataLoader:
                 ])
         except ValueError:
             target_date_formats = [date]
-
-        # logger.info(f"Поиск даты '{date}' в форматах: {target_date_formats}")
 
         # Ищем дату в заголовках
         for i, cell_value in enumerate(header_row):
@@ -283,16 +281,8 @@ class GoogleSheetsDataLoader:
         return lesson_count + 1  # Текущее занятие
 
     def _get_sheet_data(self, sheet_name: str) -> Optional[List[List[Any]]]:
-        try:
-            range_name = f"{sheet_name}!A:JF"  # ← Загружаем до 4 января
-            result = self.service.spreadsheets().values().get(
-                spreadsheetId=self.spreadsheet_id,
-                range=range_name
-            ).execute()
-            return result.get('values', [])
-        except HttpError as error:
-            print(f"Ошибка при получении данных из листа {sheet_name}: {error}")
-            return None
+        """Получает данные листа из локального Excel файла"""
+        return self.sheets_data.get(sheet_name)
 
     def _parse_teacher_row(self, row: List[Any], subject_map: Dict[str, int],
                            date_columns: Tuple[int, int]) -> Optional[Teacher]:
@@ -357,7 +347,6 @@ class GoogleSheetsDataLoader:
         except Exception as ex:
             logger.error(f"Ошибка парсинга преподавателя: {ex}")
             return None
-
 
     def _parse_student_row(self, row: List[Any], subject_map: Dict[str, int],
                    date_columns: Tuple[int, int]) -> Optional[Student]:
@@ -440,88 +429,12 @@ class GoogleSheetsDataLoader:
 
         return time_str
 
-    def export_schedule_to_google_sheets(self, matrix: List[List[Any]], combinations: List[List[Teacher]]):
-        try:
-            sheet_name = "Расписание_" + datetime.now().strftime("%Y%m%d_%H%M%S")
-
-            # 1. Создаем новый лист
-            self._create_new_sheet(sheet_name)
-
-            # 2. Подготавливаем данные
-            values = self._convert_to_value_list(matrix)
-            value_range = {
-                'values': values,
-                'range': f"{sheet_name}!A1"
-            }
-
-            # 3. Отправляем данные
-            request = self.service.spreadsheets().values().update(
-                spreadsheetId=self.spreadsheet_id,
-                range=f"{sheet_name}!A1",
-                valueInputOption='RAW',
-                body=value_range
-            )
-            response = request.execute()
-
-            print(f"Данные сохранены в лист: {sheet_name}")
-
-        except Exception as ex:
-            print(f"Ошибка экспорта: {ex}")
-            raise
-
     def _convert_to_value_list(self, matrix: List[List[Any]]) -> List[List[Any]]:
         values = []
         for row in matrix:
             values_row = [cell if cell is not None else "" for cell in row]
             values.append(values_row)
         return values
-
-    def _delete_sheet_if_exists(self, sheet_name: str):
-        try:
-            spreadsheet = self.service.spreadsheets().get(
-                spreadsheetId=self.spreadsheet_id
-            ).execute()
-
-            sheets = spreadsheet.get('sheets', [])
-            for sheet in sheets:
-                if sheet['properties']['title'] == sheet_name:
-                    sheet_id = sheet['properties']['sheetId']
-
-                    requests = [{
-                        'deleteSheet': {
-                            'sheetId': sheet_id
-                        }
-                    }]
-
-                    body = {'requests': requests}
-                    self.service.spreadsheets().batchUpdate(
-                        spreadsheetId=self.spreadsheet_id,
-                        body=body
-                    ).execute()
-                    break
-
-        except HttpError as error:
-            print(f"Ошибка при удалении листа: {error}")
-
-    def _create_new_sheet(self, sheet_name: str):
-        try:
-            requests = [{
-                'addSheet': {
-                    'properties': {
-                        'title': sheet_name
-                    }
-                }
-            }]
-
-            body = {'requests': requests}
-            self.service.spreadsheets().batchUpdate(
-                spreadsheetId=self.spreadsheet_id,
-                body=body
-            ).execute()
-
-        except HttpError as error:
-            print(f"Ошибка при создании листа: {error}")
-            raise
 
     def get_student_topic_by_user_id(self, user_id: str, target_date: str, subject_id: str = None) -> Optional[str]:
         """

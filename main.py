@@ -742,7 +742,7 @@ def generate_schedule_for_date(target_date: str) -> str:
         spreadsheet_id = SPREADSHEET_ID
 
         # Загружаем данные
-        loader = GoogleSheetsDataLoader(credentials_path, spreadsheet_id, target_date)
+        loader = GoogleSheetsDataLoader(r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\Ученики тест .xlsx", target_date)
         teachers, students = loader.load_data()
 
         if not teachers or not students:
@@ -1735,7 +1735,7 @@ async def process_calendar(callback: types.CallbackQuery, state: FSMContext):
         availability_map = None
         if role == 'student' and subject:
             try:
-                loader = GoogleSheetsDataLoader(CREDENTIALS_PATH, SPREADSHEET_ID, formatted_date)
+                loader = GoogleSheetsDataLoader(r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\Ученики тест .xlsx", formatted_date)
                 topic = loader.get_student_topic_by_user_id(str(user_id), formatted_date, str(subject))
             
                 if not topic:
