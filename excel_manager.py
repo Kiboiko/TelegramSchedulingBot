@@ -37,61 +37,29 @@ class ExcelManager:
     def connect(self):
         """Подключается к Excel файлу"""
         try:
-            if not os.path.exists(self.excel_file_path):
-                logger.error(f"Файл Excel не найден: {self.excel_file_path}")
-                # Создаем новый файл если не существует
-                self._create_new_excel_file()
-                return True
+            logger.info(f"🔍 Пытаемся открыть файл: {self.excel_file_path}")
 
-            self._workbook = openpyxl.load_workbook(self.excel_file_path, data_only=True)
+            # Простая проверка существования файла
+            if not os.path.exists(self.excel_file_path):
+                logger.error(f"❌ Файл не существует: {self.excel_file_path}")
+                return False
+
+            # Простая попытка открыть файл
+            self._workbook = openpyxl.load_workbook(self.excel_file_path, data_only=True, read_only=False)
             logger.info("✅ Успешное подключение к Excel файлу")
 
+            # Загружаем квалификации
             self._load_qualifications()
             return True
+
+        except PermissionError as e:
+            logger.error(f"❌ Файл заблокирован другим процессом: {e}")
+            logger.error("⚠️ Закройте файл в Excel и попробуйте снова")
+            return False
         except Exception as e:
             logger.error(f"❌ Ошибка подключения к Excel: {e}")
             return False
 
-    def _create_new_excel_file(self):
-        """Создает новый Excel файл с базовой структурой"""
-        try:
-            workbook = Workbook()
-            # Удаляем лист по умолчанию
-            workbook.remove(workbook.active)
-
-            # Создаем основные листы
-            sheets = [
-                "Предметы бот",
-                "Пользователи бот",
-                "Ученики бот",
-                "Преподаватели бот",
-                "Родители бот",
-                "Самозанятые бот"
-            ]
-
-            for sheet_name in sheets:
-                worksheet = workbook.create_sheet(sheet_name)
-                # Добавляем базовые заголовки в зависимости от листа
-                if sheet_name == "Пользователи бот":
-                    worksheet.append(["user_id", "user_name", "roles", "teacher_subjects"])
-                elif sheet_name == "Ученики бот":
-                    worksheet.append(["ID", "Имя", "Предмет ID", "Потребность во внимании (мин)", "Предмет", "Класс"])
-                elif sheet_name == "Преподаватели бот":
-                    worksheet.append(["ID", "Имя", "Предмет ID", "Приоритет"])
-                elif sheet_name == "Родители бот":
-                    worksheet.append(["user_id", "user_name", "children_ids"])
-                elif sheet_name == "Предметы бот":
-                    worksheet.append(["ID", "Название", "Ссылка"])
-                elif sheet_name == "Самозанятые бот":
-                    worksheet.append(["Имя", "Телефон", "Карта", "Банк", "Лимит"])
-
-            workbook.save(self.excel_file_path)
-            self._workbook = workbook
-            logger.info(f"✅ Создан новый Excel файл: {self.excel_file_path}")
-
-        except Exception as e:
-            logger.error(f"❌ Ошибка создания Excel файла: {e}")
-            raise
 
     def _load_qualifications(self):
         """Загружает соответствия предметов из листа предметов"""
@@ -125,20 +93,22 @@ class ExcelManager:
             logger.error(f"Ошибка загрузки квалификаций: {e}")
 
     def _get_or_create_worksheet(self, sheet_name: str):
-        """Получает или создает лист"""
+        """Получает лист (только чтение, без создания новых)"""
         try:
             if self._workbook is None:
-                self.connect()
+                if not self.connect():
+                    return None
 
+            # Просто возвращаем лист если он существует
             if sheet_name in self._workbook.sheetnames:
                 return self._workbook[sheet_name]
             else:
-                logger.info(f"Создаем новый лист: '{sheet_name}'")
-                new_sheet = self._workbook.create_sheet(sheet_name)
-                self._workbook.save(self.excel_file_path)
-                return new_sheet
+                logger.error(f"❌ Лист '{sheet_name}' не найден в файле")
+                logger.error(f"📋 Доступные листы: {self._workbook.sheetnames}")
+                return None
+
         except Exception as e:
-            logger.error(f"Ошибка при получении листа '{sheet_name}': {e}")
+            logger.error(f"❌ Ошибка при получении листа '{sheet_name}': {e}")
             return None
 
     def _get_worksheet_data(self, worksheet) -> List[List[str]]:
@@ -2490,3 +2460,22 @@ def find_user_in_all_sheets(self, user_id: int):
     except Exception as e:
         logger.error(f"❌ Ошибка поиска пользователя: {e}")
         return False
+
+    def debug_file_info(self):
+        """Простая диагностика файла"""
+        try:
+            logger.info("=== ДИАГНОСТИКА EXCEL ФАЙЛА ===")
+            logger.info(f"📁 Путь: {self.excel_file_path}")
+            logger.info(f"📊 Существует: {os.path.exists(self.excel_file_path)}")
+
+            if os.path.exists(self.excel_file_path):
+                file_size = os.path.getsize(self.excel_file_path)
+                logger.info(f"📏 Размер: {file_size} байт")
+
+            if self._workbook:
+                logger.info(f"📋 Листы: {self._workbook.sheetnames}")
+            else:
+                logger.info("❌ Файл не загружен")
+
+        except Exception as e:
+            logger.error(f"❌ Ошибка диагностики: {e}")

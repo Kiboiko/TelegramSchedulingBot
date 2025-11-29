@@ -126,19 +126,12 @@ storage = JSONStorage(file_path=BOOKINGS_FILE)
 #     gsheets = None
 
 # Вместо Google Sheets используем Excel
+excel_file_path = r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\Ученики тест.xlsx"
+logger.info(f"🔍 Используем файл: {excel_file_path}")
+
 try:
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    excel_file_path = os.path.join(current_dir, "Ученики тест.xlsx")
-
-    logger.info(f"🔍 Полный путь к файлу: {excel_file_path}")
-
-    # Проверим существует ли файл
-    if os.path.exists(excel_file_path):
-        logger.info(f"✅ Файл найден! Размер: {os.path.getsize(excel_file_path)} байт")
-    else:
-        logger.error(f"❌ Файл не найден! Ищем в: {current_dir}")
-        logger.error(f"📁 Файлы в папке: {[f for f in os.listdir(current_dir) if f.endswith('.xlsx')]}")
     gsheets = ExcelManager(excel_file_path=excel_file_path)
+    logger.info("✅ ExcelManager инициализирован")
 except Exception as e:
     logger.error(f"Excel initialization error: {e}")
     gsheets = None
@@ -146,16 +139,16 @@ except Exception as e:
 
 # После инициализации ExcelManager добавьте:
 if gsheets:
-    # Запускаем диагностику
-    gsheets.debug_table_structure()
+    # Простая диагностика
+    gsheets.debug_file_info()
 
     # Ищем конкретного пользователя
     test_user_id = 1180878673  # ваш user_id
-    gsheets.find_user_in_all_sheets(test_user_id)
+    logger.info(f"🔍 Поиск пользователя {test_user_id} в Excel...")
 
-    # Проверяем роли
+    # Простая проверка ролей
     roles = gsheets.get_user_roles(test_user_id)
-    logger.info(f"🎯 ФИНАЛЬНЫЙ ТЕСТ РОЛЕЙ: {roles}")
+    logger.info(f"🎯 Роли пользователя: {roles}")
 
 feedback_manager = FeedbackManager(storage, gsheets, bot)
 feedback_teacher_manager = FeedbackTeacherManager(storage, gsheets, bot)
