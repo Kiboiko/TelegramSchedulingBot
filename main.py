@@ -138,17 +138,33 @@ except Exception as e:
     excel_manager = None
 
 # После инициализации ExcelManager добавьте:
+# После инициализации ExcelManager добавьте:
 if gsheets:
-    # Простая диагностика
-    gsheets.debug_file_info()
+    # Временно закомментируем проблемные вызовы:
+    # gsheets.debug_file_info()
+    # gsheets.find_user_in_all_sheets(test_user_id)
 
-    # Ищем конкретного пользователя
-    test_user_id = 1180878673  # ваш user_id
-    logger.info(f"🔍 Поиск пользователя {test_user_id} в Excel...")
+    logger.info("✅ ExcelManager готов к работе")
 
-    # Простая проверка ролей
-    roles = gsheets.get_user_roles(test_user_id)
-    logger.info(f"🎯 Роли пользователя: {roles}")
+    # ★★★ ВАЖНО: ПРИНУДИТЕЛЬНАЯ СИНХРОНИЗАЦИЯ ★★★
+    logger.info("🔄 ЗАПУСК ПРИНУДИТЕЛЬНОЙ СИНХРОНИЗАЦИИ Excel -> JSON...")
+    try:
+        success = gsheets.sync_from_excel_to_json(storage)
+        if success:
+            logger.info("✅ СИНХРОНИЗАЦИЯ УСПЕШНА! Данные из Excel загружены в JSON")
+
+            # Проверим, что данные есть в storage
+            bookings_count = len(storage.load())
+            logger.info(f"📊 В storage загружено {bookings_count} записей")
+
+            # Проверим роли пользователя в storage
+            test_user_id = 1180878673
+            storage_roles = storage.get_user_roles(test_user_id)
+            logger.info(f"👤 Роли пользователя в storage: {storage_roles}")
+        else:
+            logger.error("❌ СИНХРОНИЗАЦИЯ ПРОВАЛИЛАСЬ!")
+    except Exception as e:
+        logger.error(f"❌ Ошибка синхронизации: {e}")
 
 feedback_manager = FeedbackManager(storage, gsheets, bot)
 feedback_teacher_manager = FeedbackTeacherManager(storage, gsheets, bot)
@@ -208,7 +224,7 @@ class RoleCheckMiddleware(BaseMiddleware):
 
 
 # Добавление middleware
-dp.update.middleware(RoleCheckMiddleware())
+# dp.update.middleware(RoleCheckMiddleware())
 booking_manager = BookingManager(storage, gsheets)
 background_tasks = BackgroundTasks(storage, gsheets, feedback_manager, feedback_teacher_manager, bot)
 register_menu_handlers(dp, booking_manager, storage)

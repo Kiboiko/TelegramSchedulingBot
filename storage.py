@@ -232,13 +232,28 @@ class JSONStorage:
             logger.error(f"Error getting users with roles: {e}")
             return []
 
-    def get_user_role(self, user_id: int) -> str:
-        """Возвращает роль пользователя"""
-        bookings = self.load()
-        for booking in bookings:
-            if booking.get('user_id') == user_id:
-                return booking.get('user_role')
-        return None
+    def get_user_roles(self, user_id: int) -> List[str]:
+        """Получает роли пользователя из хранилища"""
+        try:
+            # Ищем пользователя в bookings данных
+            bookings = self.load()
+            for booking in bookings:
+                if booking.get('user_id') == user_id:
+                    role = booking.get('user_role')
+                    if role:
+                        return [role]
+
+            # Если не нашли в bookings, пробуем получить из user_data
+            user_data = self.get_user_data(user_id)
+            if user_data and 'roles' in user_data:
+                roles_str = user_data['roles']
+                if roles_str:
+                    return [role.strip().lower() for role in roles_str.split(',')]
+
+            return []
+        except Exception as e:
+            logger.error(f"Error getting user roles from storage: {e}")
+            return []
 
     def update_user_subjects(self, user_id: int, subjects: List[str]):
         """Обновляет предметы преподавателя"""
@@ -330,29 +345,26 @@ class JSONStorage:
 
     def get_user_data(self, user_id: int) -> dict:
         """Получает все данные пользователя по ID"""
-        if not hasattr(self, 'gsheets') or not self.gsheets:
-            return {}
-        
         try:
-            worksheet = self.gsheets._get_or_create_users_worksheet()
-            records = worksheet.get_all_records()
+            # Если есть gsheets (ExcelManager), используем его
+            if hasattr(self, 'gsheets') and self.gsheets:
+                return self.gsheets.get_user_data(user_id)
 
-            for record in records:
-                # Преобразуем user_id к строке для сравнения
-                record_user_id = str(record.get("user_id", ""))
-                if record_user_id == str(user_id):
-                    # Преобразуем все значения в строки и обрабатываем предметы
-                    result = {}
-                    for key, value in record.items():
-                        if value is None:
-                            result[key] = ""
-                        else:
-                            result[key] = str(value)
-                    
-                    # Обрабатываем предметы преподавателя
-                    if 'teacher_subjects' in result and result['teacher_subjects']:
-                        result['subjects'] = [subj.strip() for subj in result['teacher_subjects'].split(',') if subj.strip()]
-                    return result
+            # Иначе ищем в локальных данных
+            bookings = self.load()
+            user_bookings = [b for b in bookings if b.get('user_id') == user_id]
+
+            if user_bookings:
+                # Берем данные из последнего бронирования
+                latest_booking = user_bookings[-1]
+                return {
+                    'user_id': user_id,
+                    'user_name': latest_booking.get('user_name', ''),
+                    'roles': latest_booking.get('user_role', ''),
+                    'teacher_subjects': latest_booking.get('subjects', '') if latest_booking.get(
+                        'user_role') == 'teacher' else ''
+                }
+
             return {}
         except Exception as e:
             logger.error(f"Ошибка при получении данных пользователя: {e}")

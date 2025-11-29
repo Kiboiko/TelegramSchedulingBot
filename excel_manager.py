@@ -2019,22 +2019,22 @@ class ExcelManager:
             logger.error(f"Ошибка при отладке структуры: {e}")
 
     # Заглушки для совместимости
-    def __getattr__(self, name):
-        """Перехватывает вызовы методов, которые еще не реализованы"""
-
-        def method(*args, **kwargs):
-            logger.warning(f"Метод {name} еще не реализован в ExcelManager, но был вызван")
-            # Возвращаем заглушки для совместимости
-            if name.startswith('get_') or name.startswith('debug_'):
-                return {}
-            elif name.startswith('update_') or name.startswith('save_'):
-                return False
-            elif name.startswith('process_'):
-                return None
-            else:
-                return []
-
-        return method
+    # def __getattr__(self, name):
+    #     """Перехватывает вызовы методов, которые еще не реализованы"""
+    #
+    #     def method(*args, **kwargs):
+    #         logger.warning(f"Метод {name} еще не реализован в ExcelManager, но был вызван")
+    #         # Возвращаем заглушки для совместимости
+    #         if name.startswith('get_') or name.startswith('debug_'):
+    #             return {}
+    #         elif name.startswith('update_') or name.startswith('save_'):
+    #             return False
+    #         elif name.startswith('process_'):
+    #             return None
+    #         else:
+    #             return []
+    #
+    #     return method
 
     # Дополнительные методы для полной совместимости
     def get_student_finance_history_last_month(self, student_id: int) -> List[Dict]:
@@ -2327,31 +2327,31 @@ class ExcelManager:
             logger.error(f"Ошибка при отладке данных пользователя: {e}")
 
     # Финальный метод для полной совместимости
-    def __getattr__(self, name):
-        """Перехватывает вызовы методов, которые еще не реализованы"""
-
-        def method(*args, **kwargs):
-            logger.warning(
-                f"Метод {name} еще не реализован в ExcelManager, но был вызван с args: {args}, kwargs: {kwargs}")
-
-            # Возвращаем заглушки для совместимости
-            if name.startswith('get_') or name.startswith('debug_'):
-                if name.endswith('_dates') or name.endswith('_history'):
-                    return []
-                elif name.endswith('_balance') or name.endswith('_tariff'):
-                    return 0.0
-                else:
-                    return {}
-            elif name.startswith('update_') or name.startswith('save_') or name.startswith('process_'):
-                return False
-            elif name.startswith('has_') or name.startswith('is_'):
-                return False
-            elif name.startswith('sync_'):
-                return True
-            else:
-                return None
-
-        return method
+    # def __getattr__(self, name):
+    #     """Перехватывает вызовы методов, которые еще не реализованы"""
+    #
+    #     def method(*args, **kwargs):
+    #         logger.warning(
+    #             f"Метод {name} еще не реализован в ExcelManager, но был вызван с args: {args}, kwargs: {kwargs}")
+    #
+    #         # Возвращаем заглушки для совместимости
+    #         if name.startswith('get_') or name.startswith('debug_'):
+    #             if name.endswith('_dates') or name.endswith('_history'):
+    #                 return []
+    #             elif name.endswith('_balance') or name.endswith('_tariff'):
+    #                 return 0.0
+    #             else:
+    #                 return {}
+    #         elif name.startswith('update_') or name.startswith('save_') or name.startswith('process_'):
+    #             return False
+    #         elif name.startswith('has_') or name.startswith('is_'):
+    #             return False
+    #         elif name.startswith('sync_'):
+    #             return True
+    #         else:
+    #             return None
+    #
+    #     return method
 
     def sync_from_gsheets_to_json(self, storage):
         """Синхронизирует данные из Excel в JSON хранилище - ЗАГЛУШКА"""
@@ -2439,18 +2439,17 @@ def find_user_in_all_sheets(self, user_id: int):
             logger.info(f"=== Поиск в '{sheet_name}' ===")
             worksheet = self._get_or_create_worksheet(sheet_name)
             if not worksheet:
+                logger.info(f"   ❌ Лист не найден")
                 continue
 
             data = self._get_worksheet_data(worksheet)
 
             for row_idx, row in enumerate(data[1:], start=2):  # Пропускаем заголовок
                 if row and len(row) > 0 and str(row[0]).strip() == user_id_str:
-                    logger.info(f"✅ НАЙДЕН в {sheet_name}, строка {row_idx}: {row}")
+                    logger.info(f"   ✅ НАЙДЕН в {sheet_name}, строка {row_idx}")
+                    logger.info(f"   📝 Данные: {row}")
                     found = True
-
-                    # Анализируем структуру строки
-                    for col_idx, cell in enumerate(row):
-                        logger.info(f"   Колонка {col_idx}: '{cell}'")
+                    break
 
         if not found:
             logger.warning(f"❌ Пользователь {user_id} не найден ни в одном листе")
@@ -2474,6 +2473,15 @@ def find_user_in_all_sheets(self, user_id: int):
 
             if self._workbook:
                 logger.info(f"📋 Листы: {self._workbook.sheetnames}")
+
+                # Покажем количество строк в основных листах
+                main_sheets = ["Пользователи бот", "Ученики бот", "Преподаватели бот"]
+                for sheet_name in main_sheets:
+                    if sheet_name in self._workbook.sheetnames:
+                        worksheet = self._workbook[sheet_name]
+                        row_count = worksheet.max_row
+                        col_count = worksheet.max_column
+                        logger.info(f"   {sheet_name}: {row_count} строк, {col_count} колонок")
             else:
                 logger.info("❌ Файл не загружен")
 
