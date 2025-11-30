@@ -112,14 +112,14 @@ storage = JSONStorage(file_path=BOOKINGS_FILE)
 # Настройка Google Sheets
 try:
     gsheets = GoogleSheetsManager(
-        credentials_file='credentials.json',
-        spreadsheet_id=SPREADSHEET_ID
+        credentials_file='credentials.json',  # Этот параметр теперь не используется, но оставляем для совместимости
+        spreadsheet_id=r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\Ученики тест .xlsx"
     )
     gsheets.connect()
     storage.set_gsheets_manager(gsheets)
-    logger.info("Google Sheets integration initialized successfully")
+    logger.info("Excel integration initialized successfully")
 except Exception as e:
-    logger.error(f"Google Sheets initialization error: {e}")
+    logger.error(f"Excel initialization error: {e}")
     gsheets = None
 
 feedback_manager = FeedbackManager(storage, gsheets, bot)

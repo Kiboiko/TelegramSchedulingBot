@@ -1,9 +1,13 @@
-import time
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+import pandas as pd
+import openpyxl
+from openpyxl import Workbook, load_workbook
+from openpyxl.utils import get_column_letter
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 import logging
+import os
+import time
+import re
 import traceback
 
 logger = logging.getLogger(__name__)
@@ -11,62 +15,90 @@ logger = logging.getLogger(__name__)
 
 class GoogleSheetsManager:
     def __init__(self, credentials_file: str, spreadsheet_id: str):
-        self.credentials_file = credentials_file
-        self.spreadsheet_id = spreadsheet_id
-        self.client = None
-        self.spreadsheet = None
+        # Для Excel файла нам не нужны credentials, но сохраняем интерфейс
+        self.excel_file_path = spreadsheet_id  # Используем как путь к Excel файлу
+        self.workbook = None
         self.qual_map = {}
-        self._cache = {}  # Добавляем кэш
-        self._cache_timeout = 60  # Кэш на 60 секунд
+        self.qual_links = {}
+        self._cache = {}
+        self._cache_timeout = 60
 
-    def _get_cached_data(self, key):
-        """Получает данные из кэша"""
-        if key in self._cache:
-            data, timestamp = self._cache[key]
-            if time.time() - timestamp < self._cache_timeout:
-                return data
-        return None
-
-    def _set_cached_data(self, key, data):
-        """Сохраняет данные в кэш"""
-        self._cache[key] = (data, time.time())
     def connect(self):
-        """Устанавливает соединение с Google Sheets API"""
+        """Устанавливает соединение с Excel файлом"""
         try:
-            scope = [
-                'https://spreadsheets.google.com/feeds',
-                'https://www.googleapis.com/auth/drive'
-            ]
-            creds = ServiceAccountCredentials.from_json_keyfile_name(
-                self.credentials_file, scope)
-            self.client = gspread.authorize(creds)
-            self.spreadsheet = self.client.open_by_key(self.spreadsheet_id)
+            if not os.path.exists(self.excel_file_path):
+                # Создаем новый файл, если не существует
+                self.workbook = Workbook()
+                # Создаем основные листы
+                self._create_basic_sheets()
+                self.workbook.save(self.excel_file_path)
+                logger.info(f"Создан новый Excel файл: {self.excel_file_path}")
+            else:
+                self.workbook = load_workbook(self.excel_file_path)
+                logger.info(f"Успешное подключение к Excel файлу: {self.excel_file_path}")
+
             self._load_qualifications()
-            logger.info("Успешное подключение к Google Sheets")
             return True
         except Exception as e:
-            logger.error(f"Ошибка подключения: {e}")
+            logger.error(f"Ошибка подключения к Excel: {e}")
             return False
 
-    def _load_qualifications(self):
-        """Загружает соответствия предметов из листа Квалификации"""
+    def _create_basic_sheets(self):
+        """Создает основные листы в Excel файле"""
+        # Удаляем лист по умолчанию
+        if 'Sheet' in self.workbook.sheetnames:
+            del self.workbook['Sheet']
+
+        # Создаем основные листы
+        sheets_to_create = [
+            "Ученики бот",
+            "Преподаватели бот",
+            "Пользователи бот",
+            "Родители бот",
+            "Самозанятые бот",
+            "Предметы бот"
+        ]
+
+        for sheet_name in sheets_to_create:
+            self.workbook.create_sheet(sheet_name)
+
+    def _get_or_create_worksheet(self, sheet_name: str):
+        """Получает или создает лист в Excel"""
         try:
-            worksheet = self.spreadsheet.worksheet("Предметы бот")
-            data = worksheet.get_all_values()
+            if sheet_name in self.workbook.sheetnames:
+                return self.workbook[sheet_name]
+            else:
+                worksheet = self.workbook.create_sheet(sheet_name)
+                logger.info(f"Создан новый лист: '{sheet_name}'")
+                return worksheet
+        except Exception as e:
+            logger.error(f"Ошибка при получении листа '{sheet_name}': {e}")
+            return None
+
+    def _load_qualifications(self):
+        """Загружает соответствия предметов из листа Предметы бот"""
+        try:
+            worksheet = self._get_or_create_worksheet("Предметы бот")
+            data = list(worksheet.values)
 
             self.qual_map = {}
-            self.qual_links = {}  # Словарь для хранения ссылок
+            self.qual_links = {}
+
+            if not data:
+                return
+
             logger.info("=== ДАННЫЕ ИЗ ЛИСТА 'Предметы бот' ===")
             for i, row in enumerate(data):
-                logger.info(f"Строка {i}: {row}")
-                if len(row) >= 2 and row[0].strip().isdigit():  # ID в колонке A
-                    subject_id = row[0].strip()
-                    subject_name = row[1].strip().lower()
+                row_list = list(row)
+                logger.info(f"Строка {i}: {row_list}")
+                if len(row_list) >= 2 and str(row_list[0]).strip().isdigit():
+                    subject_id = str(row_list[0]).strip()
+                    subject_name = str(row_list[1]).strip().lower()
                     self.qual_map[subject_name] = subject_id
 
                     # Загружаем ссылку из колонки C (индекс 2)
-                    if len(row) >= 3:
-                        self.qual_links[subject_id] = row[2].strip()
+                    if len(row_list) >= 3:
+                        self.qual_links[subject_id] = str(row_list[2]).strip()
 
                     logger.info(
                         f"Добавлено: '{subject_name}' -> '{subject_id}', ссылка: {self.qual_links.get(subject_id, 'нет')}")
@@ -79,7 +111,6 @@ class GoogleSheetsManager:
     def format_date(self, date_str: str) -> str:
         """Форматирует дату из YYYY-MM-DD в DD.MM.YYYY"""
         try:
-            # Пробуем разные форматы на входе
             input_formats = ['%Y-%m-%d', '%d.%m.%Y', '%d.%m.%y']
             date_obj = None
 
@@ -99,11 +130,23 @@ class GoogleSheetsManager:
             logger.error(f"Ошибка форматирования даты {date_str}: {e}")
             return date_str
 
+    def _get_cached_data(self, key):
+        """Получает данные из кэша"""
+        if key in self._cache:
+            data, timestamp = self._cache[key]
+            if time.time() - timestamp < self._cache_timeout:
+                return data
+        return None
+
+    def _set_cached_data(self, key, data):
+        """Сохраняет данные в кэш"""
+        self._cache[key] = (data, time.time())
+
     def clear_sheet(self, sheet_name: str):
         """Полностью очищает лист"""
         try:
-            worksheet = self.spreadsheet.worksheet(sheet_name)
-            worksheet.clear()
+            worksheet = self._get_or_create_worksheet(sheet_name)
+            worksheet.delete_rows(1, worksheet.max_row)
             logger.info(f"Лист '{sheet_name}' полностью очищен")
             return True
         except Exception as e:
@@ -112,11 +155,11 @@ class GoogleSheetsManager:
 
     def update_all_sheets(self, bookings: List[Dict[str, Any]]):
         """Полностью перезаписывает данные в таблицах"""
-        if not self.client and not self.connect():
+        if not self.workbook and not self.connect():
             return False
 
         try:
-            logger.info(f"Начато обновление Google Sheets. Всего броней: {len(bookings)}")
+            logger.info(f"Начато обновление Excel. Всего броней: {len(bookings)}")
 
             teachers = [b for b in bookings if b.get('user_role') == 'teacher']
             students = [b for b in bookings if b.get('user_role') == 'student']
@@ -132,36 +175,45 @@ class GoogleSheetsManager:
                 success = False
 
             if success:
-                logger.info("Google Sheets успешно обновлен!")
+                self.workbook.save(self.excel_file_path)
+                logger.info("Excel успешно обновлен!")
             return success
         except Exception as e:
             logger.error(f"Критическая ошибка при обновлении: {e}")
             return False
-        
+
     def _add_users_without_bookings(self, bookings: List[Dict[str, Any]], role: str) -> List[Dict[str, Any]]:
         """Добавляет пользователей с ролями, но без записей"""
         try:
-            # Получаем всех пользователей с соответствующей ролью
             users_worksheet = self._get_or_create_users_worksheet()
-            users_data = users_worksheet.get_all_records()
-            
+            users_data = list(users_worksheet.values)
+
+            if len(users_data) <= 1:  # Только заголовок или пусто
+                return bookings
+
+            headers = [str(cell).lower() for cell in users_data[0]]
+            user_id_idx = headers.index('user_id') if 'user_id' in headers else 0
+            user_name_idx = headers.index('user_name') if 'user_name' in headers else 1
+            roles_idx = headers.index('roles') if 'roles' in headers else 2
+
             users_with_role = []
-            for user in users_data:
-                user_roles = user.get('roles', '').lower().split(',')
-                if role in user_roles:
-                    users_with_role.append({
-                        'user_id': user.get('user_id'),
-                        'user_name': user.get('user_name', ''),
-                        'user_role': role
-                    })
-            
+            for row in users_data[1:]:
+                row_list = list(row)
+                if len(row_list) > max(user_id_idx, roles_idx):
+                    user_roles = str(row_list[roles_idx]).lower().split(',') if row_list[roles_idx] else []
+                    if role in user_roles:
+                        users_with_role.append({
+                            'user_id': row_list[user_id_idx],
+                            'user_name': row_list[user_name_idx] if len(row_list) > user_name_idx else "",
+                            'user_role': role
+                        })
+
             # Находим пользователей с ролью, но без записей
             existing_user_ids = {str(booking.get('user_id')) for booking in bookings}
-            
+
             for user in users_with_role:
                 user_id_str = str(user.get('user_id'))
                 if user_id_str not in existing_user_ids:
-                    # Создаем пустую запись для пользователя
                     empty_booking = {
                         'user_id': user.get('user_id'),
                         'user_name': user.get('user_name'),
@@ -176,9 +228,9 @@ class GoogleSheetsManager:
                     }
                     bookings.append(empty_booking)
                     logger.info(f"Добавлен {role} без записей: {user.get('user_name')} (ID: {user.get('user_id')})")
-            
+
             return bookings
-            
+
         except Exception as e:
             logger.error(f"Ошибка при добавлении пользователей без записей: {e}")
             return bookings
@@ -201,30 +253,6 @@ class GoogleSheetsManager:
             logger.error(f"Ошибка при обновлении листа '{sheet_name}': {e}")
             return False
 
-    def _get_or_create_worksheet(self, sheet_name: str):
-        """Получает или создает лист"""
-        try:
-            # Исправляем опечатку в названии листа
-            if sheet_name == "Самозанятые бot":
-                sheet_name = "Самозанятые бот"
-            elif sheet_name == "Преподаватели бot":
-                sheet_name = "Преподаватели бот"
-            elif sheet_name == "Ученики бot":
-                sheet_name = "Ученики бот"
-
-            return self.spreadsheet.worksheet(sheet_name)
-        except gspread.WorksheetNotFound:
-            try:
-                logger.info(f"Создаем новый лист: '{sheet_name}'")
-                return self.spreadsheet.add_worksheet(
-                    title=sheet_name, rows=100, cols=20)
-            except Exception as e:
-                logger.error(f"Ошибка при создании листа: {e}")
-                return None
-        except Exception as e:
-            logger.error(f"Ошибка при получении листа: {e}")
-            return None
-
     def _generate_formatted_dates(self, start_date: datetime, end_date: datetime) -> List[str]:
         """Генерирует список отформатированных дат"""
         dates = []
@@ -234,12 +262,734 @@ class GoogleSheetsManager:
             current_date += timedelta(days=1)
         return dates
 
-    # gsheets_manager.py (добавьте в класс GoogleSheetsManager)
+    def _ensure_sheet_structure(self, worksheet, formatted_dates: List[str], is_teacher: bool):
+        """Создает структуру листа заново"""
+        # Очищаем лист
+        worksheet.delete_rows(1, worksheet.max_row)
+
+        headers = ['ID', 'Имя', 'Предмет ID']
+
+        # Добавляем новые столбцы только для учеников
+        if not is_teacher:
+            headers.extend(['Предмет', 'Класс'])
+
+        if is_teacher:
+            headers.append('Приоритет')
+        else:
+            headers.append('Потребность во внимании (мин)')
+
+        headers += [date for date in formatted_dates for _ in (0, 1)]
+
+        # Записываем заголовки
+        for col_idx, header in enumerate(headers, 1):
+            worksheet.cell(row=1, column=col_idx, value=header)
+
+    def _prepare_records(self, bookings: List[Dict[str, Any]],
+                         formatted_dates: List[str], is_teacher: bool) -> Dict[str, Any]:
+        """Подготавливает данные для вставки с учетом предметов учеников"""
+        records = {}
+
+        for booking in bookings:
+            if 'user_name' not in booking:
+                continue
+
+            name = booking['user_name']
+            user_id = str(booking.get('user_id', ''))
+            date = self.format_date(booking['date']) if booking.get('date') else ''
+
+            if is_teacher:
+                subjects = booking.get('subjects', [])
+                subject_str = ', '.join(subjects)
+                key = f"{user_id}_{name}"
+            else:
+                subject = booking.get('subject', '')
+                subject_str = subject
+                key = f"{user_id}_{subject_str}"
+
+            if key not in records:
+                records[key] = {
+                    'id': user_id,
+                    'name': name,
+                    'subject': subject_str,
+                    'attention_need': booking.get('attention_need', ''),
+                    'subject_name': booking.get('subject_name', ''),
+                    'class_name': booking.get('class_name', ''),
+                    'bookings': {}
+                }
+
+            if date in formatted_dates:
+                records[key]['bookings'][date] = {
+                    'start': booking.get('start_time', ''),
+                    'end': booking.get('end_time', '')
+                }
+
+        return records
+
+    def _update_worksheet_data(self, worksheet, records: Dict[str, Any],
+                               formatted_dates: List[str], is_teacher: bool):
+        """Вставляет данные в лист"""
+        if not records:
+            logger.info("Нет данных для вставки - лист очищен")
+            return
+
+        row_num = 2  # Начинаем со второй строки (после заголовков)
+        for record in records.values():
+            col_num = 1
+            row_data = [
+                record['id'],
+                record['name'],
+                record['subject']
+            ]
+
+            # Добавляем новые столбцы только для учеников
+            if not is_teacher:
+                row_data.extend([
+                    record.get('subject_name', ''),
+                    record.get('class_name', '')
+                ])
+
+            if is_teacher:
+                row_data.append(record.get('priority', ''))
+            else:
+                row_data.append(record.get('attention_need', ''))
+
+            # Для пользователей без записей оставляем пустые ячейки
+            for date in formatted_dates:
+                if date in record['bookings']:
+                    row_data.extend([
+                        record['bookings'][date]['start'],
+                        record['bookings'][date]['end']
+                    ])
+                else:
+                    row_data.extend(['', ''])
+
+            # Записываем строку
+            for col_idx, value in enumerate(row_data, 1):
+                worksheet.cell(row=row_num, column=col_idx, value=value)
+
+            row_num += 1
+
+        logger.info(f"Обновлено {len(records)} строк в листе '{worksheet.title}'")
+
+    def get_bookings_from_sheet(self, sheet_name: str, is_teacher: bool) -> List[Dict[str, Any]]:
+        """Читает данные из Excel листа"""
+        try:
+            worksheet = self._get_or_create_worksheet(sheet_name)
+            data = list(worksheet.values)
+
+            if len(data) < 3:
+                return []
+
+            headers = [str(h).lower() for h in data[0]]
+            bookings = []
+            reverse_qual_map = {v: k for k, v in self.qual_map.items()}
+
+            # Определяем индексы столбцов
+            date_start_col = 14  # Столбец O (индекс 14) - первая дата
+
+            # Находим конец столбцов с датами
+            date_end_col = date_start_col
+            for i in range(date_start_col, len(headers)):
+                if not headers[i] or headers[i].strip() == '':
+                    break
+                date_end_col = i
+            date_end_col += 1
+
+            logger.info(f"Столбцы с датами: с {date_start_col} по {date_end_col}")
+
+            for row_idx, row in enumerate(data[2:], start=3):
+                row_list = list(row)
+                if not row_list or not row_list[0]:
+                    continue
+
+                try:
+                    user_id = int(row_list[0]) if str(row_list[0]).strip() else None
+                except ValueError:
+                    user_id = None
+
+                user_name = row_list[1] if len(row_list) > 1 else ""
+
+                if not is_teacher:
+                    subject = row_list[2] if len(row_list) > 2 else ""
+                    attention_need = row_list[3] if len(row_list) > 3 else ""
+                    subject_name = row_list[11] if len(row_list) > 11 else ""
+                    class_name = row_list[10] if len(row_list) > 10 else ""
+                else:
+                    subject = row_list[2] if len(row_list) > 2 else ""
+                    priority = row_list[3] if len(row_list) > 3 else ""
+
+                # Обрабатываем столбцы с датами
+                for i in range(date_start_col, min(date_end_col, len(row_list)), 2):
+                    if i + 1 >= len(row_list) or i >= len(headers):
+                        break
+
+                    date_header = headers[i].split()[0] if i < len(headers) else ""
+                    start_time = row_list[i] if i < len(row_list) else ""
+                    end_time = row_list[i + 1] if i + 1 < len(row_list) else ""
+
+                    if not date_header or not start_time or not end_time:
+                        continue
+
+                    try:
+                        date_formats = ["%d.%m.%Y", "%d.%m", "%d.%m.%y"]
+                        date_obj = None
+
+                        for date_format in date_formats:
+                            try:
+                                date_obj = datetime.strptime(date_header, date_format)
+                                if date_format == "%d.%m":
+                                    date_obj = date_obj.replace(year=datetime.now().year)
+                                break
+                            except ValueError:
+                                continue
+
+                        if not date_obj:
+                            continue
+
+                        date_str = date_obj.strftime("%Y-%m-%d")
+
+                        booking = {
+                            "user_id": user_id if user_id is not None else -1,
+                            "user_name": user_name,
+                            "date": date_str,
+                            "start_time": start_time,
+                            "end_time": end_time,
+                            "user_role": "teacher" if is_teacher else "student",
+                            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        }
+
+                        if is_teacher:
+                            subjects = []
+                            for subj in str(subject).split(","):
+                                subj = subj.strip()
+                                if subj in reverse_qual_map:
+                                    subjects.append(reverse_qual_map[subj])
+                                else:
+                                    subjects.append(subj)
+                            booking["subjects"] = subjects
+                            booking["booking_type"] = "Тип1"
+                            booking["priority"] = priority
+                        else:
+                            if str(subject) in reverse_qual_map:
+                                booking["subject"] = reverse_qual_map[str(subject)]
+                            else:
+                                booking["subject"] = subject
+                            booking["booking_type"] = "Тип1"
+                            booking["attention_need"] = attention_need
+                            booking["subject_name"] = subject_name
+                            booking["class_name"] = class_name
+
+                        bookings.append(booking)
+
+                    except ValueError as e:
+                        logger.debug(f"Ошибка обработки даты {date_header}: {e}")
+                        continue
+
+            logger.info(f"Успешно обработано {len(bookings)} записей из листа '{sheet_name}'")
+            return bookings
+
+        except Exception as e:
+            logger.error(f"Ошибка чтения из листа '{sheet_name}': {e}")
+            return []
+
+    def sync_from_gsheets_to_json(self, storage):
+        """Синхронизирует данные из Excel в JSON хранилище"""
+        try:
+            teacher_bookings = self.get_bookings_from_sheet("Преподаватели бот", is_teacher=True)
+            student_bookings = self.get_bookings_from_sheet("Ученики бот", is_teacher=False)
+
+            all_bookings = teacher_bookings + student_bookings
+
+            if hasattr(storage, 'replace_all_bookings'):
+                storage.replace_all_bookings(all_bookings)
+                logger.info(f"Успешно синхронизировано {len(all_bookings)} записей из Excel в JSON")
+                return True
+            else:
+                storage.save(all_bookings, sync_to_gsheets=False)
+                logger.warning("Использован fallback метод save вместо replace_all_bookings")
+                return True
+
+        except Exception as e:
+            logger.error(f"Ошибка синхронизации из Excel: {e}")
+            return False
+
+    def _get_or_create_users_worksheet(self):
+        """Создает лист пользователей"""
+        worksheet = self._get_or_create_worksheet("Пользователи бот")
+
+        # Проверяем структуру
+        if worksheet.max_row == 0 or worksheet.max_row == 1:
+            headers = ["user_id", "user_name", "roles", "teacher_subjects"]
+            for col_idx, header in enumerate(headers, 1):
+                worksheet.cell(row=1, column=col_idx, value=header)
+
+        return worksheet
+
+    def get_user_name(self, user_id: int) -> str:
+        """Получает ФИО пользователя"""
+        try:
+            worksheet = self._get_or_create_users_worksheet()
+            data = list(worksheet.values)
+
+            if len(data) < 2:
+                return ""
+
+            headers = [str(cell).lower() for cell in data[0]]
+            user_id_idx = headers.index('user_id') if 'user_id' in headers else 0
+            user_name_idx = headers.index('user_name') if 'user_name' in headers else 1
+
+            for row in data[1:]:
+                row_list = list(row)
+                if len(row_list) > user_id_idx and str(row_list[user_id_idx]) == str(user_id):
+                    return str(row_list[user_name_idx]) if len(row_list) > user_name_idx else ""
+            return ""
+        except Exception as e:
+            logger.error(f"User lookup error: {e}")
+            return ""
+
+    def save_user_name(self, user_id: int, user_name: str) -> bool:
+        """Обновляет или создает запись пользователя"""
+        try:
+            worksheet = self._get_or_create_users_worksheet()
+            data = list(worksheet.values)
+
+            if len(data) < 2:  # Только заголовок
+                worksheet.append_row([user_id, user_name])
+                self.workbook.save(self.excel_file_path)
+                return True
+
+            headers = [str(cell).lower() for cell in data[0]]
+            user_id_idx = headers.index('user_id') if 'user_id' in headers else 0
+            user_name_idx = headers.index('user_name') if 'user_name' in headers else 1
+
+            found = False
+            for row_idx, row in enumerate(data[1:], start=2):
+                row_list = list(row)
+                if len(row_list) > user_id_idx and str(row_list[user_id_idx]) == str(user_id):
+                    worksheet.cell(row=row_idx, column=user_name_idx + 1, value=user_name)
+                    found = True
+                    break
+
+            if not found:
+                worksheet.append_row([user_id, user_name])
+
+            self.workbook.save(self.excel_file_path)
+            return True
+        except Exception as e:
+            logger.error(f"User save error: {e}")
+            return False
+
+    def get_user_roles(self, user_id: int) -> List[str]:
+        """Получает роли пользователя"""
+        try:
+            worksheet = self._get_or_create_users_worksheet()
+            data = list(worksheet.values)
+
+            if len(data) < 2:
+                return []
+
+            headers = [str(cell).lower() for cell in data[0]]
+            user_id_idx = headers.index('user_id') if 'user_id' in headers else 0
+            roles_idx = headers.index('roles') if 'roles' in headers else 2
+
+            for row in data[1:]:
+                row_list = list(row)
+                if len(row_list) > user_id_idx and str(row_list[user_id_idx]) == str(user_id):
+                    if len(row_list) > roles_idx and row_list[roles_idx]:
+                        roles = [role.strip().lower() for role in str(row_list[roles_idx]).split(',')]
+                        return list(set(roles))
+            return []
+        except Exception as e:
+            logger.error(f"Error getting user roles: {e}")
+            return []
+
+    def has_user_roles(self, user_id: int) -> bool:
+        """Проверяет, есть ли у пользователя назначенные роли"""
+        roles = self.get_user_roles(user_id)
+        return len(roles) > 0
+
+    def save_user_info(self, user_id: int, user_name: str) -> bool:
+        """Сохраняет ФИО пользователя"""
+        return self.save_user_name(user_id, user_name)
+
+    def get_user_data(self, user_id: int) -> dict:
+        """Получает все данные пользователя по ID"""
+        try:
+            worksheet = self._get_or_create_users_worksheet()
+            data = list(worksheet.values)
+
+            if len(data) < 2:
+                return {}
+
+            headers = [str(cell).lower() for cell in data[0]]
+            user_id_idx = headers.index('user_id') if 'user_id' in headers else 0
+
+            for row in data[1:]:
+                row_list = list(row)
+                if len(row_list) > user_id_idx and str(row_list[user_id_idx]) == str(user_id):
+                    result = {}
+                    for i, header in enumerate(headers):
+                        if i < len(row_list):
+                            result[header] = str(row_list[i]) if row_list[i] is not None else ""
+                        else:
+                            result[header] = ""
+
+                    # Обрабатываем предметы преподавателя
+                    if 'teacher_subjects' in result and result['teacher_subjects']:
+                        result['subjects'] = [subj.strip() for subj in result['teacher_subjects'].split(',') if
+                                              subj.strip()]
+                    return result
+            return {}
+        except Exception as e:
+            logger.error(f"Ошибка при получении данных пользователя: {e}")
+            return {}
+
+    def save_user_data(self, user_data: dict) -> bool:
+        """Сохраняет или обновляет данные пользователя"""
+        try:
+            worksheet = self._get_or_create_users_worksheet()
+            data = list(worksheet.values)
+            user_id = str(user_data["user_id"])
+
+            headers = [str(cell).lower() for cell in data[0]] if data else []
+            if not headers:
+                headers = ["user_id", "user_name", "roles", "teacher_subjects"]
+                for col_idx, header in enumerate(headers, 1):
+                    worksheet.cell(row=1, column=col_idx, value=header)
+
+            row_num = None
+            for row_idx, row in enumerate(data[1:], start=2):
+                row_list = list(row)
+                if len(row_list) > 0 and str(row_list[0]) == user_id:
+                    row_num = row_idx
+                    break
+
+            data_to_save = []
+            for header in headers:
+                if header in user_data:
+                    data_to_save.append(user_data[header])
+                else:
+                    data_to_save.append("")
+
+            if row_num:
+                for col_idx, value in enumerate(data_to_save, 1):
+                    worksheet.cell(row=row_num, column=col_idx, value=value)
+            else:
+                worksheet.append_row(data_to_save)
+
+            self.workbook.save(self.excel_file_path)
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка при сохранении данных пользователя: {e}")
+            return False
+
+    def save_user_subject(self, user_id: int, user_name: str, subject_id: str) -> bool:
+        """Сохраняет связь пользователь-предмет для учеников"""
+        try:
+            worksheet = self._get_or_create_worksheet("Ученики бот")
+            data = list(worksheet.values)
+
+            # Ищем существующую запись
+            found = False
+            for row_idx, row in enumerate(data[1:], start=2):
+                row_list = list(row)
+                if (len(row_list) > 0 and str(row_list[0]) == str(user_id) and
+                        len(row_list) > 2 and str(row_list[2]) == str(subject_id)):
+                    # Обновляем существующую запись
+                    worksheet.cell(row=row_idx, column=1, value=user_id)
+                    worksheet.cell(row=row_idx, column=2, value=user_name)
+                    worksheet.cell(row=row_idx, column=3, value=subject_id)
+                    found = True
+                    break
+
+            if not found:
+                worksheet.append_row([user_id, user_name, subject_id])
+
+            self.workbook.save(self.excel_file_path)
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка сохранения предмета ученика: {e}")
+            return False
+
+    def get_teacher_subjects(self, user_id: int) -> List[str]:
+        """Получает предметы преподавателя"""
+        try:
+            user_data = self.get_user_data(user_id)
+            if not user_data:
+                return []
+
+            subjects = user_data.get("teacher_subjects", "")
+            if not subjects:
+                return []
+
+            logger.info(f"Raw subjects for user {user_id}: {subjects} (type: {type(subjects)})")
+
+            subjects_str = str(subjects)
+
+            # Если это число без запятых (например 1234), разбиваем на отдельные цифры
+            if subjects_str.isdigit() and len(subjects_str) > 1:
+                subject_list = [digit for digit in subjects_str]
+                logger.info(f"Converted number {subjects_str} to subjects: {subject_list}")
+                return subject_list
+            # Если это строка с запятыми (например "1,2,3,4")
+            elif ',' in subjects_str:
+                subject_list = [subj.strip() for subj in subjects_str.split(',') if subj.strip()]
+                logger.info(f"Split comma-separated subjects: {subject_list}")
+                return subject_list
+            # Если это одиночный предмет (например "1")
+            else:
+                subject_list = [subjects_str.strip()]
+                logger.info(f"Single subject: {subject_list}")
+                return subject_list
+
+        except Exception as e:
+            logger.error(f"Error getting teacher subjects: {e}")
+            return []
+
+    def _get_or_create_parents_worksheet(self):
+        """Создает лист Родители"""
+        worksheet = self._get_or_create_worksheet("Родители бот")
+
+        # Проверяем структуру
+        if worksheet.max_row == 0 or worksheet.max_row == 1:
+            headers = ["user_id", "user_name", "children_ids"]
+            for col_idx, header in enumerate(headers, 1):
+                worksheet.cell(row=1, column=col_idx, value=header)
+
+        return worksheet
+
+    def get_parent_children(self, parent_id: int) -> List[int]:
+        """Получает список ID детей родителя"""
+        try:
+            worksheet = self._get_or_create_parents_worksheet()
+            data = list(worksheet.values)
+
+            if len(data) < 2:
+                return []
+
+            headers = [str(cell).lower() for cell in data[0]]
+            user_id_idx = headers.index('user_id') if 'user_id' in headers else 0
+            children_idx = headers.index('children_ids') if 'children_ids' in headers else 2
+
+            for row in data[1:]:
+                row_list = list(row)
+                if len(row_list) > user_id_idx and str(row_list[user_id_idx]) == str(parent_id):
+                    children_str = row_list[children_idx] if len(row_list) > children_idx else ""
+                    if children_str:
+                        children_str = str(children_str)
+                        return [int(child_id.strip()) for child_id in children_str.split(',') if child_id.strip()]
+            return []
+        except Exception as e:
+            logger.error(f"Error getting parent children: {e}")
+            return []
+
+    def get_child_info(self, child_id: int) -> dict:
+        """Получает информацию о ребенке (ученике)"""
+        try:
+            user_data = self.get_user_data(child_id)
+            if user_data and 'student' in user_data.get('roles', '').split(','):
+                return user_data
+            return {}
+        except Exception as e:
+            logger.error(f"Error getting child info: {e}")
+            return {}
+
+    def save_parent_info(self, parent_id: int, parent_name: str, children_ids: List[int] = None) -> bool:
+        """Сохраняет информацию о родителе"""
+        try:
+            worksheet = self._get_or_create_parents_worksheet()
+            data = list(worksheet.values)
+
+            headers = [str(cell).lower() for cell in data[0]] if data else []
+            if not headers:
+                headers = ["user_id", "user_name", "children_ids"]
+                for col_idx, header in enumerate(headers, 1):
+                    worksheet.cell(row=1, column=col_idx, value=header)
+
+            row_num = None
+            for row_idx, row in enumerate(data[1:], start=2):
+                row_list = list(row)
+                if len(row_list) > 0 and str(row_list[0]) == str(parent_id):
+                    row_num = row_idx
+                    break
+
+            children_str = ','.join(map(str, children_ids)) if children_ids else ''
+
+            if row_num:
+                worksheet.cell(row=row_num, column=1, value=parent_id)
+                worksheet.cell(row=row_num, column=2, value=parent_name)
+                worksheet.cell(row=row_num, column=3, value=children_str)
+            else:
+                worksheet.append_row([parent_id, parent_name, children_str])
+
+            self.workbook.save(self.excel_file_path)
+            return True
+        except Exception as e:
+            logger.error(f"Error saving parent info: {e}")
+            return False
+
+    def get_available_subjects_for_student(self, user_id: int) -> List[str]:
+        """Получает доступные предметы для ученика"""
+        try:
+            worksheet = self._get_or_create_worksheet("Ученики бот")
+            data = list(worksheet.values)
+
+            logger.info(f"Поиск предметов для user_id: {user_id}")
+            logger.info(f"Всего строк в листе: {len(data)}")
+
+            if not data or len(data) < 3:
+                logger.info("Нет данных или только заголовок")
+                return []
+
+            available_subjects = []
+
+            # Пропускаем заголовок (первую строку)
+            for i, row in enumerate(data[2:], start=3):
+                row_list = list(row)
+                if not row_list:
+                    continue
+
+                row_user_id = row_list[0].strip() if len(row_list) > 0 and row_list[0] else ""
+                row_subject = row_list[2].strip() if len(row_list) > 2 and row_list[2] else ""
+
+                # Ищем только строки с соответствующим user_id
+                if row_user_id == str(user_id) and row_subject:
+                    logger.info(f"Найден предмет для user_id {user_id}: {row_subject}")
+                    available_subjects.append(row_subject)
+
+            logger.info(f"Итоговый список предметов для user_id {user_id}: {available_subjects}")
+            return list(set(available_subjects))
+
+        except Exception as e:
+            logger.error(f"Ошибка получения доступных предметов для user_id {user_id}: {e}")
+            return []
+
+    def update_student_booking_cell(self, user_id: int, subject_id: str, date: str,
+                                    start_time: str, end_time: str) -> bool:
+        """Обновляет только конкретную ячейку для ученика"""
+        try:
+            worksheet = self._get_or_create_worksheet("Ученики бот")
+            data = list(worksheet.values)
+
+            if len(data) < 2:
+                return False
+
+            # Находим заголовки
+            headers = [str(h).lower() for h in data[0]]
+
+            # Ищем колонку для даты
+            date_col_start = -1
+            formatted_date = self.format_date(date) if date else ''
+
+            for i, header in enumerate(headers):
+                if header.startswith(formatted_date.lower()):
+                    date_col_start = i
+                    break
+
+            if date_col_start == -1:
+                logger.error(f"Дата {formatted_date} не найдена в заголовках")
+                return False
+
+            # Ищем строку с user_id и subject_id
+            target_row = -1
+            search_subject_id = subject_id
+
+            # Если subject_id - это название предмета, преобразуем в числовой ID
+            if not subject_id.isdigit():
+                if subject_id.lower() in self.qual_map:
+                    search_subject_id = self.qual_map[subject_id.lower()]
+                elif subject_id in self.qual_map.values():
+                    for id_key, name_value in self.qual_map.items():
+                        if name_value == subject_id:
+                            search_subject_id = id_key
+                            break
+
+            logger.info(f"Поиск строки: user_id={user_id}, subject_id={search_subject_id} (оригинальный: {subject_id})")
+
+            for row_idx, row in enumerate(data[1:], start=2):
+                row_list = list(row)
+                if len(row_list) > 0 and str(row_list[0]).strip() == str(user_id):
+                    if len(row_list) > 2 and str(row_list[2]).strip() == str(search_subject_id):
+                        target_row = row_idx
+                        logger.info(
+                            f"Найдена строка {target_row} для user_id {user_id} и subject_id {search_subject_id}")
+                        break
+
+            if target_row == -1:
+                logger.error(f"Не найдена строка для user_id {user_id} и subject_id {search_subject_id}")
+                return False
+
+            # Обновляем ячейки
+            if date_col_start + 1 <= len(headers):
+                worksheet.cell(row=target_row, column=date_col_start + 1, value=start_time)
+            if date_col_start + 2 <= len(headers):
+                worksheet.cell(row=target_row, column=date_col_start + 2, value=end_time)
+
+            self.workbook.save(self.excel_file_path)
+            logger.info(f"Обновлена ячейка для user_id {user_id}, subject {search_subject_id}, date {formatted_date}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Ошибка обновления ячейки: {e}")
+            return False
+
+    def update_teacher_booking_cell(self, user_id: int, subjects: List[str], date: str,
+                                    start_time: str, end_time: str) -> bool:
+        """Обновляет только конкретную ячейку для преподавателя"""
+        try:
+            worksheet = self._get_or_create_worksheet("Преподаватели бот")
+            data = list(worksheet.values)
+
+            if len(data) < 2:
+                return False
+
+            headers = [str(h).lower() for h in data[0]]
+
+            # Ищем колонку для даты
+            date_col_start = -1
+            formatted_date = self.format_date(date) if date else ''
+
+            for i, header in enumerate(headers):
+                if header.startswith(formatted_date.lower()):
+                    date_col_start = i
+                    break
+
+            if date_col_start == -1:
+                logger.error(f"Дата {formatted_date} не найдена в заголовках")
+                return False
+
+            # Ищем строку ТОЛЬКО по user_id
+            target_row = -1
+            logger.info(f"Поиск строки преподавателя по user_id: {user_id}")
+
+            for row_idx, row in enumerate(data[1:], start=2):
+                row_list = list(row)
+                if len(row_list) > 0 and str(row_list[0]).strip() == str(user_id):
+                    target_row = row_idx
+                    logger.info(f"Найдена строка {target_row} для user_id {user_id}")
+                    break
+
+            if target_row == -1:
+                logger.error(f"Не найдена строка для user_id {user_id}")
+                return False
+
+            # Обновляем ячейки
+            if date_col_start + 1 <= len(headers):
+                worksheet.cell(row=target_row, column=date_col_start + 1, value=start_time)
+            if date_col_start + 2 <= len(headers):
+                worksheet.cell(row=target_row, column=date_col_start + 2, value=end_time)
+
+            self.workbook.save(self.excel_file_path)
+            logger.info(f"Обновлена ячейка для user_id {user_id}, date {formatted_date}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Ошибка обновления ячейки преподавателя: {e}")
+            return False
 
     def get_student_finances(self, user_id: int, subject_id: str, selected_date: str) -> Dict[str, float]:
-        """Получает финансовую информацию для ученика по предмету и дате"""
+        """Получает финансовую информацию для ученика по предмету и дате - ПОЛНАЯ ВЕРСИЯ"""
         try:
-            # Используем кэш
             cache_key = f"finances_{user_id}_{subject_id}_{selected_date}"
             cached_result = self._get_cached_data(cache_key)
             if cached_result:
@@ -247,7 +997,7 @@ class GoogleSheetsManager:
                 return cached_result
 
             worksheet = self._get_or_create_worksheet("Ученики бот")
-            data = worksheet.get_all_values()
+            data = list(worksheet.values)
 
             if len(data) < 2:
                 logger.error("В таблице 'Ученики бот' недостаточно данных")
@@ -258,8 +1008,9 @@ class GoogleSheetsManager:
             # Находим строку ученика с указанным subject_id
             target_row = -1
             for row_idx, row in enumerate(data[1:], start=2):
-                if (len(row) > 0 and str(row[0]).strip() == str(user_id) and
-                        len(row) > 2 and str(row[2]).strip() == str(subject_id)):
+                row_list = list(row)
+                if (len(row_list) > 0 and str(row_list[0]).strip() == str(user_id) and
+                        len(row_list) > 2 and str(row_list[2]).strip() == str(subject_id)):
                     target_row = row_idx
                     logger.info(f"Найдена строка ученика: строка {target_row}")
                     break
@@ -272,9 +1023,10 @@ class GoogleSheetsManager:
 
             # Получаем тариф ученика (столбец N, индекс 13)
             tariff = 0.0
-            if len(data[target_row - 1]) > 13 and data[target_row - 1][13]:
+            row_data = data[target_row - 1]
+            if len(row_data) > 13 and row_data[13]:
                 try:
-                    tariff_str = str(data[target_row - 1][13]).replace(',', '.').strip()
+                    tariff_str = str(row_data[13]).replace(',', '.').strip()
                     # Обрабатываем неразрывные пробелы и другие символы
                     tariff_str = tariff_str.replace('\xa0', '').replace(' ', '')
                     tariff = float(tariff_str) if tariff_str else 0.0
@@ -299,12 +1051,12 @@ class GoogleSheetsManager:
                 header = headers[i]
                 if formatted_date.lower() in header:
                     # Проверяем время занятия
-                    if len(data[target_row - 1]) > i + 1:
-                        start_time = data[target_row - 1][i] if i < len(data[target_row - 1]) else ""
-                        end_time = data[target_row - 1][i + 1] if i + 1 < len(data[target_row - 1]) else ""
+                    if len(row_data) > i + 1:
+                        start_time = row_data[i] if i < len(row_data) else ""
+                        end_time = row_data[i + 1] if i + 1 < len(row_data) else ""
 
                         logger.info(f"Проверяем занятие: дата '{header}', время '{start_time}-{end_time}'")
-                        
+
                         if start_time and end_time and str(start_time).strip() and str(end_time).strip():
                             withdrawn = tariff
                             schedule_found = True
@@ -325,12 +1077,12 @@ class GoogleSheetsManager:
             for i in range(245, len(headers), 2):  # Шаг 2 - только столбцы пополнений
                 if i >= len(headers):
                     break
-                    
+
                 header = headers[i]
                 if formatted_date.lower() in header:
                     # Нашли финансовый столбец для нужной даты - это столбец пополнений
-                    if len(data[target_row - 1]) > i:
-                        replenishment_str = data[target_row - 1][i]
+                    if len(row_data) > i:
+                        replenishment_str = row_data[i]
                         logger.info(
                             f"Найден финансовый столбец {i} для даты {formatted_date}: значение='{replenishment_str}'")
 
@@ -389,55 +1141,16 @@ class GoogleSheetsManager:
             self._set_cached_data(cache_key, result)
             return result
 
-    def debug_finance_columns(self, target_date: str):
-        """Отладочный метод для просмотра структуры финансовых столбцов"""
-        try:
-            worksheet = self._get_or_create_worksheet("Ученики бот")
-            data = worksheet.get_all_values()
-
-            if len(data) < 1:
-                return
-
-            headers = [str(h).strip() for h in data[0]]
-            formatted_date = self.format_date(target_date)
-
-            logger.info(f"=== ОТЛАДКА СТОЛБЦОВ ДЛЯ ДАТЫ {formatted_date} ===")
-
-            # Ищем все столбцы с этой датой
-            date_columns = []
-            for i, header in enumerate(headers):
-                if formatted_date.lower() in header.lower():
-                    date_columns.append((i, header))
-
-            logger.info(f"Найдено столбцов с датой {formatted_date}: {len(date_columns)}")
-            for col_idx, header in date_columns:
-                logger.info(f"Столбец {col_idx}: '{header}'")
-
-                # Покажем значения из первых 3 строк для этого столбца
-                for row_idx in range(1, min(4, len(data))):
-                    if len(data[row_idx]) > col_idx:
-                        value = data[row_idx][col_idx]
-                        logger.info(f"  Строка {row_idx + 1}: '{value}'")
-
-            # Покажем структуру вокруг финансовых столбцов
-            logger.info("=== СТРУКТУРА ФИНАНСОВЫХ СТОЛБЦОВ (240-250) ===")
-            for i in range(240, min(251, len(headers))):
-                header = headers[i] if i < len(headers) else "N/A"
-                logger.info(f"Столбец {i}: '{header}'")
-
-        except Exception as e:
-            logger.error(f"Ошибка при отладке столбцов: {e}")
     def get_available_finance_dates(self, user_id: int, subject_id: str) -> List[str]:
         """Получает доступные даты для просмотра финансов"""
         try:
-            # Используем кэш
             cache_key = f"finance_dates_{user_id}_{subject_id}"
             cached_result = self._get_cached_data(cache_key)
             if cached_result:
                 return cached_result
 
             worksheet = self._get_or_create_worksheet("Ученики бот")
-            data = worksheet.get_all_values()
+            data = list(worksheet.values)
 
             if len(data) < 2:
                 return []
@@ -445,8 +1158,9 @@ class GoogleSheetsManager:
             # Находим строку ученика
             target_row = -1
             for row_idx, row in enumerate(data[1:], start=2):
-                if (len(row) > 0 and str(row[0]).strip() == str(user_id) and
-                        len(row) > 2 and str(row[2]).strip() == str(subject_id)):
+                row_list = list(row)
+                if (len(row_list) > 0 and str(row_list[0]).strip() == str(user_id) and
+                        len(row_list) > 2 and str(row_list[2]).strip() == str(subject_id)):
                     target_row = row_idx
                     break
 
@@ -459,13 +1173,12 @@ class GoogleSheetsManager:
             available_dates = []
 
             # Только финансовые столбцы (начиная с 245)
-            for i in range(245, min(len(headers), 500)):  # Ограничиваем поиск 500 столбцами
+            for i in range(245, min(len(headers), 500)):
                 if i < len(headers) and headers[i]:
                     # Извлекаем дату из заголовка
                     date_header = headers[i].split()[0] if ' ' in headers[i] else headers[i]
 
                     try:
-                        # Пробуем разные форматы дат
                         date_formats = ["%d.%m.%Y", "%d.%m", "%d.%m.%y"]
                         date_obj = None
 
@@ -496,766 +1209,53 @@ class GoogleSheetsManager:
             logger.error(f"Ошибка получения доступных дат финансов: {e}")
             return []
 
-    def _ensure_sheet_structure(self, worksheet, formatted_dates: List[str], is_teacher: bool):
-        """Создает структуру листа заново"""
-        headers = ['ID', 'Имя', 'Предмет ID']
-
-        # Добавляем новые столбцы только для учеников
-        if not is_teacher:
-            headers.extend(['Предмет', 'Класс'])
-
-        if is_teacher:
-            headers.append('Приоритет')
-        else:
-            headers.append('Потребность во внимании (мин)')
-
-        headers += [date for date in formatted_dates for _ in (0, 1)]
-        worksheet.clear()
-        worksheet.append_row(headers)
-
-    def _prepare_records(self, bookings: List[Dict[str, Any]],
-                         formatted_dates: List[str], is_teacher: bool) -> Dict[str, Any]:
-        """Подготавливает данные для вставки с учетом предметов учеников"""
-        records = {}
-
-        for booking in bookings:
-            if 'user_name' not in booking:
-                continue
-
-            name = booking['user_name']
-            user_id = str(booking.get('user_id', ''))
-            date = self.format_date(booking['date']) if booking.get('date') else ''
-
-            if is_teacher:
-                # Для преподавателей используем ID предметов
-                subjects = booking.get('subjects', [])
-                subject_str = ', '.join(subjects)
-                key = f"{user_id}_{name}"
-            else:
-                # Для учеников используем ID предмета
-                subject = booking.get('subject', '')
-                subject_str = subject
-                key = f"{user_id}_{subject_str}"
-
-            if key not in records:
-                records[key] = {
-                    'id': user_id,
-                    'name': name,
-                    'subject': subject_str,
-                    'attention_need': booking.get('attention_need', ''),
-                    'subject_name': booking.get('subject_name', ''),  # Сохраняем название предмета
-                    'class_name': booking.get('class_name', ''),  # Сохраняем класс
-                    'bookings': {}
-                }
-
-            if date in formatted_dates:
-                records[key]['bookings'][date] = {
-                    'start': booking.get('start_time', ''),
-                    'end': booking.get('end_time', '')
-                }
-
-        return records
-
-    def _update_worksheet_data(self, worksheet, records: Dict[str, Any],
-                               formatted_dates: List[str], is_teacher: bool):
-        """Вставляет данные в лист"""
-        if not records:
-            worksheet.batch_clear(["A2:Z1000"])
-            logger.info("Нет данных для вставки - лист очищен")
-            return
-
-        rows = []
-        for record in records.values():
-            row = [record['id'], record['name'], record['subject']]
-
-            # Добавляем новые столбцы только для учеников
-            if not is_teacher:
-                row.extend([
-                    record.get('subject_name', ''),  # Новый столбец "Предмет"
-                    record.get('class_name', '')  # Новый столбец "Класс"
-                ])
-
-            if is_teacher:
-                row.append(record.get('priority', ''))
-            else:
-                row.append(record.get('attention_need', ''))
-
-            # Для пользователей без записей оставляем пустые ячейки
-            for date in formatted_dates:
-                if date in record['bookings']:
-                    row.extend([
-                        record['bookings'][date]['start'],
-                        record['bookings'][date]['end']
-                    ])
-                else:
-                    row.extend(['', ''])
-            rows.append(row)
-
-        worksheet.batch_clear(["A2:Z1000"])
-        if rows:
-            worksheet.update(f"A2:{gspread.utils.rowcol_to_a1(len(rows) + 1, len(rows[0]))}", rows)
-
-        logger.info(f"Обновлено {len(rows)} строк в листе '{worksheet.title}'")
-
-    def get_bookings_from_sheet(self, sheet_name: str, is_teacher: bool) -> List[Dict[str, Any]]:
-        try:
-            worksheet = self.spreadsheet.worksheet(sheet_name)
-            data = worksheet.get_all_values()
-
-            if len(data) < 3:
-                return []
-
-            headers = [h.lower() for h in data[0]]
-            bookings = []
-            reverse_qual_map = {v: k for k, v in self.qual_map.items()}
-
-            # ДЕБАГ: Логируем структуру таблицы
-            # logger.info(f"Структура листа '{sheet_name}':")
-            # logger.info(f"Заголовки: {headers}")
-            # logger.info(f"Кол-во столбцов: {len(headers)}")
-
-            # ОСНОВНОЕ ИСПРАВЛЕНИЕ: Определяем правильные индексы столбцов
-            # Структура вашей таблицы:
-            # A: ID, B: Имя, C: Предмет ID, D: Потребность во внимании,
-            # E-N: дополнительные столбцы (не даты)
-            # O-JF: Даты (начиная с 01.09.2025)
-
-            # Определяем индекс начала столбцов с датами
-            date_start_col = 14  # Столбец O (индекс 14) - первая дата 01.09.2025
-
-            # Находим конец столбцов с датами - ищем первый пустой заголовок после начала дат
-            date_end_col = date_start_col
-            for i in range(date_start_col, len(headers)):
-                if not headers[i] or headers[i].strip() == '':
-                    break
-                date_end_col = i
-            date_end_col += 1  # включаем последний столбец
-
-            logger.info(f"Столбцы с датами: с {date_start_col} по {date_end_col}")
-
-            for row_idx, row in enumerate(data[2:], start=3):
-                if not row or not row[0]:
-                    continue
-
-                try:
-                    user_id = int(row[0]) if row[0].strip() else None
-                except ValueError:
-                    user_id = None
-
-                user_name = row[1] if len(row) > 1 else ""
-
-                if not is_teacher:  # Для учеников
-                    subject = row[2] if len(row) > 2 else ""  # Столбец C - Предмет ID
-                    attention_need = row[3] if len(row) > 3 else ""  # Столбец D - Потребность
-
-                    # Дополнительные данные из второй части таблицы
-                    subject_name = row[11] if len(row) > 11 else ""  # Столбец L - Предмет
-                    class_name = row[10] if len(row) > 10 else ""  # Столбец K - Класс
-                else:  # Для преподавателей
-                    subject = row[2] if len(row) > 2 else ""  # Столбец C - Предметы
-                    priority = row[3] if len(row) > 3 else ""  # Столбец D - Приоритет
-
-                # Обрабатываем только столбцы с датами (начиная с O)
-                for i in range(date_start_col, min(date_end_col, len(row)), 2):
-                    if i + 1 >= len(row) or i >= len(headers):
-                        break
-
-                    # Получаем дату из заголовка
-                    date_header = headers[i].split()[0] if i < len(headers) else ""
-                    start_time = row[i] if i < len(row) else ""
-                    end_time = row[i + 1] if i + 1 < len(row) else ""
-
-                    # Пропускаем если нет времени или некорректная дата
-                    if not date_header or not start_time or not end_time:
-                        continue
-
-                    try:
-                        # Пытаемся распарсить дату (может быть в разных форматах)
-                        date_formats = ["%d.%m.%Y", "%d.%m", "%d.%m.%y"]
-                        date_obj = None
-
-                        for date_format in date_formats:
-                            try:
-                                date_obj = datetime.strptime(date_header, date_format)
-                                # Если год не указан, используем текущий
-                                if date_format == "%d.%m":
-                                    date_obj = date_obj.replace(year=datetime.now().year)
-                                break
-                            except ValueError:
-                                continue
-
-                        if not date_obj:
-                            continue
-
-                        date_str = date_obj.strftime("%Y-%m-%d")
-
-                        booking = {
-                            "user_id": user_id if user_id is not None else -1,
-                            "user_name": user_name,
-                            "date": date_str,
-                            "start_time": start_time,
-                            "end_time": end_time,
-                            "user_role": "teacher" if is_teacher else "student",
-                            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        }
-
-                        if is_teacher:
-                            subjects = []
-                            for subj in subject.split(","):
-                                subj = subj.strip()
-                                if subj in reverse_qual_map:
-                                    subjects.append(reverse_qual_map[subj])
-                                else:
-                                    subjects.append(subj)
-                            booking["subjects"] = subjects
-                            booking["booking_type"] = "Тип1"
-                            booking["priority"] = priority
-                        else:
-                            if subject in reverse_qual_map:
-                                booking["subject"] = reverse_qual_map[subject]
-                            else:
-                                booking["subject"] = subject
-                            booking["booking_type"] = "Тип1"
-                            booking["attention_need"] = attention_need
-                            # Добавляем новые поля для учеников
-                            booking["subject_name"] = subject_name
-                            booking["class_name"] = class_name
-
-                        bookings.append(booking)
-
-                    except ValueError as e:
-                        logger.debug(f"Ошибка обработки даты {date_header}: {e}")
-                        continue
-
-            logger.info(f"Успешно обработано {len(bookings)} записей из листа '{sheet_name}'")
-            return bookings
-
-        except Exception as e:
-            logger.error(f"Ошибка чтения из листа '{sheet_name}': {e}")
-            logger.error(f"Трассировка: {traceback.format_exc()}")
-            return []
-    def sync_from_gsheets_to_json(self, storage):
-        """Синхронизирует данные из Google Sheets в JSON хранилище"""
-        try:
-            teacher_bookings = self.get_bookings_from_sheet("Преподаватели бот", is_teacher=True)
-            student_bookings = self.get_bookings_from_sheet("Ученики бот", is_teacher=False)
-
-            all_bookings = teacher_bookings + student_bookings
-
-            if hasattr(storage, 'replace_all_bookings'):
-                storage.replace_all_bookings(all_bookings)
-                logger.info(f"Успешно синхронизировано {len(all_bookings)} записей из Google Sheets в JSON")
-                return True
-            else:
-                storage.save(all_bookings, sync_to_gsheets=False)
-                logger.warning("Использован fallback метод save вместо replace_all_bookings")
-                return True
-
-        except Exception as e:
-            logger.error(f"Ошибка синхронизации из Google Sheets: {e}")
-            return False
-
-    def get_user_name(self, user_id: int) -> str:
-        """Получает ФИО пользователя без создания дубликатов"""
-        try:
-            worksheet = self._get_or_create_users_worksheet()
-            cell = worksheet.find(str(user_id), in_column=1)
-            return worksheet.cell(cell.row, 2).value if cell else ""
-        except Exception as e:
-            logger.error(f"User lookup error: {e}")
-            return ""
-
-    def save_user_name(self, user_id: int, user_name: str) -> bool:
-        """Обновляет или создает запись пользователя без дубликатов"""
-        try:
-            worksheet = self._get_or_create_users_worksheet()
-            cell = worksheet.find(str(user_id), in_column=1)
-
-            if cell:
-                worksheet.update_cell(cell.row, 2, user_name)
-            else:
-                worksheet.append_row([user_id, user_name])
-
-            return True
-        except Exception as e:
-            logger.error(f"User save error: {e}")
-            return False
-
-    def _get_or_create_users_worksheet(self):
-        """Создает лист пользователей с колонками: user_id, user_name, roles, teacher_subjects"""
-        try:
-            worksheet = self.spreadsheet.worksheet("Пользователи бот")
-            # Проверяем структуру
-            headers = worksheet.row_values(1)
-            expected_headers = ["user_id", "user_name", "roles", "teacher_subjects"]
-            
-            if len(headers) < len(expected_headers):
-                # Добавляем недостающие заголовки
-                for i in range(len(headers), len(expected_headers)):
-                    worksheet.update_cell(1, i+1, expected_headers[i])
-                    
-        except gspread.WorksheetNotFound:
-            worksheet = self.spreadsheet.add_worksheet(
-                title="Пользователи",
-                rows=100,
-                cols=4
-            )
-            worksheet.update("A1:D1", [["user_id", "user_name", "roles", "teacher_subjects"]])
-        return worksheet
-    
-    def get_user_roles(self, user_id: int) -> List[str]:
-        """Получает роли пользователя из листа Пользователи"""
-        try:
-            worksheet = self._get_or_create_users_worksheet()
-            cell = worksheet.find(str(user_id), in_column=1)
-            
-            if cell:
-                # Колонка C - роли (разделенные запятыми)
-                roles_cell = worksheet.cell(cell.row, 3).value
-                logger.info("Поиск по ID" + str(user_id) + ": " + roles_cell)
-                if roles_cell:
-                    # Убираем дубликаты и возвращаем уникальные роли
-                    roles = [role.strip().lower() for role in roles_cell.split(',')]
-                    return list(set(roles))  # Убираем дубликаты
-            return []
-        except Exception as e:
-            logger.error(f"Error getting user roles: {e}")
-            return []
-        
-    def has_user_roles(self, user_id: int) -> bool:
-        """Проверяет, есть ли у пользователя назначенные роли"""
-        roles = self.get_user_roles(user_id)
-        return len(roles) > 0
-
-    def save_user_info(self, user_id: int, user_name: str) -> bool:
-        """Сохраняет ФИО пользователя (без ролей - роли только через админку)"""
-        try:
-            worksheet = self._get_or_create_users_worksheet()
-            cell = worksheet.find(str(user_id), in_column=1)
-            
-            if cell:
-                # Обновляем только имя, не трогаем роли
-                worksheet.update_cell(cell.row, 2, user_name)
-            else:
-                # Создаем новую запись только с ФИО, роли пустые
-                worksheet.append_row([user_id, user_name, ""])
-            
-            return True
-        except Exception as e:
-            logger.error(f"Error saving user info: {e}")
-            return False
-
-    def get_user_data(self, user_id: int) -> dict:
-        """Получает все данные пользователя по ID"""
-        try:
-            worksheet = self._get_or_create_users_worksheet()
-            records = worksheet.get_all_records()
-
-            for record in records:
-                if str(record.get("user_id")) == str(user_id):
-                    return record
-            return {}
-        except Exception as e:
-            logger.error(f"Ошибка при получении данных пользователя: {e}")
-            return {}
-
-    def save_user_data(self, user_data: dict) -> bool:
-        """Сохраняет или обновляет данные пользователя"""
-        try:
-            worksheet = self._get_or_create_users_worksheet()
-            records = worksheet.get_all_records()
-            user_id = str(user_data["user_id"])
-
-            row_num = None
-            for i, record in enumerate(records, start=2):
-                if str(record.get("user_id")) == user_id:
-                    row_num = i
-                    break
-
-            data_to_save = [user_id, user_data.get("user_name", "")]
-
-            if row_num:
-                worksheet.update(f"A{row_num}:B{row_num}", [data_to_save])
-            else:
-                worksheet.append_row(data_to_save)
-
-            return True
-        except Exception as e:
-            logger.error(f"Ошибка при сохранении данных пользователя: {e}")
-            return False
-
-    def save_user_subject(self, user_id: int, user_name: str, subject_id: str) -> bool:
-        """Сохраняет связь пользователь-предмет для учеников"""
-        try:
-            worksheet = self._get_or_create_worksheet("Ученики бот")
-            records = worksheet.get_all_records()
-
-            row_num = None
-            for i, record in enumerate(records, start=2):
-                if (str(record.get('user_id')) == str(user_id) and
-                        record.get('subject') == subject_id):
-                    row_num = i
-                    break
-
-            if row_num:
-                worksheet.update(f"A{row_num}:C{row_num}", [[user_id, user_name, subject_id]])
-            else:
-                worksheet.append_row([user_id, user_name, subject_id])
-
-            return True
-        except Exception as e:
-            # logger.error(f"Ошибка сохранения предмета ученика: {e}")
-            return False
-
-    def get_teacher_subjects(self, user_id: int) -> List[str]:
-        """Получает предметы преподавателя из листа Пользователи"""
-        try:
-            worksheet = self._get_or_create_users_worksheet()
-            records = worksheet.get_all_records()
-
-            for record in records:
-                # Преобразуем user_id к строке для сравнения
-                record_user_id = str(record.get("user_id", ""))
-                if record_user_id == str(user_id):
-                    subjects = record.get("teacher_subjects", "")
-                    if subjects:
-                        # ДЕБАГ: Логируем что получаем
-                        logger.info(f"Raw subjects for user {user_id}: {subjects} (type: {type(subjects)})")
-
-                        # ОСНОВНОЕ ИСПРАВЛЕНИЕ: Преобразуем число в строку и разбиваем на отдельные цифры
-                        subjects_str = str(subjects)
-
-                        # Если это число без запятых (например 1234), разбиваем на отдельные цифры
-                        if subjects_str.isdigit() and len(subjects_str) > 1:
-                            subject_list = [digit for digit in subjects_str]
-                            logger.info(f"Converted number {subjects_str} to subjects: {subject_list}")
-                            return subject_list
-                        # Если это строка с запятыми (например "1,2,3,4")
-                        elif ',' in subjects_str:
-                            subject_list = [subj.strip() for subj in subjects_str.split(',') if subj.strip()]
-                            logger.info(f"Split comma-separated subjects: {subject_list}")
-                            return subject_list
-                        # Если это одиночный предмет (например "1")
-                        else:
-                            subject_list = [subjects_str.strip()]
-                            logger.info(f"Single subject: {subject_list}")
-                            return subject_list
-
-            logger.warning(f"No subjects found for user {user_id}")
-            return []
-        except Exception as e:
-            logger.error(f"Error getting teacher subjects: {e}")
-            return []
-        
-    def _get_or_create_parents_worksheet(self):
-        """Создает лист Родители с колонками: user_id, user_name, children_ids"""
-        try:
-            worksheet = self.spreadsheet.worksheet("Родители бот")
-            # Проверяем структуру
-            headers = worksheet.row_values(1)
-            expected_headers = ["user_id", "user_name", "children_ids"]
-            
-            if len(headers) < len(expected_headers):
-                # Добавляем недостающие заголовки
-                for i in range(len(headers), len(expected_headers)):
-                    worksheet.update_cell(1, i+1, expected_headers[i])
-                    
-        except gspread.WorksheetNotFound:
-            worksheet = self.spreadsheet.add_worksheet(
-                title="Родители",
-                rows=100,
-                cols=3
-            )
-            worksheet.update("A1:C1", [["user_id", "user_name", "children_ids"]])
-        return worksheet
-
-    def get_parent_children(self, parent_id: int) -> List[int]:
-        """Получает список ID детей родителя"""
-        try:
-            worksheet = self._get_or_create_parents_worksheet()
-            records = worksheet.get_all_records()
-            
-            for record in records:
-                # Преобразуем parent_id к строке для сравнения
-                if str(record.get("user_id")) == str(parent_id):
-                    children_str = record.get("children_ids", "")
-                    if children_str:
-                        # Убеждаемся, что это строка перед split
-                        children_str = str(children_str)
-                        return [int(child_id.strip()) for child_id in children_str.split(',') if child_id.strip()]
-            return []
-        except Exception as e:
-            logger.error(f"Error getting parent children: {e}")
-            return []
-
-    def get_child_info(self, child_id: int) -> dict:
-        """Получает информацию о ребенке (ученике)"""
-        try:
-            # Получаем данные ученика из листа Пользователи
-            user_data = self.get_user_data(child_id)
-            if user_data and 'student' in user_data.get('roles', '').split(','):
-                return user_data
-            return {}
-        except Exception as e:
-            logger.error(f"Error getting child info: {e}")
-            return {}
-
-    def save_parent_info(self, parent_id: int, parent_name: str, children_ids: List[int] = None) -> bool:
-        """Сохраняет информацию о родителе"""
-        try:
-            worksheet = self._get_or_create_parents_worksheet()
-            records = worksheet.get_all_records()
-            
-            row_num = None
-            for i, record in enumerate(records, start=2):
-                if str(record.get("user_id")) == str(parent_id):
-                    row_num = i
-                    break
-            
-            children_str = ','.join(map(str, children_ids)) if children_ids else ''
-            
-            if row_num:
-                worksheet.update(f"A{row_num}:C{row_num}", [[parent_id, parent_name, children_str]])
-            else:
-                worksheet.append_row([parent_id, parent_name, children_str])
-            
-            return True
-        except Exception as e:
-            logger.error(f"Error saving parent info: {e}")
-            return False
-        
-    def get_available_subjects_for_student(self, user_id: int) -> List[str]:
-        """Получает доступные предметы для ученика (ищет только по строкам с соответствующим user_id)"""
-        try:
-            worksheet = self._get_or_create_worksheet("Ученики бот")
-            data = worksheet.get_all_values()
-            
-            logger.info(f"Поиск предметов для user_id: {user_id}")
-            logger.info(f"Всего строк в листе: {len(data)}")
-            
-            if not data or len(data) < 3:
-                logger.info("Нет данных или только заголовок")
-                return []
-            
-            available_subjects = []
-            
-            # Пропускаем заголовок (первую строку)
-            for i, row in enumerate(data[2:], start=3):
-                if not row:
-                    continue
-                    
-                row_user_id = row[0].strip() if len(row) > 0 and row[0] else ""
-                row_subject = row[2].strip() if len(row) > 2 and row[2] else ""
-                
-                # logger.info(f"Строка {i}: user_id='{row_user_id}', subject='{row_subject}'")
-                
-                # Ищем только строки с соответствующим user_id
-                if row_user_id == str(user_id) and row_subject:
-                    logger.info(f"Найден предмет для user_id {user_id}: {row_subject}")
-                    available_subjects.append(row_subject)
-            
-            logger.info(f"Итоговый список предметов для user_id {user_id}: {available_subjects}")
-            return list(set(available_subjects))
-            
-        except Exception as e:
-            logger.error(f"Ошибка получения доступных предметов для user_id {user_id}: {e}")
-            return []
-        
-    def update_student_booking_cell(self, user_id: int, subject_id: str, date: str, 
-                           start_time: str, end_time: str) -> bool:
-        """Обновляет только конкретную ячейку для ученика"""
-        try:
-            worksheet = self._get_or_create_worksheet("Ученики бот")
-            data = worksheet.get_all_values()
-            logger.info("ищется предмет: " + subject_id)
-            
-            if len(data) < 2:
-                return False
-            
-            # Находим заголовки
-            headers = [h.lower() for h in data[0]]
-            
-            # Ищем колонку для даты
-            date_col_start = -1
-            date_col_end = -1
-            
-            formatted_date = self.format_date(date) if date else ''
-            
-            for i, header in enumerate(headers):
-                if header.startswith(formatted_date.lower()):
-                    if date_col_start == -1:
-                        date_col_start = i
-                    else:
-                        date_col_end = i
-                        break
-            
-            if date_col_start == -1:
-                logger.error(f"Дата {formatted_date} не найдена в заголовках")
-                return False
-            
-            # Ищем строку с user_id и subject_id
-            target_row = -1
-            
-            # ПРЕОБРАЗУЕМ subject_id ТОЛЬКО если это не числовой ID
-            search_subject_id = subject_id
-            
-            # Если subject_id - это название предмета (например "информатика"), преобразуем в числовой ID
-            if not subject_id.isdigit():  # Если это не число
-                if subject_id.lower() in self.qual_map:
-                    # Если subject_id это название в нижнем регистре (например "информатика")
-                    search_subject_id = self.qual_map[subject_id.lower()]
-                elif subject_id in self.qual_map.values():
-                    # Если subject_id это название предмета в правильном регистре
-                    for id_key, name_value in self.qual_map.items():
-                        if name_value == subject_id:
-                            search_subject_id = id_key
-                            break
-            
-            logger.info(f"Поиск строки: user_id={user_id}, subject_id={search_subject_id} (оригинальный: {subject_id})")
-            
-            for row_idx, row in enumerate(data[1:], start=2):  # Пропускаем заголовок
-                if len(row) > 0 and str(row[0]).strip() == str(user_id):
-                    # Проверяем subject_id в столбце C (индекс 2)
-                    if len(row) > 2 and str(row[2]).strip() == str(search_subject_id):
-                        target_row = row_idx
-                        logger.info(f"Найдена строка {target_row} для user_id {user_id} и subject_id {search_subject_id}")
-                        break
-            
-            if target_row == -1:
-                logger.error(f"Не найдена строка для user_id {user_id} и subject_id {search_subject_id}")
-                logger.info(f"Доступные subject_id в таблице:")
-                for row_idx, row in enumerate(data[1:], start=2):
-                    if len(row) > 0 and str(row[0]).strip() == str(user_id):
-                        row_subject = row[2] if len(row) > 2 else "нет данных"
-                        logger.info(f"Строка {row_idx}: user_id={row[0]}, subject_id={row_subject}")
-                return False
-            
-            # Обновляем только нужные ячейки
-            if date_col_end != -1:  # Есть отдельная колонка для конца времени
-                worksheet.update_cell(target_row, date_col_start + 1, start_time)
-                worksheet.update_cell(target_row, date_col_end + 1, end_time)
-            else:  # Только одна колонка для даты (предполагаем, что следующая - для конца)
-                worksheet.update_cell(target_row, date_col_start + 1, start_time)
-                if date_col_start + 2 <= len(data[0]):
-                    worksheet.update_cell(target_row, date_col_start + 2, end_time)
-            
-            logger.info(f"Обновлена ячейка для user_id {user_id}, subject {search_subject_id}, date {formatted_date}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Ошибка обновления ячейки: {e}")
-            return False
-        
-    def update_teacher_booking_cell(self, user_id: int, subjects: List[str], date: str, 
-                           start_time: str, end_time: str) -> bool:
-        """Обновляет только конкретную ячейку для преподавателя (ищет только по user_id)"""
-        try:
-            worksheet = self._get_or_create_worksheet("Преподаватели бот")
-            data = worksheet.get_all_values()
-            
-            if len(data) < 2:
-                return False
-            
-            # Находим заголовки
-            headers = [h.lower() for h in data[0]]
-            
-            # Ищем колонку для даты
-            date_col_start = -1
-            date_col_end = -1
-            
-            formatted_date = self.format_date(date) if date else ''
-            
-            for i, header in enumerate(headers):
-                if header.startswith(formatted_date.lower()):
-                    if date_col_start == -1:
-                        date_col_start = i
-                    else:
-                        date_col_end = i
-                        break
-            
-            if date_col_start == -1:
-                logger.error(f"Дата {formatted_date} не найдена в заголовках")
-                return False
-            
-            # Ищем строку ТОЛЬКО по user_id (игнорируем subjects)
-            target_row = -1
-            
-            logger.info(f"Поиск строки преподавателя по user_id: {user_id}")
-            
-            for row_idx, row in enumerate(data[1:], start=2):  # Пропускаем заголовок
-                if len(row) > 0 and str(row[0]).strip() == str(user_id):
-                    target_row = row_idx
-                    logger.info(f"Найдена строка {target_row} для user_id {user_id}")
-                    break
-            
-            if target_row == -1:
-                logger.error(f"Не найдена строка для user_id {user_id}")
-                logger.info(f"Доступные преподаватели в таблице:")
-                for row_idx, row in enumerate(data[1:], start=2):
-                    if len(row) > 0:
-                        row_user_id = row[0] if row[0] else "пусто"
-                        row_name = row[1] if len(row) > 1 else "нет имени"
-                        logger.info(f"Строка {row_idx}: user_id={row_user_id}, имя={row_name}")
-                return False
-            
-            # Обновляем только нужные ячейки
-            if date_col_end != -1:  # Есть отдельная колонка для конца времени
-                worksheet.update_cell(target_row, date_col_start + 1, start_time)
-                worksheet.update_cell(target_row, date_col_end + 1, end_time)
-            else:  # Только одна колонка для даты (предполагаем, что следующая - для конца)
-                worksheet.update_cell(target_row, date_col_start + 1, start_time)
-                if date_col_start + 2 <= len(data[0]):
-                    worksheet.update_cell(target_row, date_col_start + 2, end_time)
-            
-            logger.info(f"Обновлена ячейка для user_id {user_id}, date {formatted_date}")
-            return True
-                
-        except Exception as e:
-            logger.error(f"Ошибка обновления ячейки преподавателя: {e}")
-            return False
-        
     def get_student_balance(self, student_id: int) -> float:
         """Получает текущий баланс студента на основе всей истории"""
         try:
             finance_history = self.get_student_finance_history(student_id)
-            
+
             total_replenished = 0.0
             total_withdrawn = 0.0
-            
+
             for operation in finance_history:
                 total_replenished += operation["replenished"]
                 total_withdrawn += operation["withdrawn"]
-            
+
             balance = total_replenished - total_withdrawn
-            logger.info(f"Balance for student {student_id}: {balance} (replenished: {total_replenished}, withdrawn: {total_withdrawn})")
-            
+            logger.info(
+                f"Balance for student {student_id}: {balance} (replenished: {total_replenished}, withdrawn: {total_withdrawn})")
+
             return balance
-            
+
         except Exception as e:
             logger.error(f"Error calculating balance for student {student_id}: {e}")
             return 0.0
 
     def update_student_balance(self, student_id: int, amount: float):
-        """Обновляет баланс студента в Google Sheets"""
+        """Обновляет баланс студента в Excel"""
         try:
             worksheet = self._get_or_create_worksheet("Балансы")
-            data = worksheet.get_all_values()
-            
+            data = list(worksheet.values)
+
             # Ищем существующую запись
             found = False
-            for i, row in enumerate(data[1:], start=2):  # start=2 потому что 1 строка - заголовок
-                if row and len(row) >= 1 and str(row[0]).strip() == str(student_id):
-                    worksheet.update_cell(i, 2, amount)  # Колонка B - баланс
+            for i, row in enumerate(data[1:], start=2):
+                row_list = list(row)
+                if row_list and len(row_list) >= 1 and str(row_list[0]).strip() == str(student_id):
+                    worksheet.cell(row=i, column=2, value=amount)
                     found = True
                     break
-            
+
             # Если не нашли, добавляем новую запись
             if not found:
                 next_row = len(data) + 1
-                worksheet.update(f'A{next_row}:B{next_row}', [[student_id, amount]])
-                
+                worksheet.cell(row=next_row, column=1, value=student_id)
+                worksheet.cell(row=next_row, column=2, value=amount)
+
+            self.workbook.save(self.excel_file_path)
+
         except Exception as e:
-            logger.error(f"Error updating balance in sheets: {e}")
+            logger.error(f"Error updating balance in Excel: {e}")
 
     def get_student_finances_with_balance(self, student_id: int, subject_id: str, date: str) -> Dict:
         """Получает финансовую информацию с учетом баланса"""
@@ -1263,31 +1263,31 @@ class GoogleSheetsManager:
         finances["balance"] = self.get_student_balance(student_id)
         return finances
 
-    
     def process_daily_finances(self):
         """Обрабатывает дневные финансы и обновляет балансы"""
         try:
             # Получаем все финансовые операции за сегодня
             today = datetime.now().strftime("%Y-%m-%d")
             worksheet = self._get_or_create_worksheet("Финансы")
-            data = worksheet.get_all_values()
-            
+            data = list(worksheet.values)
+
             # Пропускаем заголовок
             for row in data[1:]:
-                if len(row) >= 5 and row[3] == today:  # Дата в колонке D
-                    student_id = int(row[0])
-                    replenished = float(row[4] or 0)  # Колонка E - пополнение
-                    withdrawn = float(row[5] or 0)    # Колонка F - списание
-                    
+                row_list = list(row)
+                if len(row_list) >= 5 and row_list[3] == today:
+                    student_id = int(row_list[0])
+                    replenished = float(row_list[4] or 0)
+                    withdrawn = float(row_list[5] or 0)
+
                     # Получаем текущий баланс
                     current_balance = self.get_student_balance(student_id)
-                    
+
                     # Обновляем баланс
                     new_balance = current_balance + replenished - withdrawn
                     self.update_student_balance(student_id, new_balance)
-                    
+
             logger.info("Daily finances processed successfully")
-            
+
         except Exception as e:
             logger.error(f"Error processing daily finances: {e}")
 
@@ -1300,7 +1300,7 @@ class GoogleSheetsManager:
                 return cached_result
 
             worksheet = self._get_or_create_worksheet("Ученики бот")
-            data = worksheet.get_all_values()
+            data = list(worksheet.values)
 
             if len(data) < 2:
                 return []
@@ -1308,13 +1308,14 @@ class GoogleSheetsManager:
             # Находим все строки студента
             student_rows = []
             for row_idx, row in enumerate(data[1:], start=2):
-                if len(row) > 0 and str(row[0]).strip() == str(student_id):
-                    subject_id = row[2].strip() if len(row) > 2 and row[2] else ""
+                row_list = list(row)
+                if len(row_list) > 0 and str(row_list[0]).strip() == str(student_id):
+                    subject_id = row_list[2].strip() if len(row_list) > 2 and row_list[2] else ""
                     if subject_id:
                         student_rows.append({
                             'row_idx': row_idx,
                             'subject_id': subject_id,
-                            'row_data': row
+                            'row_data': row_list
                         })
 
             if not student_rows:
@@ -1322,7 +1323,7 @@ class GoogleSheetsManager:
 
             finance_history = []
             headers = [str(h).strip().lower() for h in data[0]]
-            
+
             # Словарь для объединения операций по дате и предмету
             operations_dict = {}
 
@@ -1343,14 +1344,15 @@ class GoogleSheetsManager:
                         tariff = 0.0
 
                 # 1. Сначала собираем ВСЕ занятия из расписания (столбцы 14-244)
-                schedule_lessons = {}  # {дата: True} - былоЗанятие
+                schedule_lessons = {}
                 for schedule_col in range(14, min(245, len(headers)), 2):
                     if schedule_col >= len(headers) or not headers[schedule_col]:
                         continue
 
                     # Извлекаем дату из заголовка расписания
-                    schedule_date_header = headers[schedule_col].split()[0] if ' ' in headers[schedule_col] else headers[schedule_col]
-                    
+                    schedule_date_header = headers[schedule_col].split()[0] if ' ' in headers[schedule_col] else \
+                    headers[schedule_col]
+
                     try:
                         date_formats = ["%d.%m.%Y", "%d.%m", "%d.%m.%y"]
                         date_obj = None
@@ -1368,33 +1370,36 @@ class GoogleSheetsManager:
                             continue
 
                         formatted_date = date_obj.strftime("%Y-%m-%d")
-                        
+
                     except ValueError:
                         continue
 
-                    # Проверяем, есть ли время занятия - ИСПРАВЛЕННАЯ ЛОГИКА
-                    has_start_time = len(row_data) > schedule_col and row_data[schedule_col] and str(row_data[schedule_col]).strip()
-                    has_end_time = len(row_data) > schedule_col + 1 and row_data[schedule_col + 1] and str(row_data[schedule_col + 1]).strip()
-                    
+                    # Проверяем, есть ли время занятия
+                    has_start_time = len(row_data) > schedule_col and row_data[schedule_col] and str(
+                        row_data[schedule_col]).strip()
+                    has_end_time = len(row_data) > schedule_col + 1 and row_data[schedule_col + 1] and str(
+                        row_data[schedule_col + 1]).strip()
+
                     if has_start_time and has_end_time:
                         start_time = row_data[schedule_col].strip()
                         end_time = row_data[schedule_col + 1].strip()
-                        
+
                         # Занятие было - сохраняем в словарь
                         schedule_lessons[formatted_date] = {
                             'start_time': start_time,
                             'end_time': end_time
                         }
-                        logger.info(f"Найдено занятие в расписании: дата {formatted_date}, время {start_time}-{end_time}, предмет {subject_id}")
+                        logger.info(
+                            f"Найдено занятие в расписании: дата {formatted_date}, время {start_time}-{end_time}, предмет {subject_id}")
 
-                # 2. Теперь обрабатываем финансовые столбцы (начиная с 245)
+                # 2. Обрабатываем финансовые столбцы (начиная с 245)
                 for i in range(245, min(len(headers), 500)):
                     if i >= len(headers) or not headers[i]:
                         continue
 
                     # Извлекаем дату из заголовка финансового столбца
                     date_header = headers[i].split()[0] if ' ' in headers[i] else headers[i]
-                    
+
                     try:
                         date_formats = ["%d.%m.%Y", "%d.%m", "%d.%m.%y"]
                         date_obj = None
@@ -1412,7 +1417,7 @@ class GoogleSheetsManager:
                             continue
 
                         formatted_date = date_obj.strftime("%Y-%m-%d")
-                        
+
                     except ValueError:
                         continue
 
@@ -1421,39 +1426,39 @@ class GoogleSheetsManager:
                     if len(row_data) > i and row_data[i]:
                         try:
                             cell_value = str(row_data[i]).strip()
-                            
+
                             # Очищаем строку от лишних символов
                             clean_str = cell_value.replace('\xa0', '').replace(' ', '').replace(',', '.')
-                            import re
                             clean_str = re.sub(r'[^\d.-]', '', clean_str)
-                            
+
                             if clean_str and self._is_float(clean_str):
                                 raw_value = float(clean_str)
-                                
+
                                 # Учитываем только положительные пополнения
                                 if raw_value > 0:
                                     replenished = raw_value
-                                    logger.info(f"Найдено пополнение: дата {formatted_date}, сумма {replenished}, предмет {subject_id}")
-                                
+                                    logger.info(
+                                        f"Найдено пополнение: дата {formatted_date}, сумма {replenished}, предмет {subject_id}")
+
                         except (ValueError, TypeError) as e:
                             logger.debug(f"Ошибка обработки пополнения '{cell_value}': {e}")
                             continue
 
-                    # 3. Проверяем, было ли занятие в эту дату (используем заранее собранный словарь)
+                    # 3. Проверяем, было ли занятие в эту дату
                     withdrawn = 0.0
                     if formatted_date in schedule_lessons:
                         withdrawn = tariff
                         lesson_info = schedule_lessons[formatted_date]
-                        logger.info(f"Найдено списание за занятие: дата {formatted_date}, время {lesson_info['start_time']}-{lesson_info['end_time']}, сумма {withdrawn}, предмет {subject_id}")
+                        logger.info(
+                            f"Найдено списание за занятие: дата {formatted_date}, время {lesson_info['start_time']}-{lesson_info['end_time']}, сумма {withdrawn}, предмет {subject_id}")
 
                     # Создаем уникальный ключ для операции (дата + предмет)
                     operation_key = f"{formatted_date}_{subject_id}"
-                    
+
                     # Если операция с таким ключом уже существует, объединяем значения
                     if operation_key in operations_dict:
                         existing_op = operations_dict[operation_key]
                         existing_op["replenished"] += replenished
-                        # Списание объединяем только если не было уже списания
                         if withdrawn > 0 and existing_op["withdrawn"] == 0:
                             existing_op["withdrawn"] = withdrawn
                     else:
@@ -1472,300 +1477,17 @@ class GoogleSheetsManager:
 
             # Сортируем по дате
             finance_history.sort(key=lambda x: x["date"])
-            
-            # Логируем для отладки
+
             logger.info(f"=== ИТОГОВАЯ ИСТОРИЯ ОПЕРАЦИЙ ДЛЯ {student_id} ===")
             for op in finance_history:
                 logger.info(f"Операция: {op['date']} {op['subject']} +{op['replenished']} -{op['withdrawn']}")
-            
+
             self._set_cached_data(cache_key, finance_history)
             return finance_history
 
         except Exception as e:
             logger.error(f"Error getting finance history for student {student_id}: {e}")
             return []
-        
-    def debug_specific_date(self, student_id: int, date_str: str):
-        """Отладочный метод для проверки данных по конкретной дате"""
-        try:
-            worksheet = self._get_or_create_worksheet("Ученики бот")
-            data = worksheet.get_all_values()
-
-            if len(data) < 2:
-                return
-
-            logger.info(f"=== ОТЛАДКА ДАТЫ {date_str} ДЛЯ {student_id} ===")
-            
-            # Форматируем дату для поиска
-            formatted_date = self.format_date(date_str)
-            
-            headers = [str(h).strip().lower() for h in data[0]]
-            
-            # Ищем все строки студента
-            for row_idx, row in enumerate(data[1:], start=2):
-                if len(row) > 0 and str(row[0]).strip() == str(student_id):
-                    subject_id = row[2].strip() if len(row) > 2 and row[2] else "N/A"
-                    
-                    logger.info(f"Строка {row_idx}, предмет {subject_id}:")
-                    
-                    # Проверяем расписание (столбцы 14-244)
-                    for i in range(14, min(245, len(headers)), 2):
-                        if i < len(headers) and formatted_date.lower() in headers[i]:
-                            start_time = row[i] if i < len(row) else ""
-                            end_time = row[i + 1] if i + 1 < len(row) else ""
-                            logger.info(f"  Расписание: {headers[i]} = {start_time}-{end_time}")
-                    
-                    # Проверяем финансы (столбцы 245+)
-                    for i in range(245, min(len(headers), 500)):
-                        if i < len(headers) and formatted_date.lower() in headers[i]:
-                            value = row[i] if i < len(row) else ""
-                            logger.info(f"  Финансы: {headers[i]} = {value}")
-
-        except Exception as e:
-            logger.error(f"Ошибка при отладке даты: {e}")
-        
-    def debug_finance_structure(self, student_id: int, subject_id: str):
-        """Отладочный метод для просмотра структуры финансовых данных"""
-        try:
-            worksheet = self._get_or_create_worksheet("Ученики бот")
-            data = worksheet.get_all_values()
-
-            if len(data) < 2:
-                return
-
-            # Находим строку ученика
-            target_row = -1
-            for row_idx, row in enumerate(data[1:], start=2):
-                if (len(row) > 0 and str(row[0]).strip() == str(student_id) and
-                        len(row) > 2 and str(row[2]).strip() == str(subject_id)):
-                    target_row = row_idx
-                    break
-
-            if target_row == -1:
-                logger.error(f"Строка не найдена для student_id {student_id}, subject_id {subject_id}")
-                return
-
-            headers = [str(h).strip() for h in data[0]]
-            row_data = data[target_row - 1]
-
-            logger.info("=== ОТЛАДКА ФИНАНСОВОЙ СТРУКТУРЫ ===")
-            logger.info(f"Заголовки финансовых столбцов (245+):")
-            
-            # Показываем финансовые столбцы
-            for i in range(245, min(len(headers), 300)):  # Первые 55 финансовых столбцов
-                if i < len(headers) and headers[i]:
-                    value = row_data[i] if i < len(row_data) else "N/A"
-                    logger.info(f"Столбец {i}: '{headers[i]}' = '{value}'")
-
-        except Exception as e:
-            logger.error(f"Ошибка при отладке структуры: {e}")
-        
-    def get_student_balance_for_subject(self, user_id: int, subject_id: str) -> float:
-        """Получает баланс студента для конкретного предмета"""
-        try:
-            worksheet = self._get_or_create_worksheet("Ученики бот")
-            data = worksheet.get_all_values()
-            
-            if len(data) < 1:
-                return 0.0
-
-            headers = [str(h).strip().lower() for h in data[0]]
-            
-            # Находим индексы колонок с датами (финансовые колонки)
-            date_columns = []
-            for i, header in enumerate(headers):
-                if 'финансы' in header and any(char.isdigit() for char in header):
-                    date_columns.append(i)
-
-            # Ищем строку пользователя с указанным subject_id
-            for row in data[1:]:  # Пропускаем заголовок
-                if (len(row) > 0 and str(row[0]).strip() == str(user_id) and
-                    len(row) > 2 and str(row[2]).strip() == str(subject_id)):
-                    
-                    total_balance = 0.0
-                    
-                    # Суммируем все финансовые операции для этого предмета
-                    for col_idx in date_columns:
-                        if len(row) > col_idx and row[col_idx].strip():
-                            try:
-                                # Пытаемся преобразовать значение в число
-                                cell_value = row[col_idx].strip()
-                                # Убираем возможные символы валюты и пробелы
-                                cell_value = cell_value.replace('₽', '').replace('руб', '').replace(' ', '')
-                                # Заменяем запятые на точки для корректного преобразования
-                                cell_value = cell_value.replace(',', '.')
-                                
-                                if cell_value and self._is_float(cell_value):
-                                    amount = float(cell_value)
-                                    total_balance += amount
-                            except (ValueError, TypeError):
-                                continue
-                    
-                    return total_balance
-                    
-            return 0.0
-            
-        except Exception as e:
-            logger.error(f"Ошибка получения баланса для user_id {user_id}, subject {subject_id}: {e}")
-            return 0.0
-
-    def _is_float(self, value: str) -> bool:
-        """Проверяет, можно ли преобразовать строку в float"""
-        try:
-            float(value)
-            return True
-        except ValueError:
-            return False
-        
-    def get_subject_with_lowest_balance(self, user_id: int) -> str:
-        """Определяет предмет с наименьшим балансом для ученика"""
-        try:
-            # Используем кэш
-            cache_key = f"lowest_balance_subject_{user_id}"
-            cached_result = self._get_cached_data(cache_key)
-            if cached_result:
-                return cached_result
-
-            worksheet = self._get_or_create_worksheet("Ученики бот")
-            data = worksheet.get_all_values()
-
-            if len(data) < 2:
-                logger.info(f"В таблице 'Ученики бот' недостаточно данных для user_id {user_id}")
-                return ""
-
-            # Находим все строки ученика
-            student_rows = []
-            for row_idx, row in enumerate(data[1:], start=2):
-                if len(row) > 0 and str(row[0]).strip() == str(user_id):
-                    student_rows.append({
-                        'row_idx': row_idx,
-                        'subject_id': row[2].strip() if len(row) > 2 and row[2] else "",
-                        'row_data': row
-                    })
-
-            if not student_rows:
-                logger.info(f"Не найдено строк для user_id {user_id}")
-                return ""
-
-            headers = [str(h).strip().lower() for h in data[0]]
-            
-            # Получаем текущую дату для поиска актуальных финансовых данных
-            from datetime import datetime
-            current_date = datetime.now()
-            current_month = current_date.strftime("%m.%Y")
-            current_month_short = current_date.strftime("%m.%y")
-
-            subject_balances = {}
-
-            # Для каждой строки ученика (каждого предмета) вычисляем баланс
-            for student_row in student_rows:
-                subject_id = student_row['subject_id']
-                if not subject_id:
-                    continue
-
-                total_balance = 0.0
-                row_data = student_row['row_data']
-
-                # Ищем финансовые столбцы (начиная с 245)
-                for i in range(245, min(len(headers), 500)):
-                    if i >= len(headers) or not headers[i]:
-                        continue
-
-                    # Проверяем, относится ли столбец к текущему или предыдущим месяцам
-                    header_date = headers[i].split()[0] if ' ' in headers[i] else headers[i]
-                    
-                    # Пропускаем столбцы не с датами
-                    if not any(char.isdigit() for char in header_date):
-                        continue
-
-                    try:
-                        # Парсим дату из заголовка
-                        date_formats = ["%d.%m.%Y", "%d.%m", "%d.%m.%y"]
-                        date_obj = None
-
-                        for date_format in date_formats:
-                            try:
-                                date_obj = datetime.strptime(header_date, date_format)
-                                if date_format == "%d.%m":
-                                    date_obj = date_obj.replace(year=current_date.year)
-                                break
-                            except ValueError:
-                                continue
-
-                        if not date_obj:
-                            continue
-
-                        # Учитываем данные за последние 3 месяца для актуальности
-                        months_diff = (current_date.year - date_obj.year) * 12 + current_date.month - date_obj.month
-                        if months_diff > 3:
-                            continue
-
-                    except Exception:
-                        continue
-
-                    # Обрабатываем значение ячейки
-                    if len(row_data) > i and row_data[i]:
-                        try:
-                            cell_value = str(row_data[i]).strip()
-                            
-                            # Очищаем строку от лишних символов
-                            clean_str = cell_value.replace('\xa0', '').replace(' ', '').replace(',', '.')
-                            import re
-                            clean_str = re.sub(r'[^\d.-]', '', clean_str)
-                            
-                            if clean_str and self._is_float(clean_str):
-                                amount = float(clean_str)
-                                total_balance += amount
-                        except (ValueError, TypeError) as e:
-                            logger.debug(f"Ошибка обработки значения '{cell_value}': {e}")
-                            continue
-
-                # Также учитываем тариф и проведенные занятия (списания)
-                tariff = 0.0
-                if len(row_data) > 13 and row_data[13]:
-                    try:
-                        tariff_str = str(row_data[13]).replace(',', '.').strip()
-                        tariff_str = tariff_str.replace('\xa0', '').replace(' ', '')
-                        tariff = float(tariff_str) if tariff_str else 0.0
-                    except ValueError:
-                        tariff = 0.0
-
-                # Учитываем списания за занятия (расписание в столбцах 14-244)
-                total_withdrawn = 0.0
-                for i in range(14, min(245, len(headers)), 2):
-                    if (i < len(headers) and headers[i] and 
-                        len(row_data) > i + 1 and row_data[i] and row_data[i + 1]):
-                        # Если есть время начала и окончания - занятие было проведено
-                        start_time = row_data[i].strip()
-                        end_time = row_data[i + 1].strip()
-                        if start_time and end_time:
-                            total_withdrawn += tariff
-
-                # Итоговый баланс = пополнения - списания
-                final_balance = total_balance - total_withdrawn
-                subject_balances[subject_id] = final_balance
-
-                logger.info(f"Предмет {subject_id}: баланс {final_balance:.2f} руб. (пополнения: {total_balance:.2f}, списания: {total_withdrawn:.2f})")
-
-            if not subject_balances:
-                logger.info(f"Не найдено финансовых данных для user_id {user_id}")
-                return ""
-
-            # Находим предмет с минимальным балансом
-            min_balance = min(subject_balances.values())
-            min_balance_subjects = [subj for subj, bal in subject_balances.items() if bal == min_balance]
-            
-            # Если несколько предметов с одинаковым минимальным балансом, выбираем первый
-            result = min_balance_subjects[0] if min_balance_subjects else ""
-            
-            logger.info(f"Предмет с наименьшим балансом для user_id {user_id}: {result} (баланс: {min_balance:.2f} руб.)")
-            
-            self._set_cached_data(cache_key, result)
-            return result
-
-        except Exception as e:
-            logger.error(f"Ошибка определения предмета с наименьшим балансом для user_id {user_id}: {e}")
-            return ""
 
     def get_student_balance_by_subjects(self, student_id: int) -> Dict[str, float]:
         """Получает баланс студента разбитый по предметам"""
@@ -1776,7 +1498,7 @@ class GoogleSheetsManager:
                 return cached_result
 
             worksheet = self._get_or_create_worksheet("Ученики бот")
-            data = worksheet.get_all_values()
+            data = list(worksheet.values)
 
             if len(data) < 2:
                 return {}
@@ -1784,13 +1506,14 @@ class GoogleSheetsManager:
             # Находим все строки студента
             student_rows = []
             for row_idx, row in enumerate(data[1:], start=2):
-                if len(row) > 0 and str(row[0]).strip() == str(student_id):
-                    subject_id = row[2].strip() if len(row) > 2 and row[2] else ""
+                row_list = list(row)
+                if len(row_list) > 0 and str(row_list[0]).strip() == str(student_id):
+                    subject_id = row_list[2].strip() if len(row_list) > 2 and row_list[2] else ""
                     if subject_id:
                         student_rows.append({
                             'row_idx': row_idx,
                             'subject_id': subject_id,
-                            'row_data': row
+                            'row_data': row_list
                         })
 
             if not student_rows:
@@ -1816,7 +1539,6 @@ class GoogleSheetsManager:
                         logger.info(f"Тариф для предмета {subject_id}: {tariff}")
                     except ValueError:
                         tariff = 0.0
-                        logger.warning(f"Не удалось получить тариф для предмета {subject_id}")
 
                 # 1. Учитываем финансовые операции (столбцы пополнений начиная с 245)
                 for i in range(245, min(len(headers), 500)):
@@ -1827,38 +1549,40 @@ class GoogleSheetsManager:
                     if len(row_data) > i and row_data[i]:
                         try:
                             cell_value = str(row_data[i]).strip()
-                            
+
                             # Очищаем строку от лишних символов
                             clean_str = cell_value.replace('\xa0', '').replace(' ', '').replace(',', '.')
-                            import re
                             clean_str = re.sub(r'[^\d.-]', '', clean_str)
-                            
+
                             if clean_str and self._is_float(clean_str):
                                 amount = float(clean_str)
                                 # Учитываем только положительные пополнения
                                 if amount > 0:
                                     total_replenished += amount
-                                    logger.info(f"Найдено пополнение для предмета {subject_id}: {amount} руб. в столбце {i}")
+                                    logger.info(
+                                        f"Найдено пополнение для предмета {subject_id}: {amount} руб. в столбце {i}")
                         except (ValueError, TypeError) as e:
                             logger.debug(f"Ошибка обработки пополнения '{cell_value}': {e}")
                             continue
 
                 # 2. Учитываем списания за занятия (расписание в столбцах 14-244)
                 for i in range(14, min(245, len(headers)), 2):
-                    if (i < len(headers) and headers[i] and 
-                        len(row_data) > i + 1 and row_data[i] and row_data[i + 1]):
+                    if (i < len(headers) and headers[i] and
+                            len(row_data) > i + 1 and row_data[i] and row_data[i + 1]):
                         # Если есть время начала и окончания - занятие было проведено
                         start_time = row_data[i].strip()
                         end_time = row_data[i + 1].strip()
                         if start_time and end_time:
                             total_withdrawn += tariff
-                            logger.info(f"Найдено занятие для предмета {subject_id}: время {start_time}-{end_time}, списание {tariff} руб.")
+                            logger.info(
+                                f"Найдено занятие для предмета {subject_id}: время {start_time}-{end_time}, списание {tariff} руб.")
 
                 # Итоговый баланс = пополнения - списания
                 final_balance = total_replenished - total_withdrawn
                 subject_balances[subject_id] = final_balance
 
-                logger.info(f"Баланс по предмету {subject_id}: пополнения={total_replenished}, списания={total_withdrawn}, итого={final_balance}")
+                logger.info(
+                    f"Баланс по предмету {subject_id}: пополнения={total_replenished}, списания={total_withdrawn}, итого={final_balance}")
 
             self._set_cached_data(cache_key, subject_balances)
             return subject_balances
@@ -1866,67 +1590,9 @@ class GoogleSheetsManager:
         except Exception as e:
             logger.error(f"Ошибка получения баланса по предметам для student_id {student_id}: {e}")
             return {}
-    
-    def debug_subject_tariffs(self, student_id: int):
-        """Отладочный метод для проверки тарифов по предметам"""
-        try:
-            worksheet = self._get_or_create_worksheet("Ученики бот")
-            data = worksheet.get_all_values()
-
-            if len(data) < 2:
-                return
-
-            logger.info(f"=== ОТЛАДКА ТАРИФОВ ДЛЯ STUDENT_ID {student_id} ===")
-            
-            for row_idx, row in enumerate(data[1:], start=2):
-                if len(row) > 0 and str(row[0]).strip() == str(student_id):
-                    subject_id = row[2].strip() if len(row) > 2 and row[2] else "N/A"
-                    tariff = row[13] if len(row) > 13 else "N/A"
-                    logger.info(f"Строка {row_idx}: subject_id={subject_id}, tariff={tariff}")
-
-        except Exception as e:
-            logger.error(f"Ошибка при отладке тарифов: {e}")
-
-    def debug_schedule_lessons(self, student_id: int, subject_id: str):
-        """Отладочный метод для проверки занятий в расписании"""
-        try:
-            worksheet = self._get_or_create_worksheet("Ученики бот")
-            data = worksheet.get_all_values()
-
-            if len(data) < 2:
-                return
-
-            # Находим строку студента
-            target_row = -1
-            for row_idx, row in enumerate(data[1:], start=2):
-                if (len(row) > 0 and str(row[0]).strip() == str(student_id) and
-                        len(row) > 2 and str(row[2]).strip() == str(subject_id)):
-                    target_row = row_idx
-                    break
-
-            if target_row == -1:
-                logger.error(f"Строка не найдена")
-                return
-
-            headers = [str(h).strip().lower() for h in data[0]]
-            row_data = data[target_row - 1]
-
-            logger.info(f"=== ОТЛАДКА РАСПИСАНИЯ ДЛЯ {subject_id} ===")
-            
-            # Проверяем столбцы расписания (14-244)
-            for i in range(14, min(245, len(headers)), 2):
-                if i < len(headers) and headers[i]:
-                    start_time = row_data[i] if i < len(row_data) else ""
-                    end_time = row_data[i + 1] if i + 1 < len(row_data) else ""
-                    
-                    if start_time and end_time and str(start_time).strip() and str(end_time).strip():
-                        logger.info(f"Найдено занятие: столбец {i}, время {start_time}-{end_time}, дата '{headers[i]}'")
-
-        except Exception as e:
-            logger.error(f"Ошибка при отладке расписания: {e}")
 
     def get_self_employed_with_lowest_balance(self, money: float) -> Dict[str, any]:
-        """Находит самозанятого преподавателя с наименьшим балансом, учитывая лимиты"""
+        """Находит самозанятого преподавателя с наименьшим балансом, учитывая лимиты - ПОЛНАЯ ВЕРСИЯ"""
         try:
             # Используем кэш
             cache_key = f"self_employed_lowest_balance_{money}"
@@ -1938,7 +1604,7 @@ class GoogleSheetsManager:
 
             # Получаем список самозанятых
             self_employed_worksheet = self._get_or_create_worksheet("Самозанятые бот")
-            self_employed_data = self_employed_worksheet.get_all_values()
+            self_employed_data = list(self_employed_worksheet.values)
 
             logger.info(f"Найдено строк в 'Самозанятые бот': {len(self_employed_data)}")
 
@@ -1948,7 +1614,7 @@ class GoogleSheetsManager:
 
             # Получаем данные преподавателей для балансов
             teachers_worksheet = self._get_or_create_worksheet("Преподаватели бот")
-            teachers_data = teachers_worksheet.get_all_values()
+            teachers_data = list(teachers_worksheet.values)
 
             logger.info(f"Найдено строк в 'Преподаватели бот': {len(teachers_data)}")
 
@@ -1964,11 +1630,11 @@ class GoogleSheetsManager:
             # Собираем имена самозанятых и их лимиты
             self_employed_info = {}
             logger.info("Самозанятые в таблице:")
-            
+
             # Анализируем заголовки для определения столбцов месяцев
             headers = self_employed_data[0]
             month_columns = {}  # {номер_месяца: индекс_столбца}
-            
+
             for i, header in enumerate(headers):
                 header_str = str(header).strip()
                 if header_str.isdigit():
@@ -1977,39 +1643,42 @@ class GoogleSheetsManager:
                     logger.info(f"Найден столбец для месяца {month_num}: индекс {i}")
 
             for row in self_employed_data[1:]:  # Пропускаем заголовок
-                if len(row) > 0 and row[0].strip():
-                    name = row[0].strip()
-                    
+                row_list = list(row)
+                if len(row_list) > 0 and row_list[0].strip():
+                    name = row_list[0].strip()
+
                     # Получаем лимит (столбец E, индекс 4)
                     monthly_limit = 0
-                    if len(row) > 4 and row[4].strip():
+                    if len(row_list) > 4 and row_list[4].strip():
                         try:
-                            monthly_limit = float(row[4].strip().replace(',', '.'))
+                            monthly_limit = float(row_list[4].strip().replace(',', '.'))
                         except ValueError:
-                            logger.warning(f"Некорректный лимит для {name}: '{row[4]}'")
+                            logger.warning(f"Некорректный лимит для {name}: '{row_list[4]}'")
                             monthly_limit = 0
-                    
+
                     # Получаем выплачено за текущий месяц
                     paid_amount = 0
                     if current_month in month_columns:
                         col_index = month_columns[current_month]
-                        if len(row) > col_index and row[col_index].strip():
+                        if len(row_list) > col_index and row_list[col_index].strip():
                             try:
-                                paid_amount = float(row[col_index].strip().replace(',', '.'))
+                                paid_amount = float(row_list[col_index].strip().replace(',', '.'))
                             except ValueError:
-                                logger.warning(f"Некорректное значение выплачено для {name} за месяц {current_month}: '{row[col_index]}'")
+                                logger.warning(
+                                    f"Некорректное значение выплачено для {name} за месяц {current_month}: '{row_list[col_index]}'")
                                 paid_amount = 0
-                    
+
                     self_employed_info[name.lower()] = {
                         'name': name,
                         'monthly_limit': monthly_limit,
                         'paid_amount': paid_amount,
                         'remaining_limit': monthly_limit - paid_amount,
-                        'row_data': row,  # Сохраняем всю строку для обновления
+                        'row_data': row_list,  # Сохраняем всю строку для обновления
                         'month_column': month_columns.get(current_month)  # Сохраняем индекс столбца месяца
                     }
-                    
-                    logger.info(f"  - {name}: лимит={monthly_limit}, выплачено={paid_amount}, остаток={monthly_limit - paid_amount}")
+
+                    logger.info(
+                        f"  - {name}: лимит={monthly_limit}, выплачено={paid_amount}, остаток={monthly_limit - paid_amount}")
 
             if not self_employed_info:
                 logger.warning("Не найдено имен самозанятых")
@@ -2040,10 +1709,11 @@ class GoogleSheetsManager:
             # Ищем самозанятых в листе преподавателей и получаем их балансы
             logger.info("Поиск самозанятых в листе преподавателей:")
             for row in teachers_data[1:]:  # Пропускаем заголовок
-                if len(row) <= max(1, balance_col_index):
+                row_list = list(row)
+                if len(row_list) <= max(1, balance_col_index):
                     continue
 
-                name = row[1].strip() if len(row) > 1 and row[1] else ""
+                name = row_list[1].strip() if len(row_list) > 1 and row_list[1] else ""
                 if not name:
                     continue
 
@@ -2055,16 +1725,17 @@ class GoogleSheetsManager:
 
                 # Получаем информацию о лимитах
                 emp_info = self_employed_info[name_lower]
-                
+
                 # Парсим баланс (берем модуль значения)
-                balance_str = row[balance_col_index] if len(row) > balance_col_index else "0"
+                balance_str = row_list[balance_col_index] if len(row_list) > balance_col_index else "0"
                 try:
                     # Обрабатываем формулу или числовое значение
                     balance_value = self._parse_balance_from_cell(balance_str)
                     # Берем модуль значения
                     balance_abs = balance_value
 
-                    logger.info(f"  - Найден: {name}, баланс: {balance_abs:.2f} (оригинал: {balance_value:.2f}), остаток лимита: {emp_info['remaining_limit']:.2f}")
+                    logger.info(
+                        f"  - Найден: {name}, баланс: {balance_abs:.2f} (оригинал: {balance_value:.2f}), остаток лимита: {emp_info['remaining_limit']:.2f}")
 
                     self_employed_list.append({
                         'name': name,
@@ -2074,7 +1745,7 @@ class GoogleSheetsManager:
                         'paid_amount': emp_info['paid_amount'],
                         'remaining_limit': emp_info['remaining_limit'],
                         'month_column': emp_info['month_column'],  # Добавляем индекс столбца месяца
-                        'row_data': row
+                        'row_data': row_list
                     })
 
                 except (ValueError, TypeError) as e:
@@ -2087,7 +1758,7 @@ class GoogleSheetsManager:
 
             # Фильтруем самозанятых с положительным остатком лимита
             available_self_employed = [emp for emp in self_employed_list if emp['remaining_limit'] - money > 0]
-            
+
             if not available_self_employed:
                 logger.warning("Нет самозанятых с доступным лимитом")
                 return {}
@@ -2102,7 +1773,7 @@ class GoogleSheetsManager:
 
             # Получаем дополнительные данные из листа самозанятых
             result = self._extract_self_employed_details(lowest_balance_person['name'], self_employed_data)
-            
+
             # Добавляем информацию о лимитах и столбце месяца
             result.update({
                 'monthly_limit': lowest_balance_person['monthly_limit'],
@@ -2125,86 +1796,8 @@ class GoogleSheetsManager:
             logger.error(f"Ошибка поиска самозанятого с наименьшим балансом: {e}")
             return {}
 
-    def update_self_employed_payment(self, teacher_name: str, amount: float) -> bool:
-        """Обновляет столбец текущего месяца для самозанятого преподавателя"""
-        try:
-            worksheet = self._get_or_create_worksheet("Самозанятые бot")
-            if not worksheet:
-                logger.error("В листе 'Самозанятые бot' нет данных")
-                return False
-
-            data = worksheet.get_all_values()
-
-            if len(data) < 2:
-                logger.error("В листе 'Самозанятые бot' нет данных")
-                return False
-
-            # Получаем текущий месяц
-            from datetime import datetime
-            current_month = datetime.now().month
-            logger.info(f"Текущий месяц для обновления: {current_month}")
-
-            # Анализируем заголовки для определения столбца текущего месяца
-            headers = data[0]
-            current_month_col = None
-
-            for i, header in enumerate(headers):
-                header_str = str(header).strip()
-                if header_str.isdigit():
-                    month_num = int(header_str)
-                    if month_num == current_month:
-                        current_month_col = i
-                        logger.info(f"Найден столбец для текущего месяца {current_month}: индекс {i}")
-                        break
-
-            if current_month_col is None:
-                logger.error(f"Не найден столбец для текущего месяца {current_month}")
-                return False
-
-            # Ищем строку преподавателя
-            target_row = -1
-            for row_idx, row in enumerate(data[1:], start=2):  # Пропускаем заголовок
-                if len(row) > 0 and row[0].strip().lower() == teacher_name.lower():
-                    target_row = row_idx
-                    break
-
-            if target_row == -1:
-                logger.error(f"Не найдена строка для самозанятого: {teacher_name}")
-                return False
-
-            # Получаем текущее значение выплачено за текущий месяц
-            current_paid = 0.0
-            if len(data[target_row - 1]) > current_month_col and data[target_row - 1][current_month_col]:
-                try:
-                    current_paid_str = data[target_row - 1][current_month_col].replace(',', '.').strip()
-                    current_paid_str = current_paid_str.replace('\xa0', '').replace(' ', '')
-                    # ПРЕОБРАЗУЕМ В FLOAT
-                    current_paid = float(current_paid_str) if current_paid_str else 0.0
-                except ValueError as e:
-                    logger.warning(f"Ошибка преобразования текущего выплачено для {teacher_name}: {e}")
-                    current_paid = 0.0
-
-            # Вычисляем новое значение - ПРЕОБРАЗУЕМ amount в float
-            amount_float = float(amount)
-            new_paid = current_paid + amount_float
-
-            try:
-                # Обновляем ячейку
-                worksheet.update_cell(target_row, current_month_col + 1, f"{new_paid:.2f}")
-
-                logger.info(
-                    f"Обновлены выплаты для {teacher_name} за месяц {current_month}: было {current_paid:.2f}, стало {new_paid:.2f}, добавлено {amount_float:.2f}")
-                return True
-            except Exception as e:
-                logger.error(f"Ошибка обновления ячейки для самозанятого {teacher_name}: {e}")
-                return False
-
-        except Exception as e:
-            logger.error(f"Ошибка обновления выплат для самозанятого {teacher_name}: {e}")
-            return False
-    
     def _parse_balance_from_cell(self, balance_str: str) -> float:
-        """Парсит значение баланса из ячейки, может содержать формулы"""
+        """Парсит значение баланса из ячейки, может содержать формулы - ПОЛНАЯ ВЕРСИЯ"""
         try:
             clean_str = str(balance_str).strip()
 
@@ -2233,7 +1826,7 @@ class GoogleSheetsManager:
             return 0.0
 
     def _extract_self_employed_details(self, name: str, self_employed_data: List[List]) -> Dict:
-        """Извлекает детальную информацию о самозанятом из листа самозанятых"""
+        """Извлекает детальную информацию о самозанятом из листа самозанятых - ПОЛНАЯ ВЕРСИЯ"""
         try:
             # Ищем строку с данным именем в листе самозанятых
             target_name_lower = name.lower()
@@ -2241,29 +1834,30 @@ class GoogleSheetsManager:
             logger.info(f"Поиск данных для: {name}")
 
             for i, row in enumerate(self_employed_data[1:], start=2):  # Пропускаем заголовок
-                if not row or len(row) == 0:
+                row_list = list(row)
+                if not row_list or len(row_list) == 0:
                     continue
 
-                row_name = row[0].strip() if row[0] else ""
+                row_name = row_list[0].strip() if row_list[0] else ""
                 if row_name.lower() == target_name_lower:
                     # Нашли совпадение - извлекаем данные
                     # Структура: A-Имя, B-Телефон, C-Карта, D-Банк, E-Лимит, F-... месяцы
                     details = {
                         'name': row_name,
-                        'phone': row[1] if len(row) > 1 and row[1] else "",
-                        'card_number': row[2] if len(row) > 2 and row[2] else "",
-                        'bank': row[3] if len(row) > 3 and row[3] else "",
+                        'phone': row_list[1] if len(row_list) > 1 and row_list[1] else "",
+                        'card_number': row_list[2] if len(row_list) > 2 and row_list[2] else "",
+                        'bank': row_list[3] if len(row_list) > 3 and row_list[3] else "",
                         'monthly_limit': 0,
                         'paid_amount': 0,
                         'remaining_limit': 0
                     }
 
                     # Получаем лимит (столбец E, индекс 4)
-                    if len(row) > 4 and row[4]:
+                    if len(row_list) > 4 and row_list[4]:
                         try:
-                            details['monthly_limit'] = float(row[4].strip().replace(',', '.'))
+                            details['monthly_limit'] = float(row_list[4].strip().replace(',', '.'))
                         except ValueError:
-                            logger.warning(f"Некорректный лимит для {name}: '{row[4]}'")
+                            logger.warning(f"Некорректный лимит для {name}: '{row_list[4]}'")
 
                     # Получаем выплачено за текущий месяц (будет вычислено в основном методе)
                     # Вычисляем остаток лимита
@@ -2309,46 +1903,208 @@ class GoogleSheetsManager:
                 'remaining_limit': 0
             }
 
-    def debug_self_employed_structure(self):
-        """Отладочный метод для просмотра структуры таблиц самозанятых"""
+    def update_self_employed_payment(self, teacher_name: str, amount: float) -> bool:
+        """Обновляет столбец текущего месяца для самозанятого преподавателя - ПОЛНАЯ ВЕРСИЯ"""
         try:
-            logger.info("=== ОТЛАДКА СТРУКТУРЫ САМОЗАНЯТЫХ ===")
+            worksheet = self._get_or_create_worksheet("Самозанятые бот")
+            if not worksheet:
+                logger.error("В листе 'Самозанятые бот' нет данных")
+                return False
 
-            # Смотрим структуру листа самозанятых
-            self_employed_worksheet = self._get_or_create_worksheet("Самозанятые бот")
-            self_employed_data = self_employed_worksheet.get_all_values()
+            data = list(worksheet.values)
 
-            logger.info(f"Лист 'Самозанятые бот': {len(self_employed_data)} строк")
-            if self_employed_data:
-                logger.info(f"Заголовки: {self_employed_data[0]}")
-                for i, row in enumerate(self_employed_data[1:6], start=2):  # Первые 5 строк данных
-                    logger.info(f"Строка {i}: {row}")
+            if len(data) < 2:
+                logger.error("В листе 'Самозанятые бот' нет данных")
+                return False
 
-            # Смотрим структуру листа преподавателей
-            teachers_worksheet = self._get_or_create_worksheet("Преподаватели бот")
-            teachers_data = teachers_worksheet.get_all_values()
+            # Получаем текущий месяц
+            from datetime import datetime
+            current_month = datetime.now().month
+            logger.info(f"Текущий месяц для обновления: {current_month}")
 
-            logger.info(f"Лист 'Преподаватели бот': {len(teachers_data)} строк")
-            if teachers_data:
-                headers = [str(h).strip() for h in teachers_data[0]]
-                logger.info(f"Заголовки: {headers}")
+            # Анализируем заголовки для определения столбца текущего месяца
+            headers = data[0]
+            current_month_col = None
 
-                # Ищем столбец баланса
-                balance_col_index = -1
-                for i, header in enumerate(headers):
-                    if 'баланс' in header.lower() or i == 5:
-                        balance_col_index = i
-                        logger.info(f"Столбец баланса найден: индекс {i}, заголовок '{header}'")
+            for i, header in enumerate(headers):
+                header_str = str(header).strip()
+                if header_str.isdigit():
+                    month_num = int(header_str)
+                    if month_num == current_month:
+                        current_month_col = i
+                        logger.info(f"Найден столбец для текущего месяца {current_month}: индекс {i}")
                         break
 
-                # Показываем первые 5 преподавателей с балансами
-                for i, row in enumerate(teachers_data[1:6], start=2):
-                    balance = row[balance_col_index] if len(row) > balance_col_index else "N/A"
-                    name = row[1] if len(row) > 1 else "N/A"
-                    logger.info(f"Преподаватель {i}: {name}, баланс: {balance}")
+            if current_month_col is None:
+                logger.error(f"Не найден столбец для текущего месяца {current_month}")
+                return False
+
+            # Ищем строку преподавателя
+            target_row = -1
+            for row_idx, row in enumerate(data[1:], start=2):  # Пропускаем заголовок
+                row_list = list(row)
+                if len(row_list) > 0 and row_list[0].strip().lower() == teacher_name.lower():
+                    target_row = row_idx
+                    break
+
+            if target_row == -1:
+                logger.error(f"Не найдена строка для самозанятого: {teacher_name}")
+                return False
+
+            # Получаем текущее значение выплачено за текущий месяц
+            current_paid = 0.0
+            if len(data[target_row - 1]) > current_month_col and data[target_row - 1][current_month_col]:
+                try:
+                    current_paid_str = data[target_row - 1][current_month_col].replace(',', '.').strip()
+                    current_paid_str = current_paid_str.replace('\xa0', '').replace(' ', '')
+                    # ПРЕОБРАЗУЕМ В FLOAT
+                    current_paid = float(current_paid_str) if current_paid_str else 0.0
+                except ValueError as e:
+                    logger.warning(f"Ошибка преобразования текущего выплачено для {teacher_name}: {e}")
+                    current_paid = 0.0
+
+            # Вычисляем новое значение - ПРЕОБРАЗУЕМ amount в float
+            amount_float = float(amount)
+            new_paid = current_paid + amount_float
+
+            try:
+                # Обновляем ячейку
+                worksheet.cell(row=target_row, column=current_month_col + 1, value=f"{new_paid:.2f}")
+
+                logger.info(
+                    f"Обновлены выплаты для {teacher_name} за месяц {current_month}: было {current_paid:.2f}, стало {new_paid:.2f}, добавлено {amount_float:.2f}")
+                return True
+            except Exception as e:
+                logger.error(f"Ошибка обновления ячейки для самозанятого {teacher_name}: {e}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Ошибка обновления выплат для самозанятого {teacher_name}: {e}")
+            return False
+
+    def debug_specific_date(self, student_id: int, date_str: str):
+        """Отладочный метод для проверки данных по конкретной дате - ПОЛНАЯ ВЕРСИЯ"""
+        try:
+            worksheet = self._get_or_create_worksheet("Ученики бот")
+            data = list(worksheet.values)
+
+            if len(data) < 2:
+                return
+
+            logger.info(f"=== ОТЛАДКА ДАТЫ {date_str} ДЛЯ {student_id} ===")
+
+            # Форматируем дату для поиска
+            formatted_date = self.format_date(date_str)
+
+            headers = [str(h).strip().lower() for h in data[0]]
+
+            # Ищем все строки студента
+            for row_idx, row in enumerate(data[1:], start=2):
+                row_list = list(row)
+                if len(row_list) > 0 and str(row_list[0]).strip() == str(student_id):
+                    subject_id = row_list[2].strip() if len(row_list) > 2 and row_list[2] else "N/A"
+
+                    logger.info(f"Строка {row_idx}, предмет {subject_id}:")
+
+                    # Проверяем расписание (столбцы 14-244)
+                    for i in range(14, min(245, len(headers)), 2):
+                        if i < len(headers) and formatted_date.lower() in headers[i]:
+                            start_time = row_list[i] if i < len(row_list) else ""
+                            end_time = row_list[i + 1] if i + 1 < len(row_list) else ""
+                            logger.info(f"  Расписание: {headers[i]} = {start_time}-{end_time}")
+
+                    # Проверяем финансы (столбцы 245+)
+                    for i in range(245, min(len(headers), 500)):
+                        if i < len(headers) and formatted_date.lower() in headers[i]:
+                            value = row_list[i] if i < len(row_list) else ""
+                            logger.info(f"  Финансы: {headers[i]} = {value}")
+
+        except Exception as e:
+            logger.error(f"Ошибка при отладке даты: {e}")
+
+    def debug_finance_structure(self, student_id: int, subject_id: str):
+        """Отладочный метод для просмотра структуры финансовых данных - ПОЛНАЯ ВЕРСИЯ"""
+        try:
+            worksheet = self._get_or_create_worksheet("Ученики бот")
+            data = list(worksheet.values)
+
+            if len(data) < 2:
+                return
+
+            # Находим строку ученика
+            target_row = -1
+            for row_idx, row in enumerate(data[1:], start=2):
+                row_list = list(row)
+                if (len(row_list) > 0 and str(row_list[0]).strip() == str(student_id) and
+                        len(row_list) > 2 and str(row_list[2]).strip() == str(subject_id)):
+                    target_row = row_idx
+                    break
+
+            if target_row == -1:
+                logger.error(f"Строка не найдена для student_id {student_id}, subject_id {subject_id}")
+                return
+
+            headers = [str(h).strip() for h in data[0]]
+            row_data = data[target_row - 1]
+
+            logger.info("=== ОТЛАДКА ФИНАНСОВОЙ СТРУКТУРЫ ===")
+            logger.info(f"Заголовки финансовых столбцов (245+):")
+
+            # Показываем финансовые столбцы
+            for i in range(245, min(len(headers), 300)):  # Первые 55 финансовых столбцов
+                if i < len(headers) and headers[i]:
+                    value = row_data[i] if i < len(row_data) else "N/A"
+                    logger.info(f"Столбец {i}: '{headers[i]}' = '{value}'")
 
         except Exception as e:
             logger.error(f"Ошибка при отладке структуры: {e}")
+
+    def debug_schedule_lessons(self, student_id: int, subject_id: str):
+        """Отладочный метод для проверки занятий в расписании - ПОЛНАЯ ВЕРСИЯ"""
+        try:
+            worksheet = self._get_or_create_worksheet("Ученики бот")
+            data = list(worksheet.values)
+
+            if len(data) < 2:
+                return
+
+            # Находим строку студента
+            target_row = -1
+            for row_idx, row in enumerate(data[1:], start=2):
+                row_list = list(row)
+                if (len(row_list) > 0 and str(row_list[0]).strip() == str(student_id) and
+                        len(row_list) > 2 and str(row_list[2]).strip() == str(subject_id)):
+                    target_row = row_idx
+                    break
+
+            if target_row == -1:
+                logger.error(f"Строка не найдена")
+                return
+
+            headers = [str(h).strip().lower() for h in data[0]]
+            row_data = data[target_row - 1]
+
+            logger.info(f"=== ОТЛАДКА РАСПИСАНИЯ ДЛЯ {subject_id} ===")
+
+            # Проверяем столбцы расписания (14-244)
+            for i in range(14, min(245, len(headers)), 2):
+                if i < len(headers) and headers[i]:
+                    start_time = row_data[i] if i < len(row_data) else ""
+                    end_time = row_data[i + 1] if i + 1 < len(row_data) else ""
+
+                    if start_time and end_time and str(start_time).strip() and str(end_time).strip():
+                        logger.info(f"Найдено занятие: столбец {i}, время {start_time}-{end_time}, дата '{headers[i]}'")
+
+        except Exception as e:
+            logger.error(f"Ошибка при отладке расписания: {e}")
+
+    def _is_float(self, value: str) -> bool:
+        """Проверяет, можно ли преобразовать строку в float"""
+        try:
+            float(value)
+            return True
+        except ValueError:
+            return False
 
     def get_student_finance_history_last_month(self, student_id: int) -> List[Dict]:
         """Получает историю финансовых операций студента за последний месяц"""
@@ -2360,11 +2116,11 @@ class GoogleSheetsManager:
 
             # Получаем полную историю
             full_history = self.get_student_finance_history(student_id)
-            
+
             # Фильтруем за последний месяц
             from datetime import datetime, timedelta
             one_month_ago = datetime.now() - timedelta(days=30)
-            
+
             last_month_history = []
             for operation in full_history:
                 try:
@@ -2373,18 +2129,124 @@ class GoogleSheetsManager:
                         last_month_history.append(operation)
                 except ValueError:
                     continue
-            
+
             # Сортируем по дате (от старых к новым)
             last_month_history.sort(key=lambda x: x["date"])
-            
-            # ОТЛАДКА: Логируем найденные операции
+
             logger.info(f"=== ОТЛАДКА ИСТОРИИ ЗА ПОСЛЕДНИЙ МЕСЯЦ ДЛЯ {student_id} ===")
             for op in last_month_history:
                 logger.info(f"Операция: {op['date']} {op['subject']} +{op['replenished']} -{op['withdrawn']}")
-            
+
             self._set_cached_data(cache_key, last_month_history)
             return last_month_history
-            
+
         except Exception as e:
             logger.error(f"Error getting last month finance history for student {student_id}: {e}")
             return []
+
+    def get_subject_with_lowest_balance(self, user_id: int) -> str:
+        """Определяет предмет с наименьшим балансом для ученика"""
+        try:
+            cache_key = f"lowest_balance_subject_{user_id}"
+            cached_result = self._get_cached_data(cache_key)
+            if cached_result:
+                return cached_result
+
+            subject_balances = self.get_student_balance_by_subjects(user_id)
+            if not subject_balances:
+                return ""
+
+            # Находим предмет с минимальным балансом
+            min_balance = min(subject_balances.values())
+            min_balance_subjects = [subj for subj, bal in subject_balances.items() if bal == min_balance]
+
+            result = min_balance_subjects[0] if min_balance_subjects else ""
+
+            logger.info(
+                f"Предмет с наименьшим балансом для user_id {user_id}: {result} (баланс: {min_balance:.2f} руб.)")
+
+            self._set_cached_data(cache_key, result)
+            return result
+
+        except Exception as e:
+            logger.error(f"Ошибка определения предмета с наименьшим балансом для user_id {user_id}: {e}")
+            return ""
+
+    # Отладочные методы
+    def debug_finance_columns(self, target_date: str):
+        """Отладочный метод для просмотра структуры финансовых столбцов - ПОЛНАЯ ВЕРСИЯ"""
+        try:
+            worksheet = self._get_or_create_worksheet("Ученики бот")
+            data = list(worksheet.values)
+
+            if len(data) < 1:
+                return
+
+            headers = [str(h).strip() for h in data[0]]
+            formatted_date = self.format_date(target_date)
+
+            logger.info(f"=== ОТЛАДКА СТОЛБЦОВ ДЛЯ ДАТЫ {formatted_date} ===")
+
+            # Ищем все столбцы с этой датой
+            date_columns = []
+            for i, header in enumerate(headers):
+                if formatted_date.lower() in header.lower():
+                    date_columns.append((i, header))
+
+            logger.info(f"Найдено столбцов с датой {formatted_date}: {len(date_columns)}")
+            for col_idx, header in date_columns:
+                logger.info(f"Столбец {col_idx}: '{header}'")
+
+                # Покажем значения из первых 3 строк для этого столбца
+                for row_idx in range(1, min(4, len(data))):
+                    if len(data[row_idx]) > col_idx:
+                        value = data[row_idx][col_idx]
+                        logger.info(f"  Строка {row_idx + 1}: '{value}'")
+
+            # Покажем структуру вокруг финансовых столбцов
+            logger.info("=== СТРУКТУРА ФИНАНСОВЫХ СТОЛБЦОВ (240-250) ===")
+            for i in range(240, min(251, len(headers))):
+                header = headers[i] if i < len(headers) else "N/A"
+                logger.info(f"Столбец {i}: '{header}'")
+
+        except Exception as e:
+            logger.error(f"Ошибка при отладке столбцов: {e}")
+
+    def debug_subject_tariffs(self, student_id: int):
+        """Отладочный метод для проверки тарифов по предметам"""
+        try:
+            worksheet = self._get_or_create_worksheet("Ученики бот")
+            data = list(worksheet.values)
+
+            if len(data) < 2:
+                return
+
+            logger.info(f"=== ОТЛАДКА ТАРИФОВ ДЛЯ STUDENT_ID {student_id} ===")
+
+            for row_idx, row in enumerate(data[1:], start=2):
+                row_list = list(row)
+                if len(row_list) > 0 and str(row_list[0]).strip() == str(student_id):
+                    subject_id = row_list[2].strip() if len(row_list) > 2 and row_list[2] else "N/A"
+                    tariff = row_list[13] if len(row_list) > 13 else "N/A"
+                    logger.info(f"Строка {row_idx}: subject_id={subject_id}, tariff={tariff}")
+
+        except Exception as e:
+            logger.error(f"Ошибка при отладке тарифов: {e}")
+
+    def debug_self_employed_structure(self):
+        """Отладочный метод для просмотра структуры таблиц самозанятых"""
+        try:
+            logger.info("=== ОТЛАДКА СТРУКТУРЫ САМОЗАНЯТЫХ ===")
+
+            # Смотрим структуру листа самозанятых
+            self_employed_worksheet = self._get_or_create_worksheet("Самозанятые бот")
+            self_employed_data = list(self_employed_worksheet.values)
+
+            logger.info(f"Лист 'Самозанятые бот': {len(self_employed_data)} строк")
+            if self_employed_data:
+                logger.info(f"Заголовки: {self_employed_data[0]}")
+                for i, row in enumerate(self_employed_data[1:6], start=2):
+                    logger.info(f"Строка {i}: {row}")
+
+        except Exception as e:
+            logger.error(f"Ошибка при отладке структуры: {e}")
