@@ -1,21 +1,29 @@
 import time
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+import openpyxl
+from openpyxl import load_workbook, Workbook
+from openpyxl.utils import get_column_letter, column_index_from_string
 from datetime import datetime, timedelta
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import logging
 import traceback
+import os
 
 logger = logging.getLogger(__name__)
 
 
 class GoogleSheetsManager:
-    def __init__(self, credentials_file: str, spreadsheet_id: str):
-        self.credentials_file = credentials_file
-        self.spreadsheet_id = spreadsheet_id
-        self.client = None
-        self.spreadsheet = None
+    def __init__(self, file_path: str, spreadsheet_id: str = None):
+        """
+        Initialize Excel workbook manager.
+        
+        Args:
+            file_path: Path to the Excel workbook file (.xlsx)
+            spreadsheet_id: Kept for backward compatibility, but not used
+        """
+        self.file_path = file_path
+        self.workbook = None
         self.qual_map = {}
+        self.qual_links = {}
         self._cache = {}  # Добавляем кэш
         self._cache_timeout = 60  # Кэш на 60 секунд
 
@@ -30,29 +38,141 @@ class GoogleSheetsManager:
     def _set_cached_data(self, key, data):
         """Сохраняет данные в кэш"""
         self._cache[key] = (data, time.time())
+    
     def connect(self):
-        """Устанавливает соединение с Google Sheets API"""
+        """Загружает Excel workbook"""
         try:
-            scope = [
-                'https://spreadsheets.google.com/feeds',
-                'https://www.googleapis.com/auth/drive'
-            ]
-            creds = ServiceAccountCredentials.from_json_keyfile_name(
-                self.credentials_file, scope)
-            self.client = gspread.authorize(creds)
-            self.spreadsheet = self.client.open_by_key(self.spreadsheet_id)
+            if not os.path.exists(self.file_path):
+                logger.error(f"Excel файл не найден: {self.file_path}")
+                return False
+            
+            self.workbook = load_workbook(self.file_path, data_only=True)
             self._load_qualifications()
-            logger.info("Успешное подключение к Google Sheets")
+            logger.info(f"Успешное подключение к Excel файлу: {self.file_path}")
             return True
         except Exception as e:
-            logger.error(f"Ошибка подключения: {e}")
+            logger.error(f"Ошибка подключения к Excel файлу: {e}")
             return False
+    
+    def _save_workbook(self):
+        """Сохраняет изменения в Excel файл"""
+        try:
+            if self.workbook:
+                self.workbook.save(self.file_path)
+                return True
+        except Exception as e:
+            logger.error(f"Ошибка сохранения Excel файла: {e}")
+        return False
+    
+    def _get_worksheet_values(self, worksheet) -> List[List[Any]]:
+        """Получает все значения из листа как список списков (аналог get_all_values)"""
+        values = []
+        for row in worksheet.iter_rows(values_only=True):
+            # Преобразуем None в пустые строки для совместимости
+            row_values = [str(cell) if cell is not None else '' for cell in row]
+            values.append(row_values)
+        return values
+    
+    def _get_worksheet_records(self, worksheet) -> List[Dict[str, Any]]:
+        """Получает записи из листа как список словарей (аналог get_all_records)"""
+        values = self._get_worksheet_values(worksheet)
+        if not values:
+            return []
+        
+        headers = [str(h).strip() for h in values[0]]
+        records = []
+        for row in values[1:]:
+            record = {}
+            for i, header in enumerate(headers):
+                record[header] = row[i] if i < len(row) else ''
+            records.append(record)
+        return records
+    
+    def _find_in_column(self, worksheet, search_value: str, column: int) -> Optional[tuple]:
+        """Находит значение в указанном столбце (аналог worksheet.find)"""
+        # Начинаем с 2-й строки, чтобы пропустить заголовок
+        search_str = str(search_value).strip()
+        search_num = None
+        # Пробуем преобразовать поисковое значение в число
+        try:
+            search_num = int(float(search_str))
+        except (ValueError, TypeError):
+            pass
+        
+        for row_idx, row in enumerate(worksheet.iter_rows(min_row=2, min_col=column, max_col=column, values_only=False), start=2):
+            cell_raw = row[0].value
+            if cell_raw is None:
+                continue
+            
+            # Если и поиск, и значение в ячейке - числа, сравниваем как числа
+            if search_num is not None:
+                try:
+                    # Обрабатываем разные типы числовых значений
+                    if isinstance(cell_raw, (int, float)):
+                        cell_num = int(float(cell_raw))
+                        if cell_num == search_num:
+                            return (row_idx, column)
+                    elif isinstance(cell_raw, str):
+                        cell_num = int(float(cell_raw.strip()))
+                        if cell_num == search_num:
+                            return (row_idx, column)
+                except (ValueError, TypeError):
+                    pass
+            
+            # Сравнение как строк
+            cell_str = str(cell_raw).strip()
+            if cell_str == search_str:
+                return (row_idx, column)
+        return None
+    
+    def _get_row_values(self, worksheet, row: int) -> List[Any]:
+        """Получает значения строки (аналог row_values)"""
+        row_values = []
+        for cell in worksheet[row]:
+            row_values.append(str(cell.value) if cell.value is not None else '')
+        return row_values
+    
+    def _clear_worksheet(self, worksheet):
+        """Очищает лист (аналог worksheet.clear)"""
+        worksheet.delete_rows(1, worksheet.max_row)
+    
+    def _append_row(self, worksheet, row_data: List[Any]):
+        """Добавляет строку в конец листа (аналог append_row)"""
+        worksheet.append(row_data)
+    
+    def _update_cell(self, worksheet, row: int, col: int, value: Any):
+        """Обновляет ячейку (аналог update_cell)"""
+        cell = worksheet.cell(row=row, column=col)
+        cell.value = value
+    
+    def _update_range(self, worksheet, range_str: str, values: List[List[Any]]):
+        """Обновляет диапазон ячеек (аналог worksheet.update)"""
+        from openpyxl.utils import range_boundaries
+        min_col, min_row, max_col, max_row = range_boundaries(range_str)
+        
+        for i, row_data in enumerate(values):
+            for j, cell_value in enumerate(row_data):
+                worksheet.cell(row=min_row + i, column=min_col + j, value=cell_value)
+    
+    def _batch_clear(self, worksheet, ranges: List[str]):
+        """Очищает указанные диапазоны (аналог batch_clear)"""
+        from openpyxl.utils import range_boundaries
+        cells_to_clear = set()
+        
+        for range_str in ranges:
+            min_col, min_row, max_col, max_row = range_boundaries(range_str)
+            for row in range(min_row, max_row + 1):
+                for col in range(min_col, max_col + 1):
+                    cells_to_clear.add((row, col))
+        
+        for row, col in cells_to_clear:
+            worksheet.cell(row=row, column=col, value='')
 
     def _load_qualifications(self):
         """Загружает соответствия предметов из листа Квалификации"""
         try:
-            worksheet = self.spreadsheet.worksheet("Предметы бот")
-            data = worksheet.get_all_values()
+            worksheet = self._get_or_create_worksheet("Предметы бот")
+            data = self._get_worksheet_values(worksheet)
 
             self.qual_map = {}
             self.qual_links = {}  # Словарь для хранения ссылок
@@ -102,8 +222,11 @@ class GoogleSheetsManager:
     def clear_sheet(self, sheet_name: str):
         """Полностью очищает лист"""
         try:
-            worksheet = self.spreadsheet.worksheet(sheet_name)
-            worksheet.clear()
+            worksheet = self._get_or_create_worksheet(sheet_name)
+            if not worksheet:
+                return False
+            self._clear_worksheet(worksheet)
+            self._save_workbook()
             logger.info(f"Лист '{sheet_name}' полностью очищен")
             return True
         except Exception as e:
@@ -112,11 +235,11 @@ class GoogleSheetsManager:
 
     def update_all_sheets(self, bookings: List[Dict[str, Any]]):
         """Полностью перезаписывает данные в таблицах"""
-        if not self.client and not self.connect():
+        if not self.workbook and not self.connect():
             return False
 
         try:
-            logger.info(f"Начато обновление Google Sheets. Всего броней: {len(bookings)}")
+            logger.info(f"Начато обновление Excel файла. Всего броней: {len(bookings)}")
 
             teachers = [b for b in bookings if b.get('user_role') == 'teacher']
             students = [b for b in bookings if b.get('user_role') == 'student']
@@ -132,7 +255,8 @@ class GoogleSheetsManager:
                 success = False
 
             if success:
-                logger.info("Google Sheets успешно обновлен!")
+                self._save_workbook()
+                logger.info("Excel файл успешно обновлен!")
             return success
         except Exception as e:
             logger.error(f"Критическая ошибка при обновлении: {e}")
@@ -143,7 +267,7 @@ class GoogleSheetsManager:
         try:
             # Получаем всех пользователей с соответствующей ролью
             users_worksheet = self._get_or_create_users_worksheet()
-            users_data = users_worksheet.get_all_records()
+            users_data = self._get_worksheet_records(users_worksheet)
             
             users_with_role = []
             for user in users_data:
@@ -204,17 +328,19 @@ class GoogleSheetsManager:
     def _get_or_create_worksheet(self, sheet_name: str):
         """Получает или создает лист"""
         try:
-            return self.spreadsheet.worksheet(sheet_name)
-        except gspread.WorksheetNotFound:
-            try:
+            if not self.workbook:
+                if not self.connect():
+                    return None
+            
+            if sheet_name in self.workbook.sheetnames:
+                return self.workbook[sheet_name]
+            else:
                 logger.info(f"Создаем новый лист: '{sheet_name}'")
-                return self.spreadsheet.add_worksheet(
-                    title=sheet_name, rows=100, cols=20)
-            except Exception as e:
-                logger.error(f"Ошибка при создании листа: {e}")
-                return None
+                worksheet = self.workbook.create_sheet(title=sheet_name)
+                self._save_workbook()
+                return worksheet
         except Exception as e:
-            logger.error(f"Ошибка при получении листа: {e}")
+            logger.error(f"Ошибка при получении/создании листа: {e}")
             return None
 
     def _generate_formatted_dates(self, start_date: datetime, end_date: datetime) -> List[str]:
@@ -239,7 +365,7 @@ class GoogleSheetsManager:
                 return cached_result
 
             worksheet = self._get_or_create_worksheet("Ученики бот")
-            data = worksheet.get_all_values()
+            data = self._get_worksheet_values(worksheet)
 
             if len(data) < 2:
                 logger.error("В таблице 'Ученики бот' недостаточно данных")
@@ -385,7 +511,7 @@ class GoogleSheetsManager:
         """Отладочный метод для просмотра структуры финансовых столбцов"""
         try:
             worksheet = self._get_or_create_worksheet("Ученики бот")
-            data = worksheet.get_all_values()
+            data = self._get_worksheet_values(worksheet)
 
             if len(data) < 1:
                 return
@@ -429,7 +555,7 @@ class GoogleSheetsManager:
                 return cached_result
 
             worksheet = self._get_or_create_worksheet("Ученики бот")
-            data = worksheet.get_all_values()
+            data = self._get_worksheet_values(worksheet)
 
             if len(data) < 2:
                 return []
@@ -502,8 +628,8 @@ class GoogleSheetsManager:
             headers.append('Потребность во внимании (мин)')
 
         headers += [date for date in formatted_dates for _ in (0, 1)]
-        worksheet.clear()
-        worksheet.append_row(headers)
+        self._clear_worksheet(worksheet)
+        self._append_row(worksheet, headers)
 
     def _prepare_records(self, bookings: List[Dict[str, Any]],
                          formatted_dates: List[str], is_teacher: bool) -> Dict[str, Any]:
@@ -552,7 +678,7 @@ class GoogleSheetsManager:
                                formatted_dates: List[str], is_teacher: bool):
         """Вставляет данные в лист"""
         if not records:
-            worksheet.batch_clear(["A2:Z1000"])
+            self._batch_clear(worksheet, ["A2:Z1000"])
             logger.info("Нет данных для вставки - лист очищен")
             return
 
@@ -583,16 +709,22 @@ class GoogleSheetsManager:
                     row.extend(['', ''])
             rows.append(row)
 
-        worksheet.batch_clear(["A2:Z1000"])
+        self._batch_clear(worksheet, ["A2:Z1000"])
         if rows:
-            worksheet.update(f"A2:{gspread.utils.rowcol_to_a1(len(rows) + 1, len(rows[0]))}", rows)
+            from openpyxl.utils import get_column_letter
+            end_col = get_column_letter(len(rows[0]))
+            end_row = len(rows) + 1
+            range_str = f"A2:{end_col}{end_row}"
+            self._update_range(worksheet, range_str, rows)
 
         logger.info(f"Обновлено {len(rows)} строк в листе '{worksheet.title}'")
 
     def get_bookings_from_sheet(self, sheet_name: str, is_teacher: bool) -> List[Dict[str, Any]]:
         try:
-            worksheet = self.spreadsheet.worksheet(sheet_name)
-            data = worksheet.get_all_values()
+            worksheet = self._get_or_create_worksheet(sheet_name)
+            if not worksheet:
+                return []
+            data = self._get_worksheet_values(worksheet)
 
             if len(data) < 3:
                 return []
@@ -751,8 +883,10 @@ class GoogleSheetsManager:
         """Получает ФИО пользователя без создания дубликатов"""
         try:
             worksheet = self._get_or_create_users_worksheet()
-            cell = worksheet.find(str(user_id), in_column=1)
-            return worksheet.cell(cell.row, 2).value if cell else ""
+            cell_pos = self._find_in_column(worksheet, str(user_id), 1)
+            if cell_pos:
+                return worksheet.cell(row=cell_pos[0], column=2).value or ""
+            return ""
         except Exception as e:
             logger.error(f"User lookup error: {e}")
             return ""
@@ -761,12 +895,13 @@ class GoogleSheetsManager:
         """Обновляет или создает запись пользователя без дубликатов"""
         try:
             worksheet = self._get_or_create_users_worksheet()
-            cell = worksheet.find(str(user_id), in_column=1)
+            cell_pos = self._find_in_column(worksheet, str(user_id), 1)
 
-            if cell:
-                worksheet.update_cell(cell.row, 2, user_name)
+            if cell_pos:
+                self._update_cell(worksheet, cell_pos[0], 2, user_name)
             else:
-                worksheet.append_row([user_id, user_name])
+                self._append_row(worksheet, [user_id, user_name])
+            self._save_workbook()
 
             return True
         except Exception as e:
@@ -776,35 +911,41 @@ class GoogleSheetsManager:
     def _get_or_create_users_worksheet(self):
         """Создает лист пользователей с колонками: user_id, user_name, roles, teacher_subjects"""
         try:
-            worksheet = self.spreadsheet.worksheet("Пользователи бот")
+            worksheet = self._get_or_create_worksheet("Пользователи бот")
+            if not worksheet:
+                return None
+            
             # Проверяем структуру
-            headers = worksheet.row_values(1)
+            headers = self._get_row_values(worksheet, 1)
             expected_headers = ["user_id", "user_name", "roles", "teacher_subjects"]
             
             if len(headers) < len(expected_headers):
                 # Добавляем недостающие заголовки
                 for i in range(len(headers), len(expected_headers)):
-                    worksheet.update_cell(1, i+1, expected_headers[i])
-                    
-        except gspread.WorksheetNotFound:
-            worksheet = self.spreadsheet.add_worksheet(
-                title="Пользователи",
-                rows=100,
-                cols=4
-            )
-            worksheet.update("A1:D1", [["user_id", "user_name", "roles", "teacher_subjects"]])
+                    self._update_cell(worksheet, 1, i+1, expected_headers[i])
+                self._save_workbook()
+            elif not headers or headers[0].strip() == '':
+                # Если лист пустой, создаем заголовки
+                self._update_range(worksheet, "A1:D1", [["user_id", "user_name", "roles", "teacher_subjects"]])
+                self._save_workbook()
+        except Exception as e:
+            logger.error(f"Ошибка при создании листа пользователей: {e}")
+            worksheet = self._get_or_create_worksheet("Пользователи бот")
+            if worksheet and worksheet.max_row == 0:
+                self._update_range(worksheet, "A1:D1", [["user_id", "user_name", "roles", "teacher_subjects"]])
+                self._save_workbook()
         return worksheet
     
     def get_user_roles(self, user_id: int) -> List[str]:
         """Получает роли пользователя из листа Пользователи"""
         try:
             worksheet = self._get_or_create_users_worksheet()
-            cell = worksheet.find(str(user_id), in_column=1)
+            cell_pos = self._find_in_column(worksheet, str(user_id), 1)
             
-            if cell:
+            if cell_pos:
                 # Колонка C - роли (разделенные запятыми)
-                roles_cell = worksheet.cell(cell.row, 3).value
-                logger.info("Поиск по ID" + str(user_id) + ": " + roles_cell)
+                roles_cell = worksheet.cell(row=cell_pos[0], column=3).value
+                logger.info(f"Поиск по ID {user_id}: найдена строка {cell_pos[0]}, роли: {roles_cell}")
                 if roles_cell:
                     # Убираем дубликаты и возвращаем уникальные роли
                     roles = [role.strip().lower() for role in roles_cell.split(',')]
@@ -823,14 +964,15 @@ class GoogleSheetsManager:
         """Сохраняет ФИО пользователя (без ролей - роли только через админку)"""
         try:
             worksheet = self._get_or_create_users_worksheet()
-            cell = worksheet.find(str(user_id), in_column=1)
+            cell_pos = self._find_in_column(worksheet, str(user_id), 1)
             
-            if cell:
+            if cell_pos:
                 # Обновляем только имя, не трогаем роли
-                worksheet.update_cell(cell.row, 2, user_name)
+                self._update_cell(worksheet, cell_pos[0], 2, user_name)
             else:
                 # Создаем новую запись только с ФИО, роли пустые
-                worksheet.append_row([user_id, user_name, ""])
+                self._append_row(worksheet, [user_id, user_name, ""])
+            self._save_workbook()
             
             return True
         except Exception as e:
@@ -841,7 +983,7 @@ class GoogleSheetsManager:
         """Получает все данные пользователя по ID"""
         try:
             worksheet = self._get_or_create_users_worksheet()
-            records = worksheet.get_all_records()
+            records = self._get_worksheet_records(worksheet)
 
             for record in records:
                 if str(record.get("user_id")) == str(user_id):
@@ -855,7 +997,7 @@ class GoogleSheetsManager:
         """Сохраняет или обновляет данные пользователя"""
         try:
             worksheet = self._get_or_create_users_worksheet()
-            records = worksheet.get_all_records()
+            records = self._get_worksheet_records(worksheet)
             user_id = str(user_data["user_id"])
 
             row_num = None
@@ -867,9 +1009,10 @@ class GoogleSheetsManager:
             data_to_save = [user_id, user_data.get("user_name", "")]
 
             if row_num:
-                worksheet.update(f"A{row_num}:B{row_num}", [data_to_save])
+                self._update_range(worksheet, f"A{row_num}:B{row_num}", [data_to_save])
             else:
-                worksheet.append_row(data_to_save)
+                self._append_row(worksheet, data_to_save)
+            self._save_workbook()
 
             return True
         except Exception as e:
@@ -880,7 +1023,7 @@ class GoogleSheetsManager:
         """Сохраняет связь пользователь-предмет для учеников"""
         try:
             worksheet = self._get_or_create_worksheet("Ученики бот")
-            records = worksheet.get_all_records()
+            records = self._get_worksheet_records(worksheet)
 
             row_num = None
             for i, record in enumerate(records, start=2):
@@ -890,9 +1033,10 @@ class GoogleSheetsManager:
                     break
 
             if row_num:
-                worksheet.update(f"A{row_num}:C{row_num}", [[user_id, user_name, subject_id]])
+                self._update_range(worksheet, f"A{row_num}:C{row_num}", [[user_id, user_name, subject_id]])
             else:
-                worksheet.append_row([user_id, user_name, subject_id])
+                self._append_row(worksheet, [user_id, user_name, subject_id])
+            self._save_workbook()
 
             return True
         except Exception as e:
@@ -903,7 +1047,7 @@ class GoogleSheetsManager:
         """Получает предметы преподавателя из листа Пользователи"""
         try:
             worksheet = self._get_or_create_users_worksheet()
-            records = worksheet.get_all_records()
+            records = self._get_worksheet_records(worksheet)
 
             for record in records:
                 # Преобразуем user_id к строке для сравнения
@@ -942,30 +1086,36 @@ class GoogleSheetsManager:
     def _get_or_create_parents_worksheet(self):
         """Создает лист Родители с колонками: user_id, user_name, children_ids"""
         try:
-            worksheet = self.spreadsheet.worksheet("Родители бот")
+            worksheet = self._get_or_create_worksheet("Родители бот")
+            if not worksheet:
+                return None
+            
             # Проверяем структуру
-            headers = worksheet.row_values(1)
+            headers = self._get_row_values(worksheet, 1)
             expected_headers = ["user_id", "user_name", "children_ids"]
             
             if len(headers) < len(expected_headers):
                 # Добавляем недостающие заголовки
                 for i in range(len(headers), len(expected_headers)):
-                    worksheet.update_cell(1, i+1, expected_headers[i])
-                    
-        except gspread.WorksheetNotFound:
-            worksheet = self.spreadsheet.add_worksheet(
-                title="Родители",
-                rows=100,
-                cols=3
-            )
-            worksheet.update("A1:C1", [["user_id", "user_name", "children_ids"]])
+                    self._update_cell(worksheet, 1, i+1, expected_headers[i])
+                self._save_workbook()
+            elif not headers or headers[0].strip() == '':
+                # Если лист пустой, создаем заголовки
+                self._update_range(worksheet, "A1:C1", [["user_id", "user_name", "children_ids"]])
+                self._save_workbook()
+        except Exception as e:
+            logger.error(f"Ошибка при создании листа родителей: {e}")
+            worksheet = self._get_or_create_worksheet("Родители бот")
+            if worksheet and worksheet.max_row == 0:
+                self._update_range(worksheet, "A1:C1", [["user_id", "user_name", "children_ids"]])
+                self._save_workbook()
         return worksheet
 
     def get_parent_children(self, parent_id: int) -> List[int]:
         """Получает список ID детей родителя"""
         try:
             worksheet = self._get_or_create_parents_worksheet()
-            records = worksheet.get_all_records()
+            records = self._get_worksheet_records(worksheet)
             
             for record in records:
                 # Преобразуем parent_id к строке для сравнения
@@ -996,7 +1146,7 @@ class GoogleSheetsManager:
         """Сохраняет информацию о родителе"""
         try:
             worksheet = self._get_or_create_parents_worksheet()
-            records = worksheet.get_all_records()
+            records = self._get_worksheet_records(worksheet)
             
             row_num = None
             for i, record in enumerate(records, start=2):
@@ -1007,9 +1157,10 @@ class GoogleSheetsManager:
             children_str = ','.join(map(str, children_ids)) if children_ids else ''
             
             if row_num:
-                worksheet.update(f"A{row_num}:C{row_num}", [[parent_id, parent_name, children_str]])
+                self._update_range(worksheet, f"A{row_num}:C{row_num}", [[parent_id, parent_name, children_str]])
             else:
-                worksheet.append_row([parent_id, parent_name, children_str])
+                self._append_row(worksheet, [parent_id, parent_name, children_str])
+            self._save_workbook()
             
             return True
         except Exception as e:
@@ -1020,7 +1171,7 @@ class GoogleSheetsManager:
         """Получает доступные предметы для ученика (ищет только по строкам с соответствующим user_id)"""
         try:
             worksheet = self._get_or_create_worksheet("Ученики бот")
-            data = worksheet.get_all_values()
+            data = self._get_worksheet_values(worksheet)
             
             logger.info(f"Поиск предметов для user_id: {user_id}")
             logger.info(f"Всего строк в листе: {len(data)}")
@@ -1058,7 +1209,7 @@ class GoogleSheetsManager:
         """Обновляет только конкретную ячейку для ученика"""
         try:
             worksheet = self._get_or_create_worksheet("Ученики бот")
-            data = worksheet.get_all_values()
+            data = self._get_worksheet_values(worksheet)
             logger.info("ищется предмет: " + subject_id)
             
             if len(data) < 2:
@@ -1124,12 +1275,13 @@ class GoogleSheetsManager:
             
             # Обновляем только нужные ячейки
             if date_col_end != -1:  # Есть отдельная колонка для конца времени
-                worksheet.update_cell(target_row, date_col_start + 1, start_time)
-                worksheet.update_cell(target_row, date_col_end + 1, end_time)
+                self._update_cell(worksheet, target_row, date_col_start + 1, start_time)
+                self._update_cell(worksheet, target_row, date_col_end + 1, end_time)
             else:  # Только одна колонка для даты (предполагаем, что следующая - для конца)
-                worksheet.update_cell(target_row, date_col_start + 1, start_time)
+                self._update_cell(worksheet, target_row, date_col_start + 1, start_time)
                 if date_col_start + 2 <= len(data[0]):
-                    worksheet.update_cell(target_row, date_col_start + 2, end_time)
+                    self._update_cell(worksheet, target_row, date_col_start + 2, end_time)
+            self._save_workbook()
             
             logger.info(f"Обновлена ячейка для user_id {user_id}, subject {search_subject_id}, date {formatted_date}")
             return True
@@ -1143,7 +1295,7 @@ class GoogleSheetsManager:
         """Обновляет только конкретную ячейку для преподавателя (ищет только по user_id)"""
         try:
             worksheet = self._get_or_create_worksheet("Преподаватели бот")
-            data = worksheet.get_all_values()
+            data = self._get_worksheet_values(worksheet)
             
             if len(data) < 2:
                 return False
@@ -1192,12 +1344,13 @@ class GoogleSheetsManager:
             
             # Обновляем только нужные ячейки
             if date_col_end != -1:  # Есть отдельная колонка для конца времени
-                worksheet.update_cell(target_row, date_col_start + 1, start_time)
-                worksheet.update_cell(target_row, date_col_end + 1, end_time)
+                self._update_cell(worksheet, target_row, date_col_start + 1, start_time)
+                self._update_cell(worksheet, target_row, date_col_end + 1, end_time)
             else:  # Только одна колонка для даты (предполагаем, что следующая - для конца)
-                worksheet.update_cell(target_row, date_col_start + 1, start_time)
+                self._update_cell(worksheet, target_row, date_col_start + 1, start_time)
                 if date_col_start + 2 <= len(data[0]):
-                    worksheet.update_cell(target_row, date_col_start + 2, end_time)
+                    self._update_cell(worksheet, target_row, date_col_start + 2, end_time)
+            self._save_workbook()
             
             logger.info(f"Обновлена ячейка для user_id {user_id}, date {formatted_date}")
             return True
@@ -1231,20 +1384,21 @@ class GoogleSheetsManager:
         """Обновляет баланс студента в Google Sheets"""
         try:
             worksheet = self._get_or_create_worksheet("Балансы")
-            data = worksheet.get_all_values()
+            data = self._get_worksheet_values(worksheet)
             
             # Ищем существующую запись
             found = False
             for i, row in enumerate(data[1:], start=2):  # start=2 потому что 1 строка - заголовок
                 if row and len(row) >= 1 and str(row[0]).strip() == str(student_id):
-                    worksheet.update_cell(i, 2, amount)  # Колонка B - баланс
+                    self._update_cell(worksheet, i, 2, amount)  # Колонка B - баланс
                     found = True
                     break
             
             # Если не нашли, добавляем новую запись
             if not found:
                 next_row = len(data) + 1
-                worksheet.update(f'A{next_row}:B{next_row}', [[student_id, amount]])
+                self._update_range(worksheet, f'A{next_row}:B{next_row}', [[student_id, amount]])
+            self._save_workbook()
                 
         except Exception as e:
             logger.error(f"Error updating balance in sheets: {e}")
@@ -1262,7 +1416,7 @@ class GoogleSheetsManager:
             # Получаем все финансовые операции за сегодня
             today = datetime.now().strftime("%Y-%m-%d")
             worksheet = self._get_or_create_worksheet("Финансы")
-            data = worksheet.get_all_values()
+            data = self._get_worksheet_values(worksheet)
             
             # Пропускаем заголовок
             for row in data[1:]:
@@ -1292,7 +1446,7 @@ class GoogleSheetsManager:
                 return cached_result
 
             worksheet = self._get_or_create_worksheet("Ученики бот")
-            data = worksheet.get_all_values()
+            data = self._get_worksheet_values(worksheet)
 
             if len(data) < 2:
                 return []
@@ -1481,7 +1635,7 @@ class GoogleSheetsManager:
         """Отладочный метод для проверки данных по конкретной дате"""
         try:
             worksheet = self._get_or_create_worksheet("Ученики бот")
-            data = worksheet.get_all_values()
+            data = self._get_worksheet_values(worksheet)
 
             if len(data) < 2:
                 return
@@ -1520,7 +1674,7 @@ class GoogleSheetsManager:
         """Отладочный метод для просмотра структуры финансовых данных"""
         try:
             worksheet = self._get_or_create_worksheet("Ученики бот")
-            data = worksheet.get_all_values()
+            data = self._get_worksheet_values(worksheet)
 
             if len(data) < 2:
                 return
@@ -1556,7 +1710,7 @@ class GoogleSheetsManager:
         """Получает баланс студента для конкретного предмета"""
         try:
             worksheet = self._get_or_create_worksheet("Ученики бот")
-            data = worksheet.get_all_values()
+            data = self._get_worksheet_values(worksheet)
             
             if len(data) < 1:
                 return 0.0
@@ -1619,7 +1773,7 @@ class GoogleSheetsManager:
                 return cached_result
 
             worksheet = self._get_or_create_worksheet("Ученики бот")
-            data = worksheet.get_all_values()
+            data = self._get_worksheet_values(worksheet)
 
             if len(data) < 2:
                 logger.info(f"В таблице 'Ученики бот' недостаточно данных для user_id {user_id}")
@@ -1768,7 +1922,7 @@ class GoogleSheetsManager:
                 return cached_result
 
             worksheet = self._get_or_create_worksheet("Ученики бот")
-            data = worksheet.get_all_values()
+            data = self._get_worksheet_values(worksheet)
 
             if len(data) < 2:
                 return {}
@@ -1863,7 +2017,7 @@ class GoogleSheetsManager:
         """Отладочный метод для проверки тарифов по предметам"""
         try:
             worksheet = self._get_or_create_worksheet("Ученики бот")
-            data = worksheet.get_all_values()
+            data = self._get_worksheet_values(worksheet)
 
             if len(data) < 2:
                 return
@@ -1883,7 +2037,7 @@ class GoogleSheetsManager:
         """Отладочный метод для проверки занятий в расписании"""
         try:
             worksheet = self._get_or_create_worksheet("Ученики бот")
-            data = worksheet.get_all_values()
+            data = self._get_worksheet_values(worksheet)
 
             if len(data) < 2:
                 return
@@ -1930,7 +2084,7 @@ class GoogleSheetsManager:
 
             # Получаем список самозанятых
             self_employed_worksheet = self._get_or_create_worksheet("Самозанятые бот")
-            self_employed_data = self_employed_worksheet.get_all_values()
+            self_employed_data = self._get_worksheet_values(self_employed_worksheet)
 
             logger.info(f"Найдено строк в 'Самозанятые бот': {len(self_employed_data)}")
 
@@ -1940,7 +2094,7 @@ class GoogleSheetsManager:
 
             # Получаем данные преподавателей для балансов
             teachers_worksheet = self._get_or_create_worksheet("Преподаватели бот")
-            teachers_data = teachers_worksheet.get_all_values()
+            teachers_data = self._get_worksheet_values(teachers_worksheet)
 
             logger.info(f"Найдено строк в 'Преподаватели бот': {len(teachers_data)}")
 
@@ -2175,7 +2329,8 @@ class GoogleSheetsManager:
             new_paid = current_paid + amount
             
             # Обновляем ячейку
-            worksheet.update_cell(target_row, current_month_col + 1, f"{new_paid:.2f}")
+            self._update_cell(worksheet, target_row, current_month_col + 1, f"{new_paid:.2f}")
+            self._save_workbook()
             
             logger.info(f"Обновлены выплаты для {teacher_name} за месяц {current_month}: было {current_paid:.2f}, стало {new_paid:.2f}, добавлено {amount:.2f}")
             return True
@@ -2297,7 +2452,7 @@ class GoogleSheetsManager:
 
             # Смотрим структуру листа самозанятых
             self_employed_worksheet = self._get_or_create_worksheet("Самозанятые бот")
-            self_employed_data = self_employed_worksheet.get_all_values()
+            self_employed_data = self._get_worksheet_values(self_employed_worksheet)
 
             logger.info(f"Лист 'Самозанятые бот': {len(self_employed_data)} строк")
             if self_employed_data:
@@ -2307,7 +2462,7 @@ class GoogleSheetsManager:
 
             # Смотрим структуру листа преподавателей
             teachers_worksheet = self._get_or_create_worksheet("Преподаватели бот")
-            teachers_data = teachers_worksheet.get_all_values()
+            teachers_data = self._get_worksheet_values(teachers_worksheet)
 
             logger.info(f"Лист 'Преподаватели бот': {len(teachers_data)} строк")
             if teachers_data:

@@ -210,7 +210,7 @@ class JSONStorage:
         
         try:
             worksheet = self.gsheets._get_or_create_users_worksheet()
-            records = worksheet.get_all_records()
+            records = self.gsheets._get_worksheet_records(worksheet)
             
             users_with_roles = []
             for record in records:
@@ -335,7 +335,7 @@ class JSONStorage:
         
         try:
             worksheet = self.gsheets._get_or_create_users_worksheet()
-            records = worksheet.get_all_records()
+            records = self.gsheets._get_worksheet_records(worksheet)
 
             for record in records:
                 # Преобразуем user_id к строке для сравнения

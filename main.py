@@ -109,17 +109,19 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 storage = JSONStorage(file_path=BOOKINGS_FILE)
 
-# Настройка Google Sheets
+# Настройка Excel workbook
 try:
+    # Укажите путь к вашему Excel файлу
+    excel_file_path = os.path.join(os.path.dirname('Ученики тест .xlsx'), r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\Ученики тест .xlsx")  # Или укажите полный путь
     gsheets = GoogleSheetsManager(
-        credentials_file='credentials.json',
-        spreadsheet_id=SPREADSHEET_ID
+        file_path=excel_file_path,
+        spreadsheet_id=SPREADSHEET_ID  # Оставлено для совместимости, но не используется
     )
     gsheets.connect()
     storage.set_gsheets_manager(gsheets)
-    logger.info("Google Sheets integration initialized successfully")
+    logger.info("Excel workbook integration initialized successfully")
 except Exception as e:
-    logger.error(f"Google Sheets initialization error: {e}")
+    logger.error(f"Excel workbook initialization error: {e}")
     gsheets = None
 
 feedback_manager = FeedbackManager(storage, gsheets, bot)
@@ -128,11 +130,11 @@ feedback_manager.good_feedback_delay = FEEDBACK_CONFIG["good_feedback_delay"]
 feedback_teacher_manager.good_feedback_delay = FEEDBACK_CONFIG["good_feedback_delay"]
 teacher_reminder_manager = TeacherReminderManager(storage, gsheets, bot)
 student_reminder_manager = StudentReminderManager(storage, gsheets, bot)
-materials_manager = MaterialsManager(gsheets, 'credentials.json', SPREADSHEET_ID)
+materials_manager = MaterialsManager(gsheets, excel_file_path, SPREADSHEET_ID)
 # ДОБАВЬТЕ после инициализации других менеджеров:
 try:
     from advanced_materials_manager import AdvancedMaterialsManager
-    materials_manager = AdvancedMaterialsManager(gsheets, 'credentials.json', SPREADSHEET_ID)
+    materials_manager = AdvancedMaterialsManager(gsheets, excel_file_path, SPREADSHEET_ID)
     logger.info("Advanced materials manager initialized")
 except Exception as e:
     logger.error(f"Failed to initialize advanced materials manager: {e}")
