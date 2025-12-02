@@ -90,38 +90,9 @@ class GoogleSheetsManager:
     
     def _find_in_column(self, worksheet, search_value: str, column: int) -> Optional[tuple]:
         """Находит значение в указанном столбце (аналог worksheet.find)"""
-        # Начинаем с 2-й строки, чтобы пропустить заголовок
-        search_str = str(search_value).strip()
-        search_num = None
-        # Пробуем преобразовать поисковое значение в число
-        try:
-            search_num = int(float(search_str))
-        except (ValueError, TypeError):
-            pass
-        
-        for row_idx, row in enumerate(worksheet.iter_rows(min_row=2, min_col=column, max_col=column, values_only=False), start=2):
-            cell_raw = row[0].value
-            if cell_raw is None:
-                continue
-            
-            # Если и поиск, и значение в ячейке - числа, сравниваем как числа
-            if search_num is not None:
-                try:
-                    # Обрабатываем разные типы числовых значений
-                    if isinstance(cell_raw, (int, float)):
-                        cell_num = int(float(cell_raw))
-                        if cell_num == search_num:
-                            return (row_idx, column)
-                    elif isinstance(cell_raw, str):
-                        cell_num = int(float(cell_raw.strip()))
-                        if cell_num == search_num:
-                            return (row_idx, column)
-                except (ValueError, TypeError):
-                    pass
-            
-            # Сравнение как строк
-            cell_str = str(cell_raw).strip()
-            if cell_str == search_str:
+        for row_idx, row in enumerate(worksheet.iter_rows(min_col=column, max_col=column, values_only=False), start=1):
+            cell_value = str(row[0].value) if row[0].value is not None else ''
+            if cell_value.strip() == str(search_value).strip():
                 return (row_idx, column)
         return None
     
@@ -864,14 +835,20 @@ class GoogleSheetsManager:
             teacher_bookings = self.get_bookings_from_sheet("Преподаватели бот", is_teacher=True)
             student_bookings = self.get_bookings_from_sheet("Ученики бот", is_teacher=False)
 
-            all_bookings = teacher_bookings + student_bookings
+            all_bookings_from_sheets = teacher_bookings + student_bookings
 
-            if hasattr(storage, 'replace_all_bookings'):
-                storage.replace_all_bookings(all_bookings)
-                logger.info(f"Успешно синхронизировано {len(all_bookings)} записей из Google Sheets в JSON")
+            # Используем умное слияние вместо полной замены
+            if hasattr(storage, 'merge_bookings'):
+                storage.merge_bookings(all_bookings_from_sheets)
+                logger.info(f"Успешно синхронизировано {len(all_bookings_from_sheets)} записей из Google Sheets в JSON (объединено с локальными)")
+                return True
+            elif hasattr(storage, 'replace_all_bookings'):
+                # Fallback: используем замену, но с защитой новых записей
+                storage.replace_all_bookings(all_bookings_from_sheets, preserve_recent=True)
+                logger.info(f"Успешно синхронизировано {len(all_bookings_from_sheets)} записей из Google Sheets в JSON")
                 return True
             else:
-                storage.save(all_bookings, sync_to_gsheets=False)
+                storage.save(all_bookings_from_sheets, sync_to_gsheets=False)
                 logger.warning("Использован fallback метод save вместо replace_all_bookings")
                 return True
 
@@ -945,7 +922,7 @@ class GoogleSheetsManager:
             if cell_pos:
                 # Колонка C - роли (разделенные запятыми)
                 roles_cell = worksheet.cell(row=cell_pos[0], column=3).value
-                logger.info(f"Поиск по ID {user_id}: найдена строка {cell_pos[0]}, роли: {roles_cell}")
+                logger.info("Поиск по ID" + str(user_id) + ": " + roles_cell)
                 if roles_cell:
                     # Убираем дубликаты и возвращаем уникальные роли
                     roles = [role.strip().lower() for role in roles_cell.split(',')]

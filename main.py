@@ -17,7 +17,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 import asyncio
 from functools import wraps
-from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter
+from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter, TelegramBadRequest
 from dotenv import load_dotenv
 
 import asyncio
@@ -100,6 +100,35 @@ def handle_network_errors(max_retries=3):
             return None
         return wrapper
     return decorator
+
+async def safe_answer_callback(callback: types.CallbackQuery, text: str = None, show_alert: bool = False):
+    """
+    Безопасно отвечает на callback query, обрабатывая ошибки истекших запросов.
+    
+    Args:
+        callback: CallbackQuery объект
+        text: Текст ответа (опционально)
+        show_alert: Показывать ли alert вместо toast уведомления
+    """
+    try:
+        if text:
+            await callback.answer(text=text, show_alert=show_alert)
+        else:
+            await callback.answer()
+    except TelegramBadRequest as e:
+        # Обрабатываем истекшие или невалидные callback queries
+        error_message = str(e).lower()
+        if "query is too old" in error_message or "response timeout expired" in error_message or "query id is invalid" in error_message:
+            logger.debug(f"Callback query expired or invalid: {callback.data} - {e}")
+            # Просто игнорируем, так как запрос уже истек
+            return
+        else:
+            # Другие BadRequest ошибки логируем
+            logger.warning(f"TelegramBadRequest when answering callback: {e}")
+            raise
+    except Exception as e:
+        logger.error(f"Unexpected error when answering callback: {e}")
+        raise
 # Инициализация бота
 session = AiohttpSession(
     timeout=aiohttp.ClientTimeout(total=30)  # Универсальный таймаут
@@ -2390,12 +2419,18 @@ async def show_booking_info(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("cancel_booking_"))
 async def cancel_booking(callback: types.CallbackQuery):
-    booking_id = int(callback.data.replace("cancel_booking_", ""))
-    if booking_manager.cancel_booking_by_id(booking_id):
-        await callback.message.edit_text(f"✅ Бронирование ID {booking_id} успешно отменено")
-    else:
-        await callback.message.edit_text("❌ Не удалось отменить бронирование")
-    await callback.answer()
+    try:
+        booking_id = int(callback.data.replace("cancel_booking_", ""))
+        if booking_manager.cancel_booking_by_id(booking_id):
+            await callback.message.edit_text(f"✅ Бронирование ID {booking_id} успешно отменено")
+        else:
+            await callback.message.edit_text("❌ Не удалось отменить бронирование")
+    except Exception as e:
+        logger.error(f"Ошибка при отмене бронирования: {e}")
+        await callback.message.edit_text("❌ Произошла ошибка при отмене бронирования")
+    finally:
+        # Безопасно отвечаем на callback, даже если запрос истек
+        await safe_answer_callback(callback)
 
 @dp.callback_query(BookingStates.SELECT_ROLE, F.data == "role_parent")
 async def process_role_parent_selection(callback: types.CallbackQuery, state: FSMContext):

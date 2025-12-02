@@ -210,7 +210,7 @@ class JSONStorage:
         
         try:
             worksheet = self.gsheets._get_or_create_users_worksheet()
-            records = self.gsheets._get_worksheet_records(worksheet)
+            records = worksheet.get_all_records()
             
             users_with_roles = []
             for record in records:
@@ -253,8 +253,60 @@ class JSONStorage:
         if updated:
             self.save(bookings)
 
-    def replace_all_bookings(self, new_bookings: List[Dict[str, Any]]):
+    def replace_all_bookings(self, new_bookings: List[Dict[str, Any]], preserve_recent: bool = False):
+        """Заменяет все бронирования новыми. Если preserve_recent=True, сохраняет недавно созданные локальные записи."""
         valid_bookings = self._filter_old_bookings(new_bookings)
+        
+        # Если нужно сохранить недавние записи, загружаем существующие
+        if preserve_recent:
+            existing_bookings = self.load_all_bookings()
+            recent_bookings = []
+            
+            # Ищем записи, созданные в последние 5 минут
+            current_time = datetime.now()
+            recent_bookings_set = set()  # Для дедупликации
+            
+            for booking in existing_bookings:
+                try:
+                    if 'created_at' in booking:
+                        created_at = datetime.strptime(booking['created_at'], "%Y-%m-%d %H:%M:%S")
+                        time_diff = (current_time - created_at).total_seconds()
+                        # Проверяем, что запись действительно недавняя (в пределах 5 минут)
+                        if 0 <= time_diff < 300:  # 5 минут (исключаем отрицательные значения)
+                            # Создаем ключ для дедупликации
+                            booking_key = (
+                                booking.get('user_id'),
+                                booking.get('date'),
+                                booking.get('start_time'),
+                                booking.get('end_time')
+                            )
+                            if booking_key not in recent_bookings_set:
+                                recent_bookings.append(booking)
+                                recent_bookings_set.add(booking_key)
+                except (ValueError, TypeError):
+                    continue
+            
+            # Добавляем недавние записи в список, если их еще нет
+            preserved_count = 0
+            for recent in recent_bookings:
+                # Проверяем, нет ли такой же записи в новых данных
+                is_duplicate = False
+                for new_booking in valid_bookings:
+                    if (recent.get('user_id') == new_booking.get('user_id') and
+                        recent.get('date') == new_booking.get('date') and
+                        recent.get('start_time') == new_booking.get('start_time') and
+                        recent.get('end_time') == new_booking.get('end_time')):
+                        is_duplicate = True
+                        break
+                
+                if not is_duplicate:
+                    valid_bookings.append(recent)
+                    preserved_count += 1
+            
+            # Логируем один раз, если были сохранены записи
+            if preserved_count > 0:
+                logger.info(f"Сохранено {preserved_count} недавних записей при замене бронирований")
+        
         used_ids = set()
 
         for booking in valid_bookings:
@@ -273,6 +325,126 @@ class JSONStorage:
                 json.dump(valid_bookings, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.error(f"Ошибка при сохранении данных: {e}")
+    
+    def merge_bookings(self, bookings_from_sheets: List[Dict[str, Any]]):
+        """Умное объединение бронирований из Google Sheets с локальными, сохраняя недавно созданные."""
+        # Загружаем существующие бронирования
+        existing_bookings = self.load_all_bookings()
+        
+        # Создаем словарь для быстрого поиска по ключевым полям
+        def get_booking_key(booking):
+            """Создает уникальный ключ для бронирования"""
+            subject = booking.get('subject', '')
+            subjects = booking.get('subjects', [])
+            # Для преподавателей subjects - это список, преобразуем в строку для сравнения
+            if isinstance(subjects, list):
+                subject_str = ','.join(sorted(subjects)) if subjects else ''
+            else:
+                subject_str = str(subjects) if subjects else ''
+            
+            return (
+                booking.get('user_id'),
+                booking.get('date'),
+                booking.get('start_time'),
+                booking.get('end_time'),
+                subject or subject_str
+            )
+        
+        # Определяем недавно созданные записи (последние 5 минут)
+        # Сначала дедуплицируем существующие бронирования по ключу
+        existing_bookings_dict = {}
+        for booking in existing_bookings:
+            key = get_booking_key(booking)
+            # Если уже есть запись с таким ключом, оставляем ту, у которой есть id или более поздняя created_at
+            if key not in existing_bookings_dict:
+                existing_bookings_dict[key] = booking
+            else:
+                # Если есть дубликат, выбираем запись с более поздним created_at или с id
+                existing = existing_bookings_dict[key]
+                existing_has_id = existing.get('id') and existing.get('id') > 0
+                new_has_id = booking.get('id') and booking.get('id') > 0
+                
+                if new_has_id and not existing_has_id:
+                    existing_bookings_dict[key] = booking
+                elif existing_has_id == new_has_id:
+                    # Если обе или ни одна не имеют id, выбираем с более поздним created_at
+                    try:
+                        if 'created_at' in booking and 'created_at' in existing:
+                            new_time = datetime.strptime(booking['created_at'], "%Y-%m-%d %H:%M:%S")
+                            existing_time = datetime.strptime(existing['created_at'], "%Y-%m-%d %H:%M:%S")
+                            if new_time > existing_time:
+                                existing_bookings_dict[key] = booking
+                    except Exception:
+                        pass  # Если не удалось сравнить, оставляем существующую
+        
+        # Теперь проверяем только дедуплицированные записи на "недавность"
+        current_time = datetime.now()
+        recent_bookings = {}
+        
+        for key, booking in existing_bookings_dict.items():
+            try:
+                if 'created_at' in booking:
+                    created_at = datetime.strptime(booking['created_at'], "%Y-%m-%d %H:%M:%S")
+                    time_diff = (current_time - created_at).total_seconds()
+                    # Проверяем, что запись действительно недавняя (в пределах 5 минут)
+                    if 0 <= time_diff < 300:  # 5 минут (исключаем отрицательные значения)
+                        recent_bookings[key] = booking
+            except (ValueError, TypeError) as e:
+                logger.debug(f"Ошибка проверки времени создания записи: {e}")
+                continue
+        
+        # Фильтруем старые записи из данных Google Sheets
+        valid_sheets_bookings = self._filter_old_bookings(bookings_from_sheets)
+        
+        # Создаем словарь записей из Google Sheets
+        sheets_bookings_dict = {}
+        for booking in valid_sheets_bookings:
+            key = get_booking_key(booking)
+            sheets_bookings_dict[key] = booking
+        
+        # Объединяем: берем записи из Google Sheets, но сохраняем недавние локальные
+        merged_bookings = []
+        merged_keys = set()
+        
+        # Сначала добавляем записи из Google Sheets
+        for booking in valid_sheets_bookings:
+            key = get_booking_key(booking)
+            if key not in merged_keys:
+                merged_bookings.append(booking)
+                merged_keys.add(key)
+        
+        # Затем добавляем недавние локальные записи, которых нет в Google Sheets
+        preserved_count = 0
+        for key, booking in recent_bookings.items():
+            if key not in merged_keys:
+                merged_bookings.append(booking)
+                merged_keys.add(key)
+                preserved_count += 1
+        
+        # Логируем только один раз в конце, если были сохранены записи
+        if preserved_count > 0:
+            logger.info(f"Сохранено {preserved_count} недавних локальных записей при синхронизации")
+        
+        # Назначаем ID для записей без него
+        used_ids = set()
+        for booking in merged_bookings:
+            if 'id' not in booking or booking['id'] <= 0:
+                booking['id'] = max(used_ids or [0]) + 1
+            while booking['id'] in used_ids:
+                booking['id'] += 1
+            used_ids.add(booking['id'])
+            
+            # Сохраняем приоритет только для преподавателей
+            if booking.get('user_role') == 'teacher' and 'priority' not in booking:
+                booking['priority'] = ''
+        
+        # Сохраняем объединенные данные
+        try:
+            with open(self.file_path, 'w', encoding='utf-8') as f:
+                json.dump(merged_bookings, f, ensure_ascii=False, indent=2)
+            logger.info(f"Объединено {len(merged_bookings)} записей: {len(valid_sheets_bookings)} из Google Sheets, {len(recent_bookings)} недавних локальных сохранено")
+        except Exception as e:
+            logger.error(f"Ошибка при сохранении объединенных данных: {e}")
 
     def get_user_name(self, user_id: int) -> str:
         """Получает ФИО с гарантией отсутствия дубликатов"""
@@ -335,7 +507,7 @@ class JSONStorage:
         
         try:
             worksheet = self.gsheets._get_or_create_users_worksheet()
-            records = self.gsheets._get_worksheet_records(worksheet)
+            records = worksheet.get_all_records()
 
             for record in records:
                 # Преобразуем user_id к строке для сравнения

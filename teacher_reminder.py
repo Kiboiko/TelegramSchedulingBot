@@ -20,7 +20,7 @@ class TeacherReminderManager:
                 return []
 
             worksheet = self.gsheets._get_or_create_users_worksheet()
-            records = self.gsheets._get_worksheet_records(worksheet)
+            records = worksheet.get_all_records()
 
             teachers = []
             for record in records:
