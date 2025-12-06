@@ -2241,13 +2241,50 @@ async def confirm_time_range(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     availability_map = data.get('availability_map')
 
+    # Проверяем наличие обязательных данных
+    selected_date = data.get('selected_date')
+    time_start = data.get('time_start')
+    time_end = data.get('time_end')
+    
+    if not selected_date:
+        logger.error(f"Missing selected_date in state for user {callback.from_user.id}")
+        await callback.answer(
+            "❌ Ошибка: дата не найдена. Пожалуйста, выберите дату заново.",
+            show_alert=True
+        )
+        # Попытка восстановить состояние - отправляем пользователя обратно к выбору даты
+        await callback.message.edit_text(
+            "Произошла ошибка. Пожалуйста, выберите дату заново:",
+            reply_markup=generate_calendar()
+        )
+        await state.set_state(BookingStates.SELECT_DATE)
+        return
+    
+    if not time_start or not time_end:
+        logger.error(f"Missing time_start or time_end in state for user {callback.from_user.id}")
+        await callback.answer(
+            "❌ Ошибка: время не выбрано. Пожалуйста, выберите время заново.",
+            show_alert=True
+        )
+        # Показываем клавиатуру выбора времени снова
+        await callback.message.edit_text(
+            f"📅 Дата: {selected_date.strftime('%d.%m.%Y')}\n"
+            "Пожалуйста, выберите время заново:",
+            reply_markup=generate_time_range_keyboard_with_availability(
+                selected_date=selected_date,
+                availability_map=availability_map
+            )
+        )
+        await state.set_state(BookingStates.SELECT_TIME_RANGE)
+        return
+
     # Гарантируем, что booking_type = "Тип1"
     data['booking_type'] = "Тип1"
     await state.update_data(booking_type="Тип1")
 
     subject = data.get('subject') if data.get('user_role') == 'student' else None
     user_id = callback.from_user.id
-    date_str = data['selected_date'].strftime("%Y-%m-%d")
+    date_str = selected_date.strftime("%Y-%m-%d")
 
     # Показываем информацию о классе для учеников
     class_info = ""
@@ -2275,12 +2312,12 @@ async def confirm_time_range(callback: types.CallbackQuery, state: FSMContext):
         f"Предмет(ы): {subjects_text}\n"
         f"{class_info}"
         f"Тип: ТИП1 (автоматически)\n"
-        f"Дата: {data['selected_date'].strftime('%d.%m.%Y')}\n"
-        f"Время: {data['time_start']} - {data['time_end']}",
+        f"Дата: {selected_date.strftime('%d.%m.%Y')}\n"
+        f"Время: {time_start} - {time_end}",
         reply_markup=generate_confirmation()
     )
     await state.set_state(BookingStates.CONFIRMATION)
-    await callback.answer()
+    await safe_answer_callback(callback)
 
 
 @dp.callback_query(BookingStates.CONFIRMATION, F.data == "booking_confirm")

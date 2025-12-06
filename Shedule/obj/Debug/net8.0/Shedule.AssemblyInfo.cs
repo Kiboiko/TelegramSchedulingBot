@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("Shedule")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+12ca9a0fceb93f075c5b4e9bda62f3b95296a25f")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+24090cb2094c334df127c66fb25ac8d7313c9bb0")]
 [assembly: System.Reflection.AssemblyProductAttribute("Shedule")]
 [assembly: System.Reflection.AssemblyTitleAttribute("Shedule")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
