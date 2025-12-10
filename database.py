@@ -30,7 +30,7 @@ class DatabaseManager:
     async def connect(self):
         """Установка соединения с базой данных"""
         try:
-            self.pool = await asyncpg.create_pool(self.connection_string)
+            self.pool = await asyncpg.pool.create_pool(self.connection_string)
             logger.info("✅ Connected to PostgreSQL database")
 
             # Проверяем существование таблиц
@@ -41,22 +41,34 @@ class DatabaseManager:
             raise
 
     async def _check_tables(self):
-        """Проверяет существование таблиц"""
+        """Проверяет существование таблиц и логирует отсутствующие"""
         try:
             async with self.pool.acquire() as conn:
+                # Список всех необходимых таблиц
+                required_tables = [
+                    'content_info', 'content_data', 'payments', 
+                    'users', 'subjects', 'students', 'teachers', 'bookings'
+                ]
+                
                 # Проверяем существование таблиц
                 tables = await conn.fetch("""
                     SELECT table_name 
                     FROM information_schema.tables 
                     WHERE table_schema = 'public'
-                    AND table_name IN ('content_info', 'content_data', 'payments', 
-                                      'users', 'subjects', 'students', 'teachers', 'bookings')
-                """)
+                    AND table_name = ANY($1::text[])
+                """, required_tables)
 
-                if len(tables) == 8:
+                # Получаем список существующих таблиц
+                existing_tables = [table['table_name'] for table in tables]
+                
+                # Находим отсутствующие таблицы
+                missing_tables = [table for table in required_tables if table not in existing_tables]
+                
+                if len(existing_tables) == len(required_tables):
                     logger.info("✅ All tables exist")
                 else:
-                    logger.warning("⚠️ Some tables are missing")
+                    logger.warning(f"⚠️ Missing tables: {', '.join(missing_tables)}")
+                    logger.info(f"✅ Existing tables: {', '.join(existing_tables)}")
                     # Создаем таблицы если их нет
                     await self._create_tables(conn)
 
