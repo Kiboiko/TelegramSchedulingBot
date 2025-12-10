@@ -48,36 +48,38 @@ class BackgroundTasks:
                 logger.error(f"Error in cleanup_old_bookings: {e}")
                 await asyncio.sleep(60)  # Подождать минуту при ошибке
 
-    async def sync_with_gsheets(self):
-        """Фоновая синхронизация с Google Sheets"""
-        while True:
-            try:
-                if hasattr(self.storage, 'gsheets') and self.storage.gsheets:
-                    bookings = self.storage.load()
-                    success = self.storage.gsheets.update_all_sheets(bookings)
-                    if success:
-                        logger.info("Фоновая синхронизация с Google Sheets выполнена")
-                    else:
-                        logger.warning("Не удалось выполнить синхронизацию с Google Sheets")
-                await asyncio.sleep(60)  # Каждый час
-            except Exception as e:
-                logger.error(f"Ошибка в фоновой синхронизации: {e}")
-                await asyncio.sleep(600)  # Ждем 10 минут при ошибке
+    # ЗАКОММЕНТИРОВАНО: Переход на БД
+    # async def sync_with_gsheets(self):
+    #     """Фоновая синхронизация с Google Sheets"""
+    #     while True:
+    #         try:
+    #             if hasattr(self.storage, 'gsheets') and self.storage.gsheets:
+    #                 bookings = self.storage.load()
+    #                 success = self.storage.gsheets.update_all_sheets(bookings)
+    #                 if success:
+    #                     logger.info("Фоновая синхронизация с Google Sheets выполнена")
+    #                 else:
+    #                     logger.warning("Не удалось выполнить синхронизацию с Google Sheets")
+    #             await asyncio.sleep(60)  # Каждый час
+    #         except Exception as e:
+    #             logger.error(f"Ошибка в фоновой синхронизации: {e}")
+    #             await asyncio.sleep(600)  # Ждем 10 минут при ошибке
 
-    async def sync_from_gsheets_background(self):
-        """Фоновая синхронизация из Google Sheets в JSON"""
-        while True:
-            try:
-                if hasattr(self.storage, 'gsheets') and self.storage.gsheets:
-                    success = self.storage.gsheets.sync_from_gsheets_to_json(self.storage)
-                    if success:
-                        logger.info("Фоновая синхронизация из Google Sheets в JSON выполнена")
-                    else:
-                        logger.warning("Не удалось выполнить синхронизацию из Google Sheets")
-                await asyncio.sleep(60)  # Синхронизация каждую минуту
-            except Exception as e:
-                logger.error(f"Ошибка в фоновой синхронизации из Google Sheets: {e}")
-                await asyncio.sleep(300)
+    # ЗАКОММЕНТИРОВАНО: Переход на БД
+    # async def sync_from_gsheets_background(self):
+    #     """Фоновая синхронизация из Google Sheets в JSON"""
+    #     while True:
+    #         try:
+    #             if hasattr(self.storage, 'gsheets') and self.storage.gsheets:
+    #                 success = self.storage.gsheets.sync_from_gsheets_to_json(self.storage)
+    #                 if success:
+    #                     logger.info("Фоновая синхронизация из Google Sheets в JSON выполнена")
+    #                 else:
+    #                     logger.warning("Не удалось выполнить синхронизацию из Google Sheets")
+    #             await asyncio.sleep(60)  # Синхронизация каждую минуту
+    #         except Exception as e:
+    #             logger.error(f"Ошибка в фоновой синхронизации из Google Sheets: {e}")
+    #             await asyncio.sleep(300)
 
     async def check_feedback_background(self):
         """Фоновая задача для проверки и отправки обратной связи"""
@@ -186,36 +188,37 @@ class BackgroundTasks:
         """Действия при запуске бота"""
         logger.info("Выполнение startup задач")
         
-        # Принудительная синхронизация при старте
-        if self.gsheets:
-            try:
-                worksheet = self.gsheets._get_or_create_users_worksheet()
-                records = worksheet.get_all_records()
-
-                # Собираем уникальные user_id
-                unique_users = {}
-                duplicates = []
-
-                for i, record in enumerate(records, start=2):
-                    user_id = str(record.get("user_id"))
-                    if user_id in unique_users:
-                        duplicates.append(i)
-                    else:
-                        unique_users[user_id] = record
-
-                # Удаляем дубликаты (с конца, чтобы не сбивались номера строк)
-                for row_num in sorted(duplicates, reverse=True):
-                    worksheet.delete_rows(row_num)
-
-                logger.info(f"Удалено {len(duplicates)} дубликатов пользователей")
-            except Exception as e:
-                logger.error(f"Ошибка при очистке дубликатов: {e}")
+        # ЗАКОММЕНТИРОВАНО: Переход на БД
+        # # Принудительная синхронизация при старте
+        # if self.gsheets:
+        #     try:
+        #         worksheet = self.gsheets._get_or_create_users_worksheet()
+        #         records = worksheet.get_all_records()
+        #
+        #         # Собираем уникальные user_id
+        #         unique_users = {}
+        #         duplicates = []
+        #
+        #         for i, record in enumerate(records, start=2):
+        #             user_id = str(record.get("user_id"))
+        #             if user_id in unique_users:
+        #                 duplicates.append(i)
+        #             else:
+        #                 unique_users[user_id] = record
+        #
+        #         # Удаляем дубликаты (с конца, чтобы не сбивались номера строк)
+        #         for row_num in sorted(duplicates, reverse=True):
+        #             worksheet.delete_rows(row_num)
+        #
+        #         logger.info(f"Удалено {len(duplicates)} дубликатов пользователей")
+        #     except Exception as e:
+        #         logger.error(f"Ошибка при очистке дубликатов: {e}")
 
     def start_all_tasks(self):
         """Запуск всех фоновых задач"""
         tasks = [
             self.cleanup_old_bookings(),
-            self.sync_from_gsheets_background(),
+            # self.sync_from_gsheets_background(),  # ЗАКОММЕНТИРОВАНО: Переход на БД
             self.check_feedback_background(),
             self.sync_pending_feedback_background(),
             self.check_teacher_feedback_background(),

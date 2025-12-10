@@ -109,18 +109,29 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 storage = JSONStorage(file_path=BOOKINGS_FILE)
 
-# Настройка Google Sheets
+# Настройка базы данных PostgreSQL
 try:
-    gsheets = GoogleSheetsManager(
-        credentials_file='credentials.json',
-        spreadsheet_id=SPREADSHEET_ID
-    )
-    gsheets.connect()
-    storage.set_gsheets_manager(gsheets)
-    logger.info("Google Sheets integration initialized successfully")
+    from database import db
+    # БД будет инициализирована в main()
+    logger.info("Database module imported")
 except Exception as e:
-    logger.error(f"Google Sheets initialization error: {e}")
-    gsheets = None
+    logger.error(f"Database import error: {e}")
+    db = None
+
+# Настройка Google Sheets - ЗАКОММЕНТИРОВАНО (переход на БД)
+# try:
+#     gsheets = GoogleSheetsManager(
+#         credentials_file='credentials.json',
+#         spreadsheet_id=SPREADSHEET_ID
+#     )
+#     gsheets.connect()
+#     storage.set_gsheets_manager(gsheets)
+#     logger.info("Google Sheets integration initialized successfully")
+# except Exception as e:
+#     logger.error(f"Google Sheets initialization error: {e}")
+#     gsheets = None
+
+gsheets = None  # Отключено, используем только БД
 
 feedback_manager = FeedbackManager(storage, gsheets, bot)
 feedback_teacher_manager = FeedbackTeacherManager(storage, gsheets, bot)
@@ -2750,12 +2761,16 @@ async def handle_reminder_book_now(callback: types.CallbackQuery, state: FSMCont
 
 
 async def main():
+    # Инициализация базы данных
     try:
+        from database import db
         await db.connect()
-        logger.info("✅ Database initialized successfully")
+        storage.set_database_manager(db)
+        logger.info("✅ PostgreSQL database connected in main()")
     except Exception as e:
         logger.error(f"❌ Database initialization failed: {e}")
-        return
+        logger.error("Бот не может работать без подключения к БД!")
+        return  # Останавливаем бота, если БД не подключена
 
     await background_tasks.startup_tasks()
 

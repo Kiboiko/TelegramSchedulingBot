@@ -2,6 +2,7 @@ import json
 from typing import List, Dict, Any
 from datetime import datetime
 import logging
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -10,9 +11,14 @@ class JSONStorage:
     def __init__(self, file_path: str):
         self.file_path = file_path
         self.gsheets = None
+        self.db = None  # DatabaseManager
 
     def set_gsheets_manager(self, gsheets_manager):
         self.gsheets = gsheets_manager
+
+    def set_database_manager(self, db_manager):
+        """Устанавливает менеджер базы данных"""
+        self.db = db_manager
 
     def load(self) -> List[Dict[str, Any]]:
         """Загружает данные из JSON файла"""
@@ -37,21 +43,47 @@ class JSONStorage:
 
     def add_booking(self, booking_data: Dict[str, Any]) -> Dict[str, Any]:
         """Добавляет новое бронирование"""
+        # Сначала сохраняем в БД (если доступна)
+        if self.db and self.db.pool:
+            try:
+                # Используем asyncio для вызова асинхронного метода
+                try:
+                    loop = asyncio.get_running_loop()
+                    # Если цикл уже запущен, создаем задачу (не ждем завершения)
+                    loop.create_task(self._add_booking_to_db(booking_data))
+                    logger.info("Booking queued for database save")
+                except RuntimeError:
+                    # Если нет запущенного цикла, создаем новый
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        result = loop.run_until_complete(self._add_booking_to_db(booking_data))
+                        if result:
+                            booking_data = result
+                    finally:
+                        loop.close()
+            except Exception as e:
+                logger.error(f"Error saving booking to database: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+        
+        # Также сохраняем в JSON для обратной совместимости
         bookings = self.load()
-        booking_id = max([b.get('id', 0) for b in bookings] or [0]) + 1
+        booking_id = booking_data.get('id') or max([b.get('id', 0) for b in bookings] or [0]) + 1
         booking_data['id'] = booking_id
 
         logger.info(f"Adding booking: {json.dumps(booking_data, ensure_ascii=False)}")
 
-        # Всегда добавляем в локальное хранилище
-        bookings.append(booking_data)
+        # Добавляем в локальное хранилище (если еще нет)
+        if not any(b.get('id') == booking_id for b in bookings):
+            bookings.append(booking_data)
         
         user_id = booking_data.get('user_id')
         date = booking_data.get('date')
         start_time = booking_data.get('start_time')
         end_time = booking_data.get('end_time')
         
-        # Для студентов и преподавателей пытаемся обновить Google Sheets
+        # Для студентов и преподавателей пытаемся обновить Google Sheets (опционально)
         if (hasattr(self, 'gsheets') and self.gsheets and 
             all([user_id, date, start_time, end_time])):
             
@@ -70,8 +102,42 @@ class JSONStorage:
                     self.update_teacher_booking_cell(user_id, subjects, date, start_time, end_time)
         
         # Сохраняем в JSON
-        self.save(bookings)
+        self.save(bookings, sync_to_gsheets=False)  # Не синхронизируем с Google Sheets, т.к. используем БД
         return booking_data
+
+    async def _add_booking_to_db(self, booking_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Асинхронный метод для сохранения бронирования в БД"""
+        try:
+            # Сохраняем пользователя, если его еще нет
+            user_id = booking_data.get('user_id')
+            user_name = booking_data.get('user_name', '')
+            user_role = booking_data.get('user_role', '')
+            
+            if user_id and user_name:
+                # Получаем текущие роли или создаем новую роль
+                user = await self.db.get_user(user_id)
+                if user:
+                    roles = user.get('roles', '')
+                    if user_role and user_role not in roles:
+                        roles = f"{roles},{user_role}" if roles else user_role
+                else:
+                    roles = user_role
+                
+                await self.db.save_or_update_user(user_id, user_name, roles)
+            
+            # Сохраняем бронирование
+            result = await self.db.add_booking(booking_data)
+            if result:
+                logger.info(f"✅ Booking saved to database: {result.get('id')}")
+                return result
+            else:
+                logger.error("Failed to save booking to database")
+                return booking_data
+        except Exception as e:
+            logger.error(f"Error in _add_booking_to_db: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return booking_data
     
     def update_teacher_booking_cell(self, user_id: int, subjects: List[str], date: str, 
                               start_time: str, end_time: str) -> bool:
@@ -159,49 +225,16 @@ class JSONStorage:
         return valid_bookings
 
     def _sync_with_gsheets(self):
-        """Синхронизирует с Google Sheets"""
-        if self.gsheets:
-            try:
-                bookings = self.load()
-                logger.info(f"Syncing {len(bookings)} bookings to Google Sheets")
-                
-                # # Добавляем пользователей с ролями, но без записей
-                # all_users_with_roles = self._get_all_users_with_roles()
-                
-                # # Добавляем пустые записи для пользователей с ролями, но без бронирований
-                # for user_data in all_users_with_roles:
-                #     user_id = user_data['user_id']
-                #     user_name = user_data['user_name']
-                #     roles = user_data['roles']
-                    
-                #     # Проверяем, есть ли уже записи для этого пользователя
-                #     has_booking = any(b.get('user_id') == user_id for b in bookings)
-                    
-                #     if not has_booking:
-                #         # Добавляем пустую запись
-                #         empty_booking = {
-                #             'user_id': user_id,
-                #             'user_name': user_name,
-                #             'user_role': roles[0],  # берем первую роль
-                #             'date': None,
-                #             'start_time': '',
-                #             'end_time': '',
-                #             'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                #         }
-                        
-                #         if 'teacher' in roles:
-                #             empty_booking['subjects'] = []
-                #             empty_booking['priority'] = ''
-                #         if 'student' in roles:
-                #             empty_booking['subject'] = ''
-                #             empty_booking['attention_need'] = ''
-                        
-                #         bookings.append(empty_booking)
-                #         logger.info(f"Added empty booking for user {user_name} (ID: {user_id})")
-
-                # self.gsheets.update_all_sheets(bookings)
-            except Exception as e:
-                logger.error(f"Ошибка синхронизации с Google Sheets: {e}")
+        """Синхронизирует с Google Sheets - ЗАКОММЕНТИРОВАНО: Переход на БД"""
+        # ЗАКОММЕНТИРОВАНО: Больше не синхронизируем с Google Sheets
+        pass
+        # if self.gsheets:
+        #     try:
+        #         bookings = self.load()
+        #         logger.info(f"Syncing {len(bookings)} bookings to Google Sheets")
+        #         # self.gsheets.update_all_sheets(bookings)
+        #     except Exception as e:
+        #         logger.error(f"Ошибка синхронизации с Google Sheets: {e}")
 
     def _get_all_users_with_roles(self) -> List[Dict[str, Any]]:
         """Получает всех пользователей с назначенными ролями"""
@@ -276,87 +309,214 @@ class JSONStorage:
 
     def get_user_name(self, user_id: int) -> str:
         """Получает ФИО с гарантией отсутствия дубликатов"""
-        if not hasattr(self, 'gsheets') or not self.gsheets:
-            return ""
+        if self.db and self.db.pool:
+            try:
+                try:
+                    loop = asyncio.get_running_loop()
+                    # Если цикл запущен, создаем задачу, но не можем ждать
+                    loop.create_task(self.db.get_user_name_sync(user_id))
+                    return ""  # Возвращаем пустую строку, т.к. не можем ждать
+                except RuntimeError:
+                    # Если нет запущенного цикла, создаем новый
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        return loop.run_until_complete(self.db.get_user_name_sync(user_id))
+                    finally:
+                        loop.close()
+            except Exception as e:
+                logger.error(f"Error getting user name from DB: {e}")
         
-        # Двойная проверка через API и кеширование
-        name = self.gsheets.get_user_name(user_id)
-        return name if name else ""
+        # Fallback на Google Sheets
+        if hasattr(self, 'gsheets') and self.gsheets:
+            name = self.gsheets.get_user_name(user_id)
+            return name if name else ""
+        return ""
 
     def get_user_roles(self, user_id: int) -> List[str]:
-        """Получает роли пользователя из Google Sheets"""
-        if not hasattr(self, 'gsheets') or not self.gsheets:
-            return []
-        return self.gsheets.get_user_roles(user_id)
+        """Получает роли пользователя из БД"""
+        if self.db and self.db.pool:
+            try:
+                try:
+                    loop = asyncio.get_running_loop()
+                    return []  # Не можем ждать
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        return loop.run_until_complete(self.db.get_user_roles_sync(user_id))
+                    finally:
+                        loop.close()
+            except Exception as e:
+                logger.error(f"Error getting user roles from DB: {e}")
+        
+        # Fallback на Google Sheets
+        if hasattr(self, 'gsheets') and self.gsheets:
+            return self.gsheets.get_user_roles(user_id)
+        return []
 
     def has_user_roles(self, user_id: int) -> bool:
         """Проверяет, есть ли у пользователя назначенные роли"""
-        if not hasattr(self, 'gsheets') or not self.gsheets:
-            return False
-        return self.gsheets.has_user_roles(user_id)
+        if self.db and self.db.pool:
+            try:
+                try:
+                    loop = asyncio.get_running_loop()
+                    return False  # Не можем ждать
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        return loop.run_until_complete(self.db.has_user_roles_sync(user_id))
+                    finally:
+                        loop.close()
+            except Exception as e:
+                logger.error(f"Error checking user roles from DB: {e}")
+        
+        # Fallback на Google Sheets
+        if hasattr(self, 'gsheets') and self.gsheets:
+            return self.gsheets.has_user_roles(user_id)
+        return False
 
     def save_user_name(self, user_id: int, user_name: str) -> bool:
         """Сохраняет ФИО пользователя"""
-        if not hasattr(self, 'gsheets') or not self.gsheets:
-            return False
-        return self.gsheets.save_user_info(user_id, user_name)
+        if self.db and self.db.pool:
+            try:
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(self.db.save_user_info_sync(user_id, user_name))
+                    return True
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        return loop.run_until_complete(self.db.save_user_info_sync(user_id, user_name))
+                    finally:
+                        loop.close()
+            except Exception as e:
+                logger.error(f"Error saving user name to DB: {e}")
+        
+        # Fallback на Google Sheets
+        if hasattr(self, 'gsheets') and self.gsheets:
+            return self.gsheets.save_user_info(user_id, user_name)
+        return False
 
     def save_user_data(self, user_data: dict) -> bool:
-        """Сохраняет данные пользователя в Google Sheets"""
+        """Сохраняет данные пользователя в БД"""
+        if self.db and self.db.pool:
+            try:
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(self.db.save_user_data_sync(user_data))
+                    return True
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        return loop.run_until_complete(self.db.save_user_data_sync(user_data))
+                    finally:
+                        loop.close()
+            except Exception as e:
+                logger.error(f"Error saving user data to DB: {e}")
+        
+        # Fallback на Google Sheets
         if hasattr(self, 'gsheets') and self.gsheets:
             return self.gsheets.save_user_data(user_data)
         return False
     
     def save_user_info(self, user_id: int, user_name: str = None, role: str = None) -> bool:
-        """Сохраняет информацию о пользователе в Google Sheets"""
-        if not hasattr(self, 'gsheets') or not self.gsheets:
-            return False
+        """Сохраняет информацию о пользователе в БД"""
+        if self.db and self.db.pool:
+            try:
+                async def _save():
+                    # Получаем текущие данные пользователя
+                    current_data = await self.db.get_user_data_sync(user_id)
+                    
+                    # Обновляем только переданные поля
+                    if user_name is not None:
+                        current_data['user_name'] = user_name
+                    if role is not None:
+                        roles = current_data.get('roles', '')
+                        if role not in roles:
+                            roles = f"{roles},{role}" if roles else role
+                        current_data['roles'] = roles
+                    
+                    # Сохраняем обновленные данные
+                    return await self.db.save_user_data_sync(current_data)
+                
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(_save())
+                    return True
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        return loop.run_until_complete(_save())
+                    finally:
+                        loop.close()
+            except Exception as e:
+                logger.error(f"Error saving user info to DB: {e}")
         
-        try:
-            # Получаем текущие данные пользователя
-            current_data = self.gsheets.get_user_data(user_id)
-            
-            # Обновляем только переданные поля
-            if user_name is not None:
-                current_data['user_name'] = user_name
-            if role is not None:
-                current_data['role'] = role
-            
-            # Сохраняем обновленные данные
-            return self.gsheets.save_user_data(current_data)
-        except Exception as e:
-            logger.error(f"Error saving user info: {e}")
-            return False
+        # Fallback на Google Sheets
+        if hasattr(self, 'gsheets') and self.gsheets:
+            try:
+                current_data = self.gsheets.get_user_data(user_id)
+                if user_name is not None:
+                    current_data['user_name'] = user_name
+                if role is not None:
+                    current_data['role'] = role
+                return self.gsheets.save_user_data(current_data)
+            except Exception as e:
+                logger.error(f"Error saving user info: {e}")
+        return False
 
     def get_user_data(self, user_id: int) -> dict:
         """Получает все данные пользователя по ID"""
-        if not hasattr(self, 'gsheets') or not self.gsheets:
-            return {}
+        if self.db and self.db.pool:
+            try:
+                try:
+                    loop = asyncio.get_running_loop()
+                    return {}  # Не можем ждать
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        data = loop.run_until_complete(self.db.get_user_data_sync(user_id))
+                        # Преобразуем в строки для совместимости
+                        result = {}
+                        for key, value in data.items():
+                            if value is None:
+                                result[key] = ""
+                            else:
+                                result[key] = str(value)
+                        return result
+                    finally:
+                        loop.close()
+            except Exception as e:
+                logger.error(f"Error getting user data from DB: {e}")
         
-        try:
-            worksheet = self.gsheets._get_or_create_users_worksheet()
-            records = worksheet.get_all_records()
+        # Fallback на Google Sheets
+        if hasattr(self, 'gsheets') and self.gsheets:
+            try:
+                worksheet = self.gsheets._get_or_create_users_worksheet()
+                records = worksheet.get_all_records()
 
-            for record in records:
-                # Преобразуем user_id к строке для сравнения
-                record_user_id = str(record.get("user_id", ""))
-                if record_user_id == str(user_id):
-                    # Преобразуем все значения в строки и обрабатываем предметы
-                    result = {}
-                    for key, value in record.items():
-                        if value is None:
-                            result[key] = ""
-                        else:
-                            result[key] = str(value)
-                    
-                    # Обрабатываем предметы преподавателя
-                    if 'teacher_subjects' in result and result['teacher_subjects']:
-                        result['subjects'] = [subj.strip() for subj in result['teacher_subjects'].split(',') if subj.strip()]
-                    return result
-            return {}
-        except Exception as e:
-            logger.error(f"Ошибка при получении данных пользователя: {e}")
-            return {}
+                for record in records:
+                    record_user_id = str(record.get("user_id", ""))
+                    if record_user_id == str(user_id):
+                        result = {}
+                        for key, value in record.items():
+                            if value is None:
+                                result[key] = ""
+                            else:
+                                result[key] = str(value)
+                        
+                        if 'teacher_subjects' in result and result['teacher_subjects']:
+                            result['subjects'] = [subj.strip() for subj in result['teacher_subjects'].split(',') if subj.strip()]
+                        return result
+            except Exception as e:
+                logger.error(f"Ошибка при получении данных пользователя: {e}")
+        return {}
         
     def has_booking_on_date(self, user_id: int, date: str, role: str, subject: str = None) -> bool:
         """Проверяет, есть ли у пользователя бронь на указанную дату в указанной роли и предмете"""
@@ -380,10 +540,26 @@ class JSONStorage:
             return False
         
     def get_teacher_subjects(self, user_id: int) -> List[str]:
-        """Получает предметы преподавателя из Google Sheets"""
-        if not hasattr(self, 'gsheets') or not self.gsheets:
-            return []
-        return self.gsheets.get_teacher_subjects(user_id)
+        """Получает предметы преподавателя из БД"""
+        if self.db and self.db.pool:
+            try:
+                try:
+                    loop = asyncio.get_running_loop()
+                    return []  # Не можем ждать
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        return loop.run_until_complete(self.db.get_teacher_subjects(user_id))
+                    finally:
+                        loop.close()
+            except Exception as e:
+                logger.error(f"Error getting teacher subjects from DB: {e}")
+        
+        # Fallback на Google Sheets
+        if hasattr(self, 'gsheets') and self.gsheets:
+            return self.gsheets.get_teacher_subjects(user_id)
+        return []
     
     def has_time_conflict(self, user_id: int, date: str, time_start: str, time_end: str, exclude_id: int = None) -> bool:
         """Проверяет пересечение временных интервалов для пользователя"""
@@ -415,27 +591,92 @@ class JSONStorage:
     
     def get_parent_children(self, parent_id: int) -> List[int]:
         """Получает список ID детей родителя"""
-        if not hasattr(self, 'gsheets') or not self.gsheets:
-            return []
-        return self.gsheets.get_parent_children(parent_id)
+        if self.db and self.db.pool:
+            try:
+                try:
+                    loop = asyncio.get_running_loop()
+                    return []  # Не можем ждать
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        return loop.run_until_complete(self.db.get_parent_children_sync(parent_id))
+                    finally:
+                        loop.close()
+            except Exception as e:
+                logger.error(f"Error getting parent children from DB: {e}")
+        
+        # Fallback на Google Sheets
+        if hasattr(self, 'gsheets') and self.gsheets:
+            return self.gsheets.get_parent_children(parent_id)
+        return []
 
     def get_child_info(self, child_id: int) -> dict:
         """Получает информацию о ребенке (ученике)"""
-        if not hasattr(self, 'gsheets') or not self.gsheets:
-            return {}
-        return self.gsheets.get_child_info(child_id)
+        if self.db and self.db.pool:
+            try:
+                try:
+                    loop = asyncio.get_running_loop()
+                    return {}  # Не можем ждать
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        return loop.run_until_complete(self.db.get_child_info_sync(child_id))
+                    finally:
+                        loop.close()
+            except Exception as e:
+                logger.error(f"Error getting child info from DB: {e}")
+        
+        # Fallback на Google Sheets
+        if hasattr(self, 'gsheets') and self.gsheets:
+            return self.gsheets.get_child_info(child_id)
+        return {}
 
     def save_parent_info(self, parent_id: int, parent_name: str, children_ids: List[int] = None) -> bool:
         """Сохраняет информацию о родителе"""
-        if not hasattr(self, 'gsheets') or not self.gsheets:
-            return False
-        return self.gsheets.save_parent_info(parent_id, parent_name, children_ids)
+        if self.db and self.db.pool:
+            try:
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(self.db.save_parent_info_sync(parent_id, parent_name, children_ids))
+                    return True
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        return loop.run_until_complete(self.db.save_parent_info_sync(parent_id, parent_name, children_ids))
+                    finally:
+                        loop.close()
+            except Exception as e:
+                logger.error(f"Error saving parent info to DB: {e}")
+        
+        # Fallback на Google Sheets
+        if hasattr(self, 'gsheets') and self.gsheets:
+            return self.gsheets.save_parent_info(parent_id, parent_name, children_ids)
+        return False
     
     def get_available_subjects_for_student(self, user_id: int) -> List[str]:
         """Получает доступные предметы для ученика"""
-        if not hasattr(self, 'gsheets') or not self.gsheets:
-            return []
-        return self.gsheets.get_available_subjects_for_student(user_id)
+        if self.db and self.db.pool:
+            try:
+                try:
+                    loop = asyncio.get_running_loop()
+                    return []  # Не можем ждать
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        return loop.run_until_complete(self.db.get_available_subjects_for_student_sync(user_id))
+                    finally:
+                        loop.close()
+            except Exception as e:
+                logger.error(f"Error getting available subjects from DB: {e}")
+        
+        # Fallback на Google Sheets
+        if hasattr(self, 'gsheets') and self.gsheets:
+            return self.gsheets.get_available_subjects_for_student(user_id)
+        return []
 
     def update_student_booking_cell(self, user_id: int, subject_id: str, date: str, 
                                 start_time: str, end_time: str) -> bool:
@@ -457,16 +698,48 @@ class JSONStorage:
             return []
     def get_student_balance(self, student_id: int) -> float:
         """Получает текущий баланс студента"""
+        if self.db and self.db.pool:
+            try:
+                try:
+                    loop = asyncio.get_running_loop()
+                    return 0.0  # Не можем ждать
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        return loop.run_until_complete(self.db.get_student_balance_sync(student_id))
+                    finally:
+                        loop.close()
+            except Exception as e:
+                logger.error(f"Error getting balance from DB: {e}")
+        
+        # Fallback на Google Sheets
         try:
             if hasattr(self, 'gsheets') and self.gsheets:
                 return self.gsheets.get_student_balance(student_id)
-            return 0.0
         except Exception as e:
             logger.error(f"Error getting balance for student {student_id}: {e}")
-            return 0.0
+        return 0.0
 
     def update_student_balance(self, student_id: int, amount: float):
         """Обновляет баланс студента"""
+        if self.db and self.db.pool:
+            try:
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(self.db.update_student_balance_sync(student_id, amount))
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        loop.run_until_complete(self.db.update_student_balance_sync(student_id, amount))
+                    finally:
+                        loop.close()
+                return
+            except Exception as e:
+                logger.error(f"Error updating balance in DB: {e}")
+        
+        # Fallback на Google Sheets
         try:
             if hasattr(self, 'gsheets') and self.gsheets:
                 self.gsheets.update_student_balance(student_id, amount)
@@ -475,6 +748,22 @@ class JSONStorage:
 
     def get_student_balance_by_subjects(self, student_id: int) -> Dict[str, float]:
         """Получает баланс студента разбитый по предметам"""
+        if self.db and self.db.pool:
+            try:
+                try:
+                    loop = asyncio.get_running_loop()
+                    return {}  # Не можем ждать
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        return loop.run_until_complete(self.db.get_student_balance_by_subjects_sync(student_id))
+                    finally:
+                        loop.close()
+            except Exception as e:
+                logger.error(f"Error getting balance by subjects from DB: {e}")
+        
+        # Fallback на Google Sheets
         if hasattr(self, 'gsheets') and self.gsheets:
             return self.gsheets.get_student_balance_by_subjects(student_id)
         return {}
