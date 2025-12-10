@@ -60,7 +60,7 @@ from calendar_utils import generate_calendar,get_time_range_for_date
 from time_utils import generate_time_range_keyboard_with_availability,calculate_lesson_duration
 from datetime import datetime
 from aiogram.fsm.state import State, StatesGroup
-from states import BookingStates, FinanceStates
+from states import BookingStates, FinanceStates, AdminAssignStates
 from teacher_reminder import TeacherReminderManager
 from booking_history_manager import BookingHistoryManager
 from menu_handlers import (
@@ -196,6 +196,149 @@ booking_manager = BookingManager(storage, gsheets)
 background_tasks = BackgroundTasks(storage, gsheets, feedback_manager, feedback_teacher_manager, bot)
 register_menu_handlers(dp, booking_manager, storage)
 booking_history = BookingHistoryManager("booking_history.json")
+
+# ================= Админ: назначение ролей и предметов =================
+
+def build_subjects_keyboard(selected: list):
+    kb = InlineKeyboardBuilder()
+    for subj_id, subj_name in SUBJECTS.items():
+        prefix = "✅ " if subj_id in selected else ""
+        kb.button(text=f"{prefix}{subj_name}", callback_data=f"admin_toggle_subject_{subj_id}")
+    kb.button(text="✅ Готово", callback_data="admin_assign_done")
+    kb.button(text="❌ Отмена", callback_data="admin_assign_cancel")
+    kb.adjust(2)
+    return kb.as_markup()
+
+
+@dp.callback_query(F.data.startswith("admin_assign_role_"))
+async def admin_assign_role(callback: types.CallbackQuery, state: FSMContext):
+    """Старт назначения роли и предметов администратором"""
+    admin_id = callback.from_user.id
+    if not is_admin(admin_id):
+        await callback.answer("Недостаточно прав", show_alert=True)
+        return
+
+    try:
+        parts = callback.data.split("_")
+        # ожидаем формат: admin_assign_role_{role}_{user_id}
+        if len(parts) < 5:
+            raise ValueError("bad callback format")
+        role = parts[3]
+        target_user_id = int(parts[4])
+    except Exception:
+        await callback.answer("Ошибка данных", show_alert=True)
+        return
+
+    target_user_name = storage.get_user_name(target_user_id) or "Без имени"
+
+    # Родитель — без выбора предметов
+    if role == "parent":
+        roles = await db.get_user_roles(target_user_id)
+        new_roles = set(roles)
+        new_roles.add("parent")
+        await db.save_or_update_user(target_user_id, target_user_name, ",".join(new_roles))
+        await callback.message.edit_text(
+            f"✅ Роль родителя назначена\nID: {target_user_id}\nИмя: {target_user_name}"
+        )
+        try:
+            await bot.send_message(
+                target_user_id,
+                "✅ Вам назначена роль Родитель. Теперь вы можете бронировать время для детей."
+            )
+        except Exception:
+            pass
+        await callback.answer()
+        return
+
+    # Для student/teacher запрашиваем предметы
+    await state.set_state(AdminAssignStates.SELECT_SUBJECTS)
+    await state.update_data(
+        target_user_id=target_user_id,
+        target_user_name=target_user_name,
+        target_role=role,
+        selected_subjects=[]
+    )
+
+    role_text = "ученика" if role == "student" else "преподавателя"
+    await callback.message.edit_text(
+        f"Выберите предметы для {role_text}\n"
+        f"ID: {target_user_id}\nИмя: {target_user_name}",
+        reply_markup=build_subjects_keyboard([])
+    )
+    await callback.answer()
+
+
+@dp.callback_query(AdminAssignStates.SELECT_SUBJECTS, F.data.startswith("admin_toggle_subject_"))
+async def admin_toggle_subject(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    selected = set(data.get("selected_subjects", []))
+    subj_id = callback.data.replace("admin_toggle_subject_", "")
+    if subj_id in selected:
+        selected.remove(subj_id)
+    else:
+        selected.add(subj_id)
+    await state.update_data(selected_subjects=list(selected))
+    await callback.message.edit_reply_markup(reply_markup=build_subjects_keyboard(list(selected)))
+    await callback.answer()
+
+
+@dp.callback_query(AdminAssignStates.SELECT_SUBJECTS, F.data == "admin_assign_done")
+async def admin_assign_done(callback: types.CallbackQuery, state: FSMContext):
+    admin_id = callback.from_user.id
+    if not is_admin(admin_id):
+        await callback.answer("Недостаточно прав", show_alert=True)
+        return
+
+    data = await state.get_data()
+    selected = data.get("selected_subjects", [])
+    role = data.get("target_role")
+    target_user_id = data.get("target_user_id")
+    target_user_name = data.get("target_user_name", "")
+
+    if role in ("student", "teacher") and not selected:
+        await callback.answer("Выберите хотя бы один предмет", show_alert=True)
+        return
+
+    # Обновляем роли
+    roles = await db.get_user_roles(target_user_id)
+    new_roles = set(roles)
+    new_roles.add(role)
+    await db.save_or_update_user(target_user_id, target_user_name, ",".join(new_roles))
+
+    # Сохраняем предметы
+    if role == "student":
+        for subj in selected:
+            await db.save_student(target_user_id, subj)
+    elif role == "teacher":
+        for subj in selected:
+            await db.save_teacher(target_user_id, subj)
+
+    await callback.message.edit_text(
+        f"✅ Роль и предметы назначены\n"
+        f"ID: {target_user_id}\nИмя: {target_user_name}\n"
+        f"Роль: {role}\nПредметы: {', '.join(selected)}"
+    )
+
+    # Уведомляем пользователя
+    try:
+        role_text = "Преподаватель" if role == "teacher" else "Ученик"
+        subj_text = ", ".join([SUBJECTS.get(s, s) for s in selected]) if selected else "не указаны"
+        await bot.send_message(
+            target_user_id,
+            f"✅ Вам назначена роль: {role_text}\nПредметы: {subj_text}"
+        )
+    except Exception:
+        pass
+
+    await state.clear()
+    await callback.answer()
+
+
+@dp.callback_query(AdminAssignStates.SELECT_SUBJECTS, F.data == "admin_assign_cancel")
+async def admin_assign_cancel(callback: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text("Отменено")
+    await callback.answer()
 
 
 def get_subject_distribution_by_time(loader, target_date: str, condition_check: bool = True) -> Dict[time, Dict]:
@@ -1229,37 +1372,61 @@ async def handle_waiting_receipt_text(message: types.Message):
 
 @dp.message(BookingStates.INPUT_NAME)
 async def process_name(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
-    user_name = message.text.strip()
+    try:
+        user_id = message.from_user.id
+        user_name = message.text.strip()
 
-    if len(user_name.split()) < 2:
-        await message.answer("Пожалуйста, введите полное ФИО (минимум имя и фамилию)")
-        return
+        if len(user_name.split()) < 2:
+            await message.answer("Пожалуйста, введите полное ФИО (минимум имя и фамилию)")
+            return
 
-    # Сохраняем имя
-    storage.save_user_name(user_id, user_name)
-    await state.update_data(user_name=user_name)
+        # Сохраняем имя
+        storage.save_user_name(user_id, user_name)
+        await state.update_data(user_name=user_name)
 
-    # Проверяем, есть ли роли
-    if storage.has_user_roles(user_id):
-        user_roles = storage.get_user_roles(user_id)
-        builder = InlineKeyboardBuilder()
-        if 'teacher' in user_roles:
-            builder.button(text="👨‍🏫 Как преподаватель", callback_data="role_teacher")
-        if 'student' in user_roles:
-            builder.button(text="👨‍🎓 Как ученик", callback_data="role_student")
+        # Проверяем, есть ли роли
+        if storage.has_user_roles(user_id):
+            user_roles = storage.get_user_roles(user_id)
+            builder = InlineKeyboardBuilder()
+            if 'teacher' in user_roles:
+                builder.button(text="👨‍🏫 Как преподаватель", callback_data="role_teacher")
+            if 'student' in user_roles:
+                builder.button(text="👨‍🎓 Как ученик", callback_data="role_student")
 
-        await message.answer(
-            "Выберите роль для этого бронирования:",
-            reply_markup=builder.as_markup()
-        )
-        await state.set_state(BookingStates.SELECT_ROLE)
-    else:
-        await message.answer(
-            "✅ Ваше ФИО сохранено!\n"
-            "⏳ Обратитесь к администратору для получения ролей. \n Телефон администратора: +79001372727",
-            reply_markup=await generate_main_menu(user_id,storage)
-        )
+            await message.answer(
+                "Выберите роль для этого бронирования:",
+                reply_markup=builder.as_markup()
+            )
+            await state.set_state(BookingStates.SELECT_ROLE)
+        else:
+            await message.answer(
+                "✅ Ваше ФИО сохранено!\n"
+                "⏳ Обратитесь к администратору для получения ролей. \n Телефон администратора: +79001372727",
+                reply_markup=await generate_main_menu(user_id,storage)
+            )
+            # Уведомляем администраторов, что пользователь ожидает назначения роли
+            admin_kb = InlineKeyboardBuilder()
+            admin_kb.button(text="👨‍🎓 Ученик", callback_data=f"admin_assign_role_student_{user_id}")
+            admin_kb.button(text="👨‍🏫 Преподаватель", callback_data=f"admin_assign_role_teacher_{user_id}")
+            admin_kb.button(text="👨‍👩‍👧‍👦 Родитель", callback_data=f"admin_assign_role_parent_{user_id}")
+            admin_kb.adjust(1)
+
+            for admin_id in ADMIN_IDS:
+                try:
+                    await bot.send_message(
+                        admin_id,
+                        f"🆕 Новый пользователь ожидает ролей:\n"
+                        f"ID: {user_id}\n"
+                        f"Имя: {user_name}\n"
+                        f"Выберите роль и предметы:",
+                        reply_markup=admin_kb.as_markup()
+                    )
+                except Exception as e:
+                    logger.error(f"Не удалось уведомить админа {admin_id}: {e}")
+            await state.clear()
+    except Exception as e:
+        logger.error(f"process_name error: {e}")
+        await message.answer("❌ Ошибка при сохранении ФИО, попробуйте еще раз.")
         await state.clear()
 
 

@@ -339,7 +339,8 @@ class JSONStorage:
             try:
                 try:
                     loop = asyncio.get_running_loop()
-                    return []  # Не можем ждать
+                    future = asyncio.run_coroutine_threadsafe(self.db.get_user_roles_sync(user_id), loop)
+                    return future.result()
                 except RuntimeError:
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
@@ -361,7 +362,8 @@ class JSONStorage:
             try:
                 try:
                     loop = asyncio.get_running_loop()
-                    return False  # Не можем ждать
+                    future = asyncio.run_coroutine_threadsafe(self.db.has_user_roles_sync(user_id), loop)
+                    return future.result()
                 except RuntimeError:
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)

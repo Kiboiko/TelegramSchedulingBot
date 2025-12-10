@@ -23,3 +23,8 @@ class FinanceStates(StatesGroup):
 class PaymentStates(StatesGroup):
     WAITING_PAYMENT = State()
     CONFIRMING_PAYMENT = State()
+
+class AdminAssignStates(StatesGroup):
+    SELECT_ROLE = State()
+    SELECT_SUBJECTS = State()
+    CONFIRM = State()

@@ -415,6 +415,13 @@ class DatabaseManager:
         """Сохраняет или обновляет студента"""
         try:
             async with self.pool.acquire() as conn:
+                # Гарантируем наличие предмета в справочнике
+                await conn.execute("""
+                    INSERT INTO subjects (subject_id, subject_name)
+                    VALUES ($1, $1)
+                    ON CONFLICT (subject_id) DO NOTHING
+                """, subject_id)
+
                 await conn.execute("""
                     INSERT INTO students (user_id, subject_id, class, attention_need, balance, tariff)
                     VALUES ($1, $2, $3, $4, $5, $6)
@@ -457,6 +464,13 @@ class DatabaseManager:
         """Сохраняет или обновляет преподавателя"""
         try:
             async with self.pool.acquire() as conn:
+                # Гарантируем наличие предмета в справочнике
+                await conn.execute("""
+                    INSERT INTO subjects (subject_id, subject_name)
+                    VALUES ($1, $1)
+                    ON CONFLICT (subject_id) DO NOTHING
+                """, subject_id)
+
                 await conn.execute("""
                     INSERT INTO teachers (user_id, subject_id, priority)
                     VALUES ($1, $2, $3)
