@@ -204,8 +204,16 @@ class RoleCheckMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         # Проверяем роли для всех остальных сообщений
+        # ВАЖНО: Вызываем асинхронный метод напрямую, так как мы в async контексте
         try:
-            if not storage.has_user_roles(user_id):
+            if storage.db and storage.db.pool:
+                # Вызываем асинхронный метод напрямую
+                has_roles = await storage.db.has_user_roles_sync(user_id)
+            else:
+                # Fallback на синхронный метод
+                has_roles = storage.has_user_roles(user_id)
+            
+            if not has_roles:
                 if isinstance(event, Message):
                     await event.answer(
                         "⏳ Ваш аккаунт находится на проверке.\n"
@@ -1172,15 +1180,23 @@ async def force_sync_command(message: types.Message):
 async def start_booking(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
 
-    # Проверяем, есть ли ФИО
-    user_name = storage.get_user_name(user_id)
+    # Проверяем, есть ли ФИО - ВАЖНО: вызываем асинхронный метод напрямую
+    if storage.db and storage.db.pool:
+        user_name = await storage.db.get_user_name_sync(user_id)
+    else:
+        user_name = storage.get_user_name(user_id)
+    
     if not user_name:
         await message.answer("Введите ваше полное ФИО:")
         await state.set_state(BookingStates.INPUT_NAME)
         return
 
-    # Получаем доступные роли пользователя
-    user_roles = storage.get_user_roles(user_id)
+    # Получаем доступные роли пользователя - ВАЖНО: вызываем асинхронный метод напрямую
+    if storage.db and storage.db.pool:
+        user_roles = await storage.db.get_user_roles(user_id)
+    else:
+        user_roles = storage.get_user_roles(user_id)
+    
     if not user_roles:
         await message.answer(
             "⏳ Обратитесь к администратору для получения ролей \n Телефон администратора: +79001372727",
@@ -1224,8 +1240,12 @@ async def start_booking(message: types.Message, state: FSMContext):
         await state.update_data(user_role=role)
 
         if role == 'teacher':
-            # Для преподавателя получаем предметы
-            teacher_subjects = storage.get_teacher_subjects(user_id)
+            # Для преподавателя получаем предметы - ВАЖНО: вызываем асинхронный метод напрямую
+            if storage.db and storage.db.pool:
+                teacher_subjects = await storage.db.get_teacher_subjects(user_id)
+            else:
+                teacher_subjects = storage.get_teacher_subjects(user_id)
+            
             if not teacher_subjects:
                 await message.answer(
                     "У вас нет назначенных предметов. Обратитесь к администратору. \n Телефон администратора: +79001372727",
@@ -1253,8 +1273,12 @@ async def start_booking(message: types.Message, state: FSMContext):
             await state.set_state(BookingStates.SELECT_SUBJECT)
 
         elif role == 'parent':
-            # Обработка родителя
-            children_ids = storage.get_parent_children(user_id)
+            # Обработка родителя - ВАЖНО: вызываем асинхронный метод напрямую
+            if storage.db and storage.db.pool:
+                children_ids = await storage.db.get_parent_children_sync(user_id)
+            else:
+                children_ids = storage.get_parent_children(user_id)
+            
             if not children_ids:
                 await message.answer(
                     "У вас нет привязанных детей. Обратитесь к администратору.\n Телефон администратора: +79001372727",
@@ -1264,7 +1288,10 @@ async def start_booking(message: types.Message, state: FSMContext):
 
             builder = InlineKeyboardBuilder()
             for child_id in children_ids:
-                child_info = storage.get_child_info(child_id)
+                if storage.db and storage.db.pool:
+                    child_info = await storage.db.get_child_info_sync(child_id)
+                else:
+                    child_info = storage.get_child_info(child_id)
                 child_name = child_info.get('user_name', f'Ученик {child_id}')
                 builder.button(
                     text=f"👶 {child_name}",
@@ -1430,9 +1457,21 @@ async def process_name(message: types.Message, state: FSMContext):
     storage.save_user_name(user_id, user_name)
     await state.update_data(user_name=user_name)
 
-    # Проверяем, есть ли роли
-    if storage.has_user_roles(user_id):
-        user_roles = storage.get_user_roles(user_id)
+    # Проверяем, есть ли роли - ВАЖНО: вызываем асинхронный метод напрямую
+    if storage.db and storage.db.pool:
+        has_roles = await storage.db.has_user_roles_sync(user_id)
+        if has_roles:
+            user_roles = await storage.db.get_user_roles(user_id)
+        else:
+            user_roles = []
+    else:
+        has_roles = storage.has_user_roles(user_id)
+        if has_roles:
+            user_roles = storage.get_user_roles(user_id)
+        else:
+            user_roles = []
+    
+    if user_roles:
         builder = InlineKeyboardBuilder()
         if 'teacher' in user_roles:
             builder.button(text="👨‍🏫 Как преподаватель", callback_data="role_teacher")
@@ -1889,8 +1928,11 @@ async def process_role_selection(callback: types.CallbackQuery, state: FSMContex
     await state.update_data(user_role=role)
 
     if role == 'teacher':
-        # Для преподавателя получаем предметы из Google Sheets
-        teacher_subjects = storage.get_teacher_subjects(user_id)
+        # Для преподавателя получаем предметы - ВАЖНО: вызываем асинхронный метод напрямую
+        if storage.db and storage.db.pool:
+            teacher_subjects = await storage.db.get_teacher_subjects(user_id)
+        else:
+            teacher_subjects = storage.get_teacher_subjects(user_id)
 
         # ДЕБАГ: Логируем полученные предметы
         logger.info(f"Teacher {user_id} subjects: {teacher_subjects} (type: {type(teacher_subjects)})")
@@ -1929,8 +1971,11 @@ async def process_role_selection(callback: types.CallbackQuery, state: FSMContex
         await state.set_state(BookingStates.SELECT_DATE)
 
     elif role == 'student':
-        # Для ученика сразу запрашиваем предмет
-        available_subjects = storage.get_available_subjects_for_student(user_id)
+        # Для ученика сразу запрашиваем предмет - ВАЖНО: вызываем асинхронный метод напрямую
+        if storage.db and storage.db.pool:
+            available_subjects = await storage.db.get_available_subjects_for_student_sync(user_id)
+        else:
+            available_subjects = storage.get_available_subjects_for_student(user_id)
 
         if not available_subjects:
             await callback.answer(
@@ -1947,8 +1992,11 @@ async def process_role_selection(callback: types.CallbackQuery, state: FSMContex
         await state.set_state(BookingStates.SELECT_SUBJECT)
 
     elif role == 'parent':
-        # Для родителя получаем детей
-        children_ids = storage.get_parent_children(user_id)
+        # Для родителя получаем детей - ВАЖНО: вызываем асинхронный метод напрямую
+        if storage.db and storage.db.pool:
+            children_ids = await storage.db.get_parent_children_sync(user_id)
+        else:
+            children_ids = storage.get_parent_children(user_id)
 
         if not children_ids:
             await callback.answer(
@@ -1959,7 +2007,10 @@ async def process_role_selection(callback: types.CallbackQuery, state: FSMContex
 
         builder = InlineKeyboardBuilder()
         for child_id in children_ids:
-            child_info = storage.get_child_info(child_id)
+            if storage.db and storage.db.pool:
+                child_info = await storage.db.get_child_info_sync(child_id)
+            else:
+                child_info = storage.get_child_info(child_id)
             child_name = child_info.get('user_name', f'Ученик {child_id}')
             builder.button(
                 text=f"👶 {child_name}",
@@ -2533,7 +2584,11 @@ async def process_confirmation(callback: types.CallbackQuery, state: FSMContext)
 
     if is_parent:
         booking_data["parent_id"] = callback.from_user.id
-        booking_data["parent_name"] = storage.get_user_name(callback.from_user.id)
+        # ВАЖНО: вызываем асинхронный метод напрямую
+        if storage.db and storage.db.pool:
+            booking_data["parent_name"] = await storage.db.get_user_name_sync(callback.from_user.id)
+        else:
+            booking_data["parent_name"] = storage.get_user_name(callback.from_user.id)
 
     if data['user_role'] == 'teacher':
         booking_data["subjects"] = data.get('subjects', [])
@@ -2643,8 +2698,11 @@ async def cancel_booking(callback: types.CallbackQuery):
 async def process_role_parent_selection(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
 
-    # Получаем детей родителя
-    children_ids = storage.get_parent_children(user_id)
+    # Получаем детей родителя - ВАЖНО: вызываем асинхронный метод напрямую
+    if storage.db and storage.db.pool:
+        children_ids = await storage.db.get_parent_children_sync(user_id)
+    else:
+        children_ids = storage.get_parent_children(user_id)
 
     if not children_ids:
         await callback.answer(
@@ -2658,7 +2716,11 @@ async def process_role_parent_selection(callback: types.CallbackQuery, state: FS
     # Создаем клавиатуру для выбора ребенка
     builder = InlineKeyboardBuilder()
     for child_id in children_ids:
-        child_info = storage.get_child_info(child_id)
+        # ВАЖНО: вызываем асинхронный метод напрямую
+        if storage.db and storage.db.pool:
+            child_info = await storage.db.get_child_info_sync(child_id)
+        else:
+            child_info = storage.get_child_info(child_id)
         child_name = child_info.get('user_name', f'Ученик {child_id}')
         builder.button(
             text=f"👶 {child_name}",
@@ -2681,13 +2743,21 @@ async def process_role_parent_selection(callback: types.CallbackQuery, state: FS
 @dp.callback_query(BookingStates.PARENT_SELECT_CHILD, F.data.startswith("select_child_"))
 async def process_child_selection(callback: types.CallbackQuery, state: FSMContext):
     child_id = int(callback.data.replace("select_child_", ""))
-    child_info = storage.get_child_info(child_id)
+    # ВАЖНО: вызываем асинхронный метод напрямую
+    if storage.db and storage.db.pool:
+        child_info = await storage.db.get_child_info_sync(child_id)
+    else:
+        child_info = storage.get_child_info(child_id)
 
     if not child_info:
         await callback.answer("Ошибка: информация о ребенке не найдена", show_alert=True)
         return
 
-    available_subjects = storage.get_available_subjects_for_student(child_id)
+    # ВАЖНО: вызываем асинхронный метод напрямую
+    if storage.db and storage.db.pool:
+        available_subjects = await storage.db.get_available_subjects_for_student_sync(child_id)
+    else:
+        available_subjects = storage.get_available_subjects_for_student(child_id)
 
     if not available_subjects:
         await callback.answer(
@@ -2851,8 +2921,12 @@ async def handle_reminder_book_now(callback: types.CallbackQuery, state: FSMCont
         # ПРОПУСКАЕМ ПРОВЕРКУ ФИО - пользователь уже зарегистрирован!
         # Вместо вызова start_booking, делаем то же самое, но без проверки ФИО
 
-        # Получаем доступные роли пользователя
-        user_roles = storage.get_user_roles(user_id)
+        # Получаем доступные роли пользователя - ВАЖНО: вызываем асинхронный метод напрямую
+        if storage.db and storage.db.pool:
+            user_roles = await storage.db.get_user_roles(user_id)
+        else:
+            user_roles = storage.get_user_roles(user_id)
+        
         if not user_roles:
             await callback.answer(
                 "⏳ Обратитесь к администратору для получения ролей \n Телефон администратора: +79001372727",
@@ -2860,8 +2934,12 @@ async def handle_reminder_book_now(callback: types.CallbackQuery, state: FSMCont
             )
             return
 
-        # Получаем ФИО пользователя (оно точно есть)
-        user_name = storage.get_user_name(user_id)
+        # Получаем ФИО пользователя (оно точно есть) - ВАЖНО: вызываем асинхронный метод напрямую
+        if storage.db and storage.db.pool:
+            user_name = await storage.db.get_user_name_sync(user_id)
+        else:
+            user_name = storage.get_user_name(user_id)
+        
         await state.update_data(user_name=user_name)
 
         # Показываем доступные роли для бронирования
@@ -2898,8 +2976,12 @@ async def handle_reminder_book_now(callback: types.CallbackQuery, state: FSMCont
             await state.update_data(user_role=role)
 
             if role == 'teacher':
-                # Для преподавателя получаем предметы
-                teacher_subjects = storage.get_teacher_subjects(user_id)
+                # Для преподавателя получаем предметы - ВАЖНО: вызываем асинхронный метод напрямую
+                if storage.db and storage.db.pool:
+                    teacher_subjects = await storage.db.get_teacher_subjects(user_id)
+                else:
+                    teacher_subjects = storage.get_teacher_subjects(user_id)
+                
                 if not teacher_subjects:
                     await callback.answer(
                         "У вас нет назначенных предметов. Обратитесь к администратору. \n Телефон администратора: +79001372727",
@@ -2927,8 +3009,12 @@ async def handle_reminder_book_now(callback: types.CallbackQuery, state: FSMCont
                 await state.set_state(BookingStates.SELECT_SUBJECT)
 
             elif role == 'parent':
-                # Обработка родителя
-                children_ids = storage.get_parent_children(user_id)
+                # Обработка родителя - ВАЖНО: вызываем асинхронный метод напрямую
+                if storage.db and storage.db.pool:
+                    children_ids = await storage.db.get_parent_children_sync(user_id)
+                else:
+                    children_ids = storage.get_parent_children(user_id)
+                
                 if not children_ids:
                     await callback.answer(
                         "У вас нет привязанных детей. Обратитесь к администратору.\n Телефон администратора: +79001372727",
@@ -2938,7 +3024,11 @@ async def handle_reminder_book_now(callback: types.CallbackQuery, state: FSMCont
 
                 builder = InlineKeyboardBuilder()
                 for child_id in children_ids:
-                    child_info = storage.get_child_info(child_id)
+                    # ВАЖНО: вызываем асинхронный метод напрямую
+                    if storage.db and storage.db.pool:
+                        child_info = await storage.db.get_child_info_sync(child_id)
+                    else:
+                        child_info = storage.get_child_info(child_id)
                     child_name = child_info.get('user_name', f'Ученик {child_id}')
                     builder.button(
                         text=f"👶 {child_name}",

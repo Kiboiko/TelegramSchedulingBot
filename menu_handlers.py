@@ -21,7 +21,11 @@ no_roles_menu = ReplyKeyboardMarkup(
 
 
 async def generate_main_menu(user_id: int, storage) -> ReplyKeyboardMarkup:
-    roles = storage.get_user_roles(user_id)
+    # ВАЖНО: Вызываем асинхронный метод напрямую, так как мы в async контексте
+    if storage.db and storage.db.pool:
+        roles = await storage.db.get_user_roles(user_id)
+    else:
+        roles = storage.get_user_roles(user_id)
 
     if not roles:
         return no_roles_menu
@@ -56,7 +60,12 @@ async def generate_main_menu(user_id: int, storage) -> ReplyKeyboardMarkup:
 async def cmd_start(message: types.Message, state: FSMContext, storage):
     """Обработчик команды /start"""
     user_id = message.from_user.id
-    user_name = storage.get_user_name(user_id)
+    
+    # ВАЖНО: Вызываем асинхронный метод напрямую, так как мы в async контексте
+    if storage.db and storage.db.pool:
+        user_name = await storage.db.get_user_name_sync(user_id)
+    else:
+        user_name = storage.get_user_name(user_id)
 
     menu = await generate_main_menu(user_id, storage)
 
@@ -80,9 +89,16 @@ async def check_roles(message: types.Message, state: FSMContext, storage):
 
 async def show_my_role(message: types.Message, storage):
     """Показывает роли пользователя"""
-    roles = storage.get_user_roles(message.from_user.id)
+    user_id = message.from_user.id
+    
+    # ВАЖНО: Вызываем асинхронный метод напрямую, так как мы в async контексте
+    if storage.db and storage.db.pool:
+        roles = await storage.db.get_user_roles(user_id)
+    else:
+        roles = storage.get_user_roles(user_id)
+    
     logger.info("Найденные роли: " + ",".join(role for role in roles))
-    logger.info("ID для поиска: " + str(message.from_user.id))
+    logger.info("ID для поиска: " + str(user_id))
 
     if roles:
         role_translations = {
