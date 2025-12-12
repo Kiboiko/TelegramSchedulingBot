@@ -171,6 +171,23 @@ class DatabaseManager:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS registration_requests (
+                    request_id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    user_name VARCHAR(255) NOT NULL,
+                    requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    status VARCHAR(20) DEFAULT 'pending',
+                    processed_by INTEGER,
+                    processed_at TIMESTAMP,
+                    notes TEXT,
+                    UNIQUE(user_id)
+                )
+            """)
+
+            # Индексы
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_reg_requests_user_id ON registration_requests(user_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_reg_requests_status ON registration_requests(status)")
 
             # Создаем индексы
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_from_user ON payments(from_user_id)")
@@ -217,6 +234,168 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"❌ Error saving content: {e}")
             raise
+
+    async def create_registration_request(self, user_id: int, user_name: str) -> int:
+        """Создает заявку на регистрацию"""
+        try:
+            async with self.pool.acquire() as conn:
+                # Проверяем, есть ли уже заявка
+                existing = await conn.fetchrow(
+                    "SELECT request_id FROM registration_requests WHERE user_id = $1",
+                    user_id
+                )
+
+                if existing:
+                    # Если есть, но отклонена - обновляем статус на pending
+                    await conn.execute(
+                        "UPDATE registration_requests SET status = 'pending', requested_at = CURRENT_TIMESTAMP WHERE user_id = $1",
+                        user_id
+                    )
+                    return existing['request_id']
+
+                # Создаем новую заявку
+                request_id = await conn.fetchval("""
+                    INSERT INTO registration_requests (user_id, user_name)
+                    VALUES ($1, $2)
+                    RETURNING request_id
+                """, user_id, user_name)
+
+                logger.info(f"✅ Registration request created for user {user_id}")
+                return request_id
+        except Exception as e:
+            logger.error(f"❌ Error creating registration request: {e}")
+            raise
+
+    async def get_pending_registration_requests(self) -> List[Dict[str, Any]]:
+        """Получает все ожидающие заявки"""
+        try:
+            async with self.pool.acquire() as conn:
+                requests = await conn.fetch("""
+                    SELECT * FROM registration_requests 
+                    WHERE status = 'pending'
+                    ORDER BY requested_at ASC
+                """)
+                return [dict(req) for req in requests]
+        except Exception as e:
+            logger.error(f"❌ Error getting pending requests: {e}")
+            return []
+
+    async def approve_registration_request(self, user_id: int, admin_id: int, role: str,
+                                           subject_ids: List[str] = None, notes: str = None) -> bool:
+        """Одобряет заявку и назначает роль"""
+        try:
+            async with self.pool.acquire() as conn:
+                # Обновляем статус заявки
+                await conn.execute("""
+                    UPDATE registration_requests 
+                    SET status = 'approved', 
+                        processed_by = $1,
+                        processed_at = CURRENT_TIMESTAMP,
+                        notes = $2
+                    WHERE user_id = $3
+                """, admin_id, notes, user_id)
+
+                # Получаем имя пользователя
+                request = await conn.fetchrow(
+                    "SELECT user_name FROM registration_requests WHERE user_id = $1",
+                    user_id
+                )
+
+                if not request:
+                    return False
+
+                user_name = request['user_name']
+
+                # Назначаем роль пользователю
+                user = await self.get_user(user_id)
+                if user:
+                    # Обновляем существующего
+                    current_roles = user.get('roles', '')
+                    roles_list = [r.strip() for r in current_roles.split(',') if r.strip()]
+                    if role not in roles_list:
+                        roles_list.append(role)
+                    new_roles = ','.join(roles_list)
+
+                    await conn.execute(
+                        "UPDATE users SET roles = $1, updated_at = CURRENT_TIMESTAMP WHERE user_id = $2",
+                        new_roles, user_id
+                    )
+                else:
+                    # Создаем нового
+                    await conn.execute(
+                        "INSERT INTO users (user_id, user_name, roles) VALUES ($1, $2, $3)",
+                        user_id, user_name, role
+                    )
+
+                # Если назначили предметы
+                if subject_ids:
+                    if role == 'teacher':
+                        # Для преподавателя: все предметы в одной записи (как в Google Sheets)
+                        # Преобразуем список предметов в строку
+                        subjects_str = ','.join(subject_ids)
+                        await conn.execute("""
+                            INSERT INTO teachers (user_id, subject_id, priority)
+                            VALUES ($1, $2, '')
+                            ON CONFLICT (user_id, subject_id) DO NOTHING
+                        """, user_id, subjects_str)
+
+                    elif role == 'student':
+                        # Для ученика: каждый предмет в отдельной строке
+                        for subject_id in subject_ids:
+                            await conn.execute("""
+                                INSERT INTO students (user_id, subject_id, class, attention_need, balance, tariff)
+                                VALUES ($1, $2, 9, 3, 0.0, 0.0)
+                                ON CONFLICT (user_id, subject_id) DO NOTHING
+                            """, user_id, subject_id)
+
+                logger.info(f"✅ Registration approved for user {user_id}, role: {role}")
+                return True
+
+        except Exception as e:
+            logger.error(f"❌ Error approving registration: {e}")
+            return False
+
+    async def reject_registration_request(self, user_id: int, admin_id: int, notes: str = None) -> bool:
+        """Отклоняет заявку"""
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute("""
+                    UPDATE registration_requests 
+                    SET status = 'rejected', 
+                        processed_by = $1,
+                        processed_at = CURRENT_TIMESTAMP,
+                        notes = $2
+                    WHERE user_id = $3
+                """, admin_id, notes, user_id)
+
+                logger.info(f"✅ Registration rejected for user {user_id}")
+                return True
+        except Exception as e:
+            logger.error(f"❌ Error rejecting registration: {e}")
+            return False
+
+    async def get_user_registration_status(self, user_id: int) -> Dict[str, Any]:
+        """Получает статус регистрации пользователя"""
+        try:
+            async with self.pool.acquire() as conn:
+                request = await conn.fetchrow("""
+                    SELECT status, requested_at, processed_at, notes
+                    FROM registration_requests 
+                    WHERE user_id = $1
+                """, user_id)
+
+                if request:
+                    return {
+                        'has_request': True,
+                        'status': request['status'],
+                        'requested_at': request['requested_at'],
+                        'processed_at': request['processed_at'],
+                        'notes': request['notes']
+                    }
+                return {'has_request': False, 'status': 'no_request'}
+        except Exception as e:
+            logger.error(f"❌ Error getting registration status: {e}")
+            return {'has_request': False, 'status': 'error'}
 
     async def save_payment_with_content(self, from_user_id: int, to_user_id: int,
                                         content_id: int, amount: float, subject_id: str,
@@ -805,6 +984,127 @@ class DatabaseManager:
             logger.error(f"❌ Error saving parent info: {e}")
             return False
 
+    # database.py - добавить новые методы
+
+    async def assign_role_to_user(self, user_id: int, user_name: str, role: str) -> bool:
+        """Назначает роль пользователю"""
+        try:
+            async with self.pool.acquire() as conn:
+                # Получаем текущие роли пользователя
+                user = await self.get_user(user_id)
+
+                if user:
+                    # Обновляем существующего пользователя
+                    current_roles = user.get('roles', '')
+                    roles_list = [r.strip() for r in current_roles.split(',') if r.strip()]
+
+                    if role not in roles_list:
+                        roles_list.append(role)
+                        new_roles = ','.join(roles_list)
+
+                        await conn.execute(
+                            "UPDATE users SET roles = $1, updated_at = CURRENT_TIMESTAMP WHERE user_id = $2",
+                            new_roles, user_id
+                        )
+                else:
+                    # Создаем нового пользователя
+                    await conn.execute(
+                        "INSERT INTO users (user_id, user_name, roles) VALUES ($1, $2, $3)",
+                        user_id, user_name, role
+                    )
+
+                logger.info(f"✅ Role '{role}' assigned to user {user_id}")
+                return True
+        except Exception as e:
+            logger.error(f"❌ Error assigning role to user: {e}")
+            return False
+
+    async def assign_subject_to_student(self, user_id: int, subject_id: str, class_num: int = None,
+                                        attention_need: int = 3, balance: float = 0.0, tariff: float = 0.0) -> bool:
+        """Назначает предмет ученику"""
+        return await self.save_student(user_id, subject_id, class_num, attention_need, balance, tariff)
+
+    async def assign_subject_to_teacher(self, user_id: int, subject_id: str, priority: str = None) -> bool:
+        """Назначает предмет преподавателю"""
+        return await self.save_teacher(user_id, subject_id, priority)
+
+    async def remove_role_from_user(self, user_id: int, role: str) -> bool:
+        """Удаляет роль у пользователя"""
+        try:
+            async with self.pool.acquire() as conn:
+                user = await self.get_user(user_id)
+
+                if user and user.get('roles'):
+                    current_roles = user['roles']
+                    roles_list = [r.strip() for r in current_roles.split(',') if r.strip()]
+
+                    if role in roles_list:
+                        roles_list.remove(role)
+                        new_roles = ','.join(roles_list) if roles_list else ''
+
+                        await conn.execute(
+                            "UPDATE users SET roles = $1, updated_at = CURRENT_TIMESTAMP WHERE user_id = $2",
+                            new_roles, user_id
+                        )
+
+                        # Удаляем связанные данные в зависимости от роли
+                        if role == 'teacher':
+                            await conn.execute("DELETE FROM teachers WHERE user_id = $1", user_id)
+                        elif role == 'student':
+                            await conn.execute("DELETE FROM students WHERE user_id = $1", user_id)
+
+                        logger.info(f"✅ Role '{role}' removed from user {user_id}")
+                        return True
+                return False
+        except Exception as e:
+            logger.error(f"❌ Error removing role from user: {e}")
+            return False
+
+    async def get_users_without_roles(self) -> List[Dict[str, Any]]:
+        """Получает пользователей без назначенных ролей"""
+        try:
+            async with self.pool.acquire() as conn:
+                users = await conn.fetch("""
+                    SELECT user_id, user_name, created_at 
+                    FROM users 
+                    WHERE roles IS NULL OR roles = ''
+                    ORDER BY created_at DESC
+                """)
+
+                return [dict(user) for user in users]
+        except Exception as e:
+            logger.error(f"❌ Error getting users without roles: {e}")
+            return []
+
+    async def get_users_by_role(self, role: str) -> List[Dict[str, Any]]:
+        """Получает пользователей с определенной ролью"""
+        try:
+            async with self.pool.acquire() as conn:
+                users = await conn.fetch("""
+                    SELECT u.user_id, u.user_name, u.created_at,
+                           CASE 
+                             WHEN $1 = 'student' THEN COALESCE(array_agg(s.subject_id), '{}')
+                             WHEN $1 = 'teacher' THEN COALESCE(array_agg(t.subject_id), '{}')
+                             ELSE '{}'
+                           END as subjects
+                    FROM users u
+                    LEFT JOIN students s ON u.user_id = s.user_id AND $1 = 'student'
+                    LEFT JOIN teachers t ON u.user_id = t.user_id AND $1 = 'teacher'
+                    WHERE u.roles LIKE '%' || $1 || '%'
+                    GROUP BY u.user_id, u.user_name, u.created_at
+                    ORDER BY u.user_name
+                """, role)
+
+                result = []
+                for user in users:
+                    user_dict = dict(user)
+                    user_dict['subjects'] = list(user_dict['subjects'])
+                    result.append(user_dict)
+
+                return result
+        except Exception as e:
+            logger.error(f"❌ Error getting users by role: {e}")
+            return []
 
 # Глобальный экземпляр базы данных
 db = DatabaseManager()

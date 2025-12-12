@@ -1,12 +1,13 @@
-# menu_handlers.py
+# menu_handlers.py - УПРОЩЕННАЯ ВЕРСИЯ
 from aiogram import types, F
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.utils.keyboard import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.utils.keyboard import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardBuilder
 import logging
-from config import is_admin
+from config import is_admin, ADMIN_IDS, SUBJECTS
 from states import BookingStates
-import logging
+from datetime import datetime
+from database import db
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,61 @@ no_roles_menu = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True
 )
+
+
+async def notify_admins_about_registration(bot, user_id: int, user_name: str):
+    """Отправляет уведомление администраторам о новой заявке"""
+    try:
+        # Создаем клавиатуру для быстрого ответа
+        keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+            [
+                types.InlineKeyboardButton(
+                    text="👨‍🎓 Назначить учеником",
+                    callback_data=f"admin_quick_approve_student_{user_id}"
+                )
+            ],
+            [
+                types.InlineKeyboardButton(
+                    text="👨‍🏫 Назначить преподавателем",
+                    callback_data=f"admin_quick_approve_teacher_{user_id}"
+                )
+            ],
+            [
+                types.InlineKeyboardButton(
+                    text="👨‍👩‍👧‍👦 Назначить родителем",
+                    callback_data=f"admin_quick_approve_parent_{user_id}"
+                )
+            ],
+            [
+                types.InlineKeyboardButton(
+                    text="❌ Отклонить",
+                    callback_data=f"admin_quick_reject_{user_id}"
+                )
+            ]
+        ])
+
+        message_text = (
+            "🆕 *Новая заявка на регистрацию*\n\n"
+            f"👤 Пользователь: {user_name}\n"
+            f"🆔 ID: {user_id}\n"
+            f"📅 Время: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+        )
+
+        # Отправляем всем администраторам
+        for admin_id in ADMIN_IDS:
+            try:
+                await bot.send_message(
+                    admin_id,
+                    message_text,
+                    parse_mode="Markdown",
+                    reply_markup=keyboard
+                )
+                logger.info(f"✅ Notification sent to admin {admin_id}")
+            except Exception as e:
+                logger.error(f"Error notifying admin {admin_id}: {e}")
+
+    except Exception as e:
+        logger.error(f"Error in notify_admins_about_registration: {e}")
 
 
 async def generate_main_menu(user_id: int, storage) -> ReplyKeyboardMarkup:
@@ -39,7 +95,7 @@ async def generate_main_menu(user_id: int, storage) -> ReplyKeyboardMarkup:
     # ДОБАВЬТЕ эту кнопку - возможность пополнения баланса
     if 'student' in roles or 'parent' in roles:
         keyboard_buttons.append([KeyboardButton(text="💰 Финансы")])
-        keyboard_buttons.append([KeyboardButton(text="💳 Пополнить баланс")])  # НОВАЯ КНОПКА
+        keyboard_buttons.append([KeyboardButton(text="💳 Пополнить баланс")])
 
     keyboard_buttons.append([KeyboardButton(text="📋 Мои бронирования")])
     keyboard_buttons.append([KeyboardButton(text="📚 Прошедшие бронирования")])
@@ -53,52 +109,214 @@ async def generate_main_menu(user_id: int, storage) -> ReplyKeyboardMarkup:
 
     return ReplyKeyboardMarkup(keyboard=keyboard_buttons, resize_keyboard=True)
 
+
 async def cmd_start(message: types.Message, state: FSMContext, storage):
     """Обработчик команды /start"""
     user_id = message.from_user.id
-    user_name = storage.get_user_name(user_id)
+    user_name = message.from_user.full_name
 
-    menu = await generate_main_menu(user_id, storage)
+    logger.info(f"User {user_id} ({user_name}) started the bot")
 
-    if user_name:
+    # Проверяем статус регистрации через БД
+    try:
+        # Используем синхронную обертку для совместимости
+        reg_status = storage.get_user_registration_status_sync(user_id)
+    except Exception as e:
+        logger.error(f"Error getting registration status: {e}")
+        reg_status = {'has_request': False, 'status': 'no_request'}
+
+    logger.info(f"Registration status for {user_id}: {reg_status}")
+
+    if reg_status.get('status') == 'approved':
+        # Пользователь одобрен
+        menu = await generate_main_menu(user_id, storage)
+
+        # Получаем сохраненное имя пользователя из storage
+        saved_name = storage.get_user_name(user_id)
+        display_name = saved_name if saved_name else user_name
+
         await message.answer(
-            f"С возвращением, {user_name}!\n"
-            "Используйте кнопки ниже для навигации:",
+            f"👋 Добро пожаловать, {display_name}!\n\n"
+            "Ваш аккаунт подтвержден администратором.\n"
+            "Вы можете пользоваться всеми функциями бота.",
             reply_markup=menu
         )
-    else:
+
+        # Сохраняем имя пользователя, если еще не сохранено
+        if not saved_name:
+            storage.save_user_name(user_id, display_name)
+
+    elif reg_status.get('status') == 'pending':
+        # Заявка на рассмотрении
         await message.answer(
-            "Добро пожаловать в систему бронирования!\n"
-            "Введите ваши имя и фамилию для регистрации:",
-            reply_markup=types.ReplyKeyboardRemove()
+            f"⏳ Ваша заявка находится на рассмотрении.\n\n"
+            f"Имя: {user_name}\n"
+            f"ID: {user_id}\n\n"
+            "Ожидайте решения администратора. Вы получите уведомление.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+
+    elif reg_status.get('status') == 'rejected':
+        # Заявка отклонена
+        notes = reg_status.get('notes', '')
+        await message.answer(
+            f"❌ Ваша заявка отклонена.\n\n"
+            f"📝 Причина: {notes if notes else 'Не указана'}\n\n"
+            "Свяжитесь с администратором:\n"
+            f"📞 +79001372727",
+            reply_markup=ReplyKeyboardRemove()
+        )
+
+    else:
+        # Нет заявки, создаем новую
+        await message.answer(
+            f"👋 Привет, {user_name}!\n\n"
+            "Добро пожаловать в систему записи на занятия!\n\n"
+            "Для использования бота требуется регистрация.\n\n"
+            "Введите ваше полное ФИО (как в паспорте):"
         )
         await state.set_state(BookingStates.INPUT_NAME)
+
+
+async def process_name_registration(message: types.Message, state: FSMContext, storage, bot):
+    """Обрабатывает ввод ФИО при регистрации"""
+    try:
+        user_id = message.from_user.id
+        user_name = message.text.strip()
+
+        if len(user_name.split()) < 2:
+            await message.answer("❌ Введите полное ФИО (минимум имя и фамилия):")
+            return
+
+        # Сохраняем имя в storage
+        storage.save_user_name(user_id, user_name)
+
+        # Создаем заявку на регистрацию через БД
+        try:
+            request_id = await db.create_registration_request(user_id, user_name)
+            logger.info(f"Registration request created: {request_id}")
+        except Exception as e:
+            logger.error(f"Error creating registration request: {e}")
+            await message.answer("❌ Ошибка при создании заявки.")
+            await state.clear()
+            return
+
+        # Уведомляем администраторов
+        await notify_admins_about_registration(bot, user_id, user_name)
+
+        await message.answer(
+            f"✅ Спасибо, {user_name}!\n\n"
+            "📨 Ваша заявка отправлена администратору.\n\n"
+            "Что дальше:\n"
+            "1. Администратор рассмотрит заявку\n"
+            "2. Вам назначат роль и предметы\n"
+            "3. Вы получите уведомление\n\n"
+            "⏳ Обычно это занимает несколько часов.\n"
+            "📞 Контакт: +79001372727",
+            reply_markup=ReplyKeyboardRemove()
+        )
+
+        await state.clear()
+
+    except Exception as e:
+        logger.error(f"Error in process_name_registration: {e}")
+        await message.answer("❌ Ошибка. Попробуйте еще раз.")
+        await state.clear()
+
+
+async def process_name_booking(message: types.Message, state: FSMContext, storage):
+    """Обрабатывает ввод ФИО при бронировании (когда уже есть роли)"""
+    try:
+        user_id = message.from_user.id
+        user_name = message.text.strip()
+
+        if len(user_name.split()) < 2:
+            await message.answer("❌ Введите полное ФИО (минимум имя и фамилия):")
+            return
+
+        # Сохраняем имя в storage
+        storage.save_user_name(user_id, user_name)
+        await state.update_data(user_name=user_name)
+
+        # Проверяем роли
+        if storage.has_user_roles(user_id):
+            user_roles = storage.get_user_roles(user_id)
+            builder = InlineKeyboardBuilder()
+            if 'teacher' in user_roles:
+                builder.button(text="👨‍🏫 Как преподаватель", callback_data="role_teacher")
+            if 'student' in user_roles:
+                builder.button(text="👨‍🎓 Как ученик", callback_data="role_student")
+            if 'parent' in user_roles:
+                builder.button(text="👨‍👩‍👧‍👦 Как родитель", callback_data="role_parent")
+
+            await message.answer(
+                "Выберите роль для бронирования:",
+                reply_markup=builder.as_markup()
+            )
+            await state.set_state(BookingStates.SELECT_ROLE)
+        else:
+            await message.answer(
+                "✅ ФИО сохранено!\n"
+                "⏳ Обратитесь к администратору для получения ролей.\n"
+                f"📞 Телефон: +79001372727",
+                reply_markup=await generate_main_menu(user_id, storage)
+            )
+            await state.clear()
+
+    except Exception as e:
+        logger.error(f"Error in process_name_booking: {e}")
+        await message.answer("❌ Ошибка. Попробуйте еще раз.")
+        await state.clear()
+
 
 async def check_roles(message: types.Message, state: FSMContext, storage):
     """Обработчик кнопки проверки ролей - выполняет команду /start"""
     await cmd_start(message, state, storage)
 
+
 async def show_my_role(message: types.Message, storage):
     """Показывает роли пользователя"""
-    roles = storage.get_user_roles(message.from_user.id)
-    logger.info("Найденные роли: " + ",".join(role for role in roles))
-    logger.info("ID для поиска: " + str(message.from_user.id))
+    user_id = message.from_user.id
+
+    # Проверяем статус регистрации через БД
+    try:
+        reg_status = await db.get_user_registration_status(user_id)
+    except Exception as e:
+        logger.error(f"Error getting registration status: {e}")
+        reg_status = {'has_request': False, 'status': 'no_request'}
+
+    if reg_status.get('status') == 'pending':
+        await message.answer("⏳ Ваша заявка на регистрацию находится на рассмотрении.")
+        return
+    elif reg_status.get('status') == 'rejected':
+        notes = reg_status.get('notes', '')
+        await message.answer(f"❌ Ваша заявка отклонена. Причина: {notes}")
+        return
+    elif reg_status.get('status') != 'approved':
+        await message.answer("⚠️ Вы не зарегистрированы. Нажмите /start для регистрации.")
+        return
+
+    # Получаем роли из storage
+    roles = storage.get_user_roles(user_id)
 
     if roles:
         role_translations = {
             "teacher": "преподаватель",
             "student": "ученик",
-            "parent": "родитель"
+            "parent": "родитель",
+            "admin": "администратор"
         }
         role_text = ", ".join([role_translations.get(role, role) for role in roles])
-        await message.answer(f"Ваши роли: {role_text}")
+        await message.answer(f"✅ Ваши роли: {role_text}")
     else:
         await message.answer(
             "Ваши роли еще не назначены. Обратитесь к администратору. \n Телефон администратора: +79001372727")
 
+
 async def show_help(message: types.Message):
     """Показывает справку"""
     await cmd_help(message)
+
 
 async def cmd_help(message: types.Message):
     """Обработчик команды /help"""
@@ -110,8 +328,10 @@ async def cmd_help(message: types.Message):
         "/help - показать эту справку\n"
         "/book - забронировать время\n"
         "/my_bookings - посмотреть свои бронирования\n"
-        "/my_role - узнать свою роль"
+        "/my_role - узнать свою роль\n"
+        "/my_status - проверить статус регистрации"
     )
+
 
 async def contact_admin(message: types.Message):
     """Обработчик обращения к администратору"""
@@ -120,6 +340,7 @@ async def contact_admin(message: types.Message):
         "обратитесь к администратору \n Телефон администратора: +79001372727.\n\n"
         "После назначения ролей вы сможете пользоваться всеми функциями бота."
     )
+
 
 # Создаем обертки для обработчиков, которые требуют booking_manager
 def create_bookings_handler(booking_manager):
@@ -131,8 +352,10 @@ def create_bookings_handler(booking_manager):
             return
 
         await message.answer("Ваши бронирования (отсортированы по дате и времени):",
-                            reply_markup=keyboard.as_markup() if hasattr(keyboard, 'as_markup') else keyboard)
+                             reply_markup=keyboard.as_markup() if hasattr(keyboard, 'as_markup') else keyboard)
+
     return show_bookings_handler
+
 
 def create_past_bookings_handler(booking_manager):
     async def show_past_bookings_handler(message: types.Message):
@@ -143,8 +366,10 @@ def create_past_bookings_handler(booking_manager):
             return
 
         await message.answer("📚 Ваши прошедшие бронирования:",
-                            reply_markup=keyboard.as_markup() if hasattr(keyboard, 'as_markup') else keyboard)
+                             reply_markup=keyboard.as_markup() if hasattr(keyboard, 'as_markup') else keyboard)
+
     return show_past_bookings_handler
+
 
 async def back_to_menu_handler(callback: types.CallbackQuery, storage):
     """Обработчик возврата в главное меню"""
@@ -161,6 +386,7 @@ async def back_to_menu_handler(callback: types.CallbackQuery, storage):
     )
     await callback.answer()
 
+
 # Создаем обертки для callback обработчиков, которые требуют booking_manager
 def create_back_to_bookings_handler(booking_manager):
     async def back_to_bookings_handler(callback: types.CallbackQuery):
@@ -170,12 +396,14 @@ def create_back_to_bookings_handler(booking_manager):
         if keyboard:
             await callback.message.edit_text(
                 "Ваши бронирования:",
-                reply_markup=keyboard.as_markup()  # Add .as_markup() here
+                reply_markup=keyboard.as_markup()
             )
         else:
             await callback.message.edit_text("У вас нет активных бронирований")
         await callback.answer()
+
     return back_to_bookings_handler
+
 
 def create_back_to_past_bookings_handler(booking_manager):
     async def back_to_past_bookings_handler(callback: types.CallbackQuery):
@@ -186,12 +414,14 @@ def create_back_to_past_bookings_handler(booking_manager):
         if keyboard:
             await callback.message.edit_text(
                 "📚 Ваши прошедшие бронирования:",
-                reply_markup=keyboard.as_markup()  # Add .as_markup() here
+                reply_markup=keyboard.as_markup()
             )
         else:
             await callback.message.edit_text("У вас нет прошедших бронирований")
             await callback.answer()
+
     return back_to_past_bookings_handler
+
 
 async def back_to_menu_from_past_handler(callback: types.CallbackQuery, storage):
     """Обработчик возврата в меню из раздела прошедших бронирований"""
@@ -208,8 +438,9 @@ async def back_to_menu_from_past_handler(callback: types.CallbackQuery, storage)
     )
     await callback.answer()
 
+
 # Функция для регистрации обработчиков в диспетчере
-def register_menu_handlers(dp, booking_manager, storage):
+def register_menu_handlers(dp, booking_manager, storage, bot):
     """Регистрирует все обработчики меню в диспетчере"""
 
     # Создаем обработчики с booking_manager
@@ -221,6 +452,12 @@ def register_menu_handlers(dp, booking_manager, storage):
     # Создаем обертки для обработчиков, которым нужен storage
     async def wrapped_cmd_start(message: types.Message, state: FSMContext):
         return await cmd_start(message, state, storage)
+
+    async def wrapped_process_name_registration(message: types.Message, state: FSMContext):
+        return await process_name_registration(message, state, storage, bot)
+
+    async def wrapped_process_name_booking(message: types.Message, state: FSMContext):
+        return await process_name_booking(message, state, storage)
 
     async def wrapped_check_roles(message: types.Message, state: FSMContext):
         return await check_roles(message, state, storage)
@@ -248,6 +485,16 @@ def register_menu_handlers(dp, booking_manager, storage):
     dp.message.register(show_bookings_handler, F.text == "📋 Мои бронирования")
     dp.message.register(show_past_bookings_handler, F.text == "📚 Прошедшие бронирования")
 
+    # Обработчик ввода имени - ОБРАБАТЫВАЕТ ОБА СЛУЧАЯ
+    dp.message.register(
+        lambda message, state: (
+            wrapped_process_name_registration(message, state)
+            if not storage.has_user_roles(message.from_user.id)
+            else wrapped_process_name_booking(message, state)
+        ),
+        BookingStates.INPUT_NAME
+    )
+
     # Callback обработчики навигации
     dp.callback_query.register(
         wrapped_back_to_menu_handler,
@@ -266,8 +513,8 @@ def register_menu_handlers(dp, booking_manager, storage):
         F.data == "back_to_menu_from_past"
     )
 
+
 async def cmd_pay(message: types.Message, state: FSMContext):
     """Обработчик команды оплаты"""
     from payment_handlers import PaymentHandlers
     await PaymentHandlers.handle_payment_start(message, state)
-
