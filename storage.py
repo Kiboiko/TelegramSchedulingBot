@@ -377,28 +377,6 @@ class JSONStorage:
             return self.gsheets.has_user_roles(user_id)
         return False
 
-    # storage.py - добавьте методы
-
-    async def create_registration_request(self, user_id: int, user_name: str) -> bool:
-        """Создает заявку на регистрацию"""
-        if self.db and self.db.pool:
-            try:
-                # Прямой вызов через await, без создания новых event loops
-                result = await self.db.create_registration_request(user_id, user_name)
-                return result is not None
-            except Exception as e:
-                logger.error(f"Error creating registration request: {e}")
-                return False
-        return False
-
-    async def get_user_registration_status(self, user_id: int) -> Dict[str, Any]:
-        """Получает статус регистрации (АСИНХРОННАЯ версия)"""
-        if self.db and self.db.pool:
-            try:
-                return await self.db.get_user_registration_status(user_id)
-            except Exception as e:
-                logger.error(f"Error getting registration status: {e}")
-        return {'has_request': False, 'status': 'no_request'}
     def save_user_name(self, user_id: int, user_name: str) -> bool:
         """Сохраняет ФИО пользователя"""
         if self.db and self.db.pool:
@@ -416,25 +394,12 @@ class JSONStorage:
                         loop.close()
             except Exception as e:
                 logger.error(f"Error saving user name to DB: {e}")
-
+        
         # Fallback на Google Sheets
         if hasattr(self, 'gsheets') and self.gsheets:
             return self.gsheets.save_user_info(user_id, user_name)
         return False
 
-    def get_user_registration_status_sync(self, user_id: int) -> Dict[str, Any]:
-        """Синхронная обертка для получения статуса регистрации"""
-        try:
-            import asyncio
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                return loop.run_until_complete(self.get_user_registration_status(user_id))
-            finally:
-                loop.close()
-        except Exception as e:
-            logger.error(f"Error in sync wrapper: {e}")
-            return {'has_request': False, 'status': 'error'}
     def save_user_data(self, user_data: dict) -> bool:
         """Сохраняет данные пользователя в БД"""
         if self.db and self.db.pool:

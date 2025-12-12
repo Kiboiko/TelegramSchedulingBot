@@ -23,16 +23,3 @@ class FinanceStates(StatesGroup):
 class PaymentStates(StatesGroup):
     WAITING_PAYMENT = State()
     CONFIRMING_PAYMENT = State()
-
-class AdminAssignStates(StatesGroup):
-    SELECT_ROLE = State()
-    SELECT_SUBJECTS = State()
-    CONFIRM = State()
-    WAITING_CLASS = State()  # Для учеников
-    WAITING_PRIORITY = State()  # Для преподавателей
-
-class AdminRegistrationStates(StatesGroup):
-    SELECT_ROLE = State()
-    SELECT_SUBJECTS = State()
-    WAITING_CLASS = State()  # Для ученика
-    WAITING_NOTES = State()

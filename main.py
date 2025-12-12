@@ -38,7 +38,6 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
 import threading
 from gsheets_manager import GoogleSheetsManager
 from storage import JSONStorage
@@ -61,7 +60,7 @@ from calendar_utils import generate_calendar,get_time_range_for_date
 from time_utils import generate_time_range_keyboard_with_availability,calculate_lesson_duration
 from datetime import datetime
 from aiogram.fsm.state import State, StatesGroup
-from states import BookingStates, FinanceStates, PaymentStates, AdminAssignStates, AdminRegistrationStates
+from states import BookingStates, FinanceStates
 from teacher_reminder import TeacherReminderManager
 from booking_history_manager import BookingHistoryManager
 from menu_handlers import (
@@ -110,40 +109,6 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 storage = JSONStorage(file_path=BOOKINGS_FILE)
 
-
-async def notify_admins_about_registration(user_id: int, user_name: str):
-    """Отправляет уведомление администраторам о новой заявке"""
-    try:
-        # Создаем клавиатуру для быстрого ответа
-        keyboard = InlineKeyboardBuilder()
-        keyboard.button(text="👨‍🎓 Назначить учеником", callback_data=f"admin_quick_approve_student_{user_id}")
-        keyboard.button(text="👨‍🏫 Назначить преподавателем", callback_data=f"admin_quick_approve_teacher_{user_id}")
-        keyboard.button(text="👨‍👩‍👧‍👦 Назначить родителем", callback_data=f"admin_quick_approve_parent_{user_id}")
-        keyboard.button(text="❌ Отклонить", callback_data=f"admin_quick_reject_{user_id}")
-        keyboard.adjust(1)
-
-        message_text = (
-            "🆕 *Новая заявка на регистрацию*\n\n"
-            f"👤 Пользователь: {user_name}\n"
-            f"🆔 ID: {user_id}\n"
-            f"📅 Время: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
-        )
-
-        # Отправляем всем администраторам
-        for admin_id in ADMIN_IDS:
-            try:
-                await bot.send_message(
-                    admin_id,
-                    message_text,
-                    parse_mode="Markdown",
-                    reply_markup=keyboard.as_markup()
-                )
-            except Exception as e:
-                logger.error(f"Error notifying admin {admin_id}: {e}")
-
-    except Exception as e:
-        logger.error(f"Error in notify_admins_about_registration: {e}")
-
 # Настройка базы данных PostgreSQL
 try:
     from database import db
@@ -188,81 +153,36 @@ except Exception as e:
         def create_combined_materials_document(self, target_date):
             return "Сервис генерации материалов временно недоступен"
     materials_manager = DummyMaterialsManager()
-
-
 class RoleCheckMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
-        # Пропускаем команды /start, /help, /my_status
-        if isinstance(event, Message):
-            if event.text in ['/start', '/help', '/my_status']:
+        # Пропускаем команду /start, /help и ввод имени
+        if isinstance(event, Message) and event.text == '/start':
+            return await handler(event, data)
+
+            current_state = await data['state'].get_state() if data.get('state') else None
+            if current_state == BookingStates.INPUT_NAME:
                 return await handler(event, data)
 
-        # Получаем user_id
+        # Получаем user_id в зависимости от типа события
         if isinstance(event, Message):
             user_id = event.from_user.id
         elif isinstance(event, CallbackQuery):
             user_id = event.from_user.id
         else:
+            # Для других типов событий пропускаем проверку
             return await handler(event, data)
 
-        # Проверяем статус регистрации
-        reg_status = storage.get_user_registration_status(user_id)
-
-        if reg_status.get('status') == 'pending':
-            if isinstance(event, Message):
-                await event.answer(
-                    "⏳ Ваша заявка находится на рассмотрении.\n"
-                    "Ожидайте решения администратора.\n\n"
-                    f"📞 Контакт: +79001372727",
-                    reply_markup=ReplyKeyboardRemove()
-                )
-            elif isinstance(event, CallbackQuery):
-                await event.answer(
-                    "⏳ Ваша заявка на рассмотрении",
-                    show_alert=True
-                )
-            return
-
-        elif reg_status.get('status') == 'rejected':
-            if isinstance(event, Message):
-                await event.answer(
-                    "❌ Ваша заявка отклонена.\n"
-                    "Обратитесь к администратору.\n\n"
-                    f"📞 Контакт: +79001372727",
-                    reply_markup=ReplyKeyboardRemove()
-                )
-            elif isinstance(event, CallbackQuery):
-                await event.answer(
-                    "❌ Ваша заявка отклонена",
-                    show_alert=True
-                )
-            return
-
-        elif reg_status.get('status') != 'approved':
-            if isinstance(event, Message):
-                await event.answer(
-                    "⚠️ Вы не зарегистрированы.\n"
-                    "Нажмите /start для регистрации."
-                )
-            elif isinstance(event, CallbackQuery):
-                await event.answer(
-                    "⚠️ Вы не зарегистрированы",
-                    show_alert=True
-                )
-            return
-
-        # Проверяем наличие ролей
+        # Проверяем роли для всех остальных сообщений
         if not storage.has_user_roles(user_id):
             if isinstance(event, Message):
                 await event.answer(
-                    "⏳ Роли еще не назначены.\n"
-                    "Обратитесь к администратору.\n\n"
-                    f"📞 Контакт: +79001372727",
+                    "⏳ Ваш аккаунт находится на проверке.\n"
+                    "Обратитесь к администратору для получения доступа.\n Телефон администратора: +79001372727",
                     reply_markup=ReplyKeyboardRemove()
                 )
             elif isinstance(event, CallbackQuery):
                 await event.answer(
-                    "⏳ Роли еще не назначены",
+                    "⏳ Обратитесь к администратору для получения доступа \n Телефон администратора: +79001372727",
                     show_alert=True
                 )
             return
@@ -274,7 +194,7 @@ class RoleCheckMiddleware(BaseMiddleware):
 dp.update.middleware(RoleCheckMiddleware())
 booking_manager = BookingManager(storage, gsheets)
 background_tasks = BackgroundTasks(storage, gsheets, feedback_manager, feedback_teacher_manager, bot)
-register_menu_handlers(dp, booking_manager, storage, bot)
+register_menu_handlers(dp, booking_manager, storage)
 booking_history = BookingHistoryManager("booking_history.json")
 
 
@@ -843,92 +763,6 @@ async def handle_teacher_feedback_text_input(message: types.Message, state: FSMC
         logger.error(f"Ошибка обработки текста feedback преподавателя: {e}")
         await message.answer("Произошла ошибка, попробуйте еще раз")
 
-
-@dp.callback_query(F.data.startswith("admin_quick_approve_"))
-async def admin_quick_approve(callback: types.CallbackQuery, state: FSMContext):
-    """Быстрое одобрение заявки администратором"""
-    admin_id = callback.from_user.id
-    if not is_admin(admin_id):
-        await callback.answer("❌ Недостаточно прав", show_alert=True)
-        return
-
-    try:
-        # Парсим данные из callback
-        parts = callback.data.split("_")
-        role = parts[3]  # student, teacher или parent
-        user_id = int(parts[4])
-
-        # Получаем имя пользователя
-        user_name = storage.get_user_name(user_id) or f"Пользователь {user_id}"
-
-        if role in ['student', 'teacher']:
-            # Для ученика и преподавателя нужны предметы
-            await state.set_state(AdminRegistrationStates.SELECT_SUBJECTS)
-            await state.update_data(
-                admin_id=admin_id,
-                target_user_id=user_id,
-                target_user_name=user_name,
-                target_role=role,
-                selected_subjects=[]
-            )
-
-            # Показываем выбор предметов
-            from aiogram.utils.keyboard import InlineKeyboardBuilder
-            kb = InlineKeyboardBuilder()
-
-            for subj_id, subj_name in SUBJECTS.items():
-                kb.button(text=subj_name, callback_data=f"admin_select_subject_{subj_id}")
-
-            kb.button(text="✅ Без предметов", callback_data="admin_no_subjects")
-            kb.button(text="❌ Отмена", callback_data="admin_cancel_approval")
-            kb.adjust(2)
-
-            role_text = "ученика" if role == 'student' else "преподавателя"
-            await callback.message.edit_text(
-                f"📋 Назначение {role_text}\n\n"
-                f"👤 Пользователь: {user_name}\n"
-                f"🆔 ID: {user_id}\n\n"
-                "Выберите предметы:",
-                reply_markup=kb.as_markup()
-            )
-
-        else:
-            # Для родителя сразу одобряем
-            success = await db.approve_registration_request(
-                user_id=user_id,
-                admin_id=admin_id,
-                role='parent',
-                subject_ids=[],
-                notes="Быстрое одобрение"
-            )
-
-            if success:
-                await callback.message.edit_text(
-                    f"✅ Родитель назначен\n\n"
-                    f"👤 Пользователь: {user_name}\n"
-                    f"🆔 ID: {user_id}"
-                )
-
-                # Уведомляем пользователя
-                try:
-                    await bot.send_message(
-                        user_id,
-                        f"✅ Ваша заявка одобрена!\n\n"
-                        f"Вам назначена роль: Родитель\n\n"
-                        f"Теперь вы можете записывать детей на занятия.\n"
-                        f"Нажмите /start для начала работы."
-                    )
-                except Exception as e:
-                    logger.error(f"Error notifying user: {e}")
-
-        await callback.answer()
-
-    except Exception as e:
-        logger.error(f"Error in admin_quick_approve: {e}")
-        await callback.answer("❌ Ошибка", show_alert=True)
-
-
-
 @dp.callback_query(BookingStates.SELECT_TIME_RANGE, F.data == "select_end_mode")
 async def select_end_mode_handler(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -1393,362 +1227,41 @@ async def handle_waiting_receipt_text(message: types.Message):
         "• Отправьте его в этот чат"
     )
 
-
-@dp.callback_query(F.data.startswith("admin_select_subject_"))
-async def admin_select_subject(callback: types.CallbackQuery, state: FSMContext):
-    """Обрабатывает выбор предмета"""
-    try:
-        subject_id = callback.data.replace("admin_select_subject_", "")
-
-        # Получаем текущий список выбранных предметов
-        data = await state.get_data()
-        selected_subjects = data.get('selected_subjects', [])
-
-        if subject_id not in selected_subjects:
-            selected_subjects.append(subject_id)
-
-        await state.update_data(selected_subjects=selected_subjects)
-
-        # Обновляем сообщение
-        data = await state.get_data()
-        user_name = data['target_user_name']
-        role = data['target_role']
-        selected = data.get('selected_subjects', [])
-
-        # Создаем обновленную клавиатуру
-        kb = InlineKeyboardBuilder()
-
-        # Кнопки предметов
-        for subj_id, subj_name in SUBJECTS.items():
-            prefix = "✅ " if subj_id in selected else ""
-            kb.button(text=f"{prefix}{subj_name}", callback_data=f"admin_select_subject_{subj_id}")
-
-        # Управляющие кнопки
-        kb.button(text="➡️ Далее", callback_data="admin_subjects_done")
-        kb.button(text="❌ Отмена", callback_data="admin_cancel_approval")
-        kb.adjust(2)
-
-        selected_text = ", ".join([SUBJECTS.get(s, s) for s in selected]) if selected else "не выбраны"
-
-        role_text = "ученика" if role == 'student' else "преподавателя"
-        await callback.message.edit_text(
-            f"📋 Назначение {role_text}\n\n"
-            f"👤 Пользователь: {user_name}\n"
-            f"📚 Выбрано: {selected_text}\n\n"
-            "Выберите предметы:",
-            reply_markup=kb.as_markup()
-        )
-
-        await callback.answer()
-
-    except Exception as e:
-        logger.error(f"Error in admin_select_subject: {e}")
-        await callback.answer("❌ Ошибка", show_alert=True)
-
-
-@dp.message(Command("my_status"))
-async def my_status_command(message: types.Message):
-    """Показывает статус пользователя"""
+@dp.message(BookingStates.INPUT_NAME)
+async def process_name(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
-    user_name = storage.get_user_name(user_id)
+    user_name = message.text.strip()
 
-    # Получаем статус регистрации
-    reg_status = storage.get_user_registration_status(user_id)
+    if len(user_name.split()) < 2:
+        await message.answer("Пожалуйста, введите полное ФИО (минимум имя и фамилию)")
+        return
 
-    response = f"👤 *Ваш профиль*\n\n"
-    response += f"Имя: {user_name or 'Не указано'}\n"
-    response += f"ID: {user_id}\n\n"
+    # Сохраняем имя
+    storage.save_user_name(user_id, user_name)
+    await state.update_data(user_name=user_name)
 
-    if reg_status.get('status') == 'approved':
-        response += "✅ *Статус:* Зарегистрирован\n\n"
-
-        # Показываем роли
-        roles = storage.get_user_roles(user_id)
-        if roles:
-            role_names = {
-                'student': '👨‍🎓 Ученик',
-                'teacher': '👨‍🏫 Преподаватель',
-                'parent': '👨‍👩‍👧‍👦 Родитель',
-                'admin': '🏢 Администратор'
-            }
-
-            response += "🎭 *Роли:*\n"
-            for role in roles:
-                response += f"  • {role_names.get(role, role)}\n"
-        else:
-            response += "⚠️ Роли еще не назначены\n"
-
-    elif reg_status.get('status') == 'pending':
-        response += "⏳ *Статус:* Заявка на рассмотрении\n"
-        if reg_status.get('requested_at'):
-            response += f"📅 Подана: {reg_status['requested_at'].strftime('%d.%m.%Y %H:%M')}\n"
-        response += "\nОжидайте решения администратора."
-
-    elif reg_status.get('status') == 'rejected':
-        response += "❌ *Статус:* Заявка отклонена\n"
-        notes = reg_status.get('notes', 'Не указана')
-        response += f"📝 Причина: {notes}\n\n"
-        response += "Свяжитесь с администратором."
-
-    else:
-        response += "⚠️ *Статус:* Не зарегистрирован\n\n"
-        response += "Нажмите /start для регистрации."
-
-    await message.answer(response, parse_mode="Markdown")
-
-
-@dp.callback_query(F.data == "admin_subjects_done")
-async def admin_subjects_done(callback: types.CallbackQuery, state: FSMContext):
-    """Завершение выбора предметов"""
-    data = await state.get_data()
-    role = data['target_role']
-
-    if role == 'student':
-        # Для ученика спрашиваем класс
-        await callback.message.edit_text(
-            "🎒 Введите класс ученика (1-11):\n"
-            "Или нажмите /skip для значения по умолчанию (9)"
-        )
-        await state.set_state(AdminRegistrationStates.WAITING_CLASS)
-
-    else:
-        # Для преподавателя спрашиваем комментарий
-        await callback.message.edit_text(
-            "📝 Введите комментарий (опционально):\n"
-            "Нажмите /skip чтобы пропустить"
-        )
-        await state.set_state(AdminRegistrationStates.WAITING_NOTES)
-
-    await callback.answer()
-
-
-@dp.message(AdminRegistrationStates.WAITING_CLASS)
-async def process_admin_student_class(message: types.Message, state: FSMContext):
-    """Обрабатывает ввод класса ученика"""
-    try:
-        class_num = 9  # по умолчанию
-
-        if message.text.strip() != "/skip":
-            class_num = int(message.text.strip())
-            if class_num < 1 or class_num > 11:
-                await message.answer("❌ Класс должен быть от 1 до 11:")
-                return
-
-        await state.update_data(class_num=class_num)
+    # Проверяем, есть ли роли
+    if storage.has_user_roles(user_id):
+        user_roles = storage.get_user_roles(user_id)
+        builder = InlineKeyboardBuilder()
+        if 'teacher' in user_roles:
+            builder.button(text="👨‍🏫 Как преподаватель", callback_data="role_teacher")
+        if 'student' in user_roles:
+            builder.button(text="👨‍🎓 Как ученик", callback_data="role_student")
 
         await message.answer(
-            "📝 Введите комментарий (опционально):\n"
-            "Нажмите /skip чтобы пропустить"
+            "Выберите роль для этого бронирования:",
+            reply_markup=builder.as_markup()
         )
-        await state.set_state(AdminRegistrationStates.WAITING_NOTES)
-
-    except ValueError:
-        await message.answer("❌ Введите число от 1 до 11:")
-
-
-@dp.message(AdminRegistrationStates.WAITING_NOTES)
-async def process_admin_notes(message: types.Message, state: FSMContext):
-    """Обрабатывает комментарий администратора"""
-    notes = message.text.strip() if message.text.strip() != "/skip" else ""
-
-    data = await state.get_data()
-    admin_id = data['admin_id']
-    user_id = data['target_user_id']
-    user_name = data['target_user_name']
-    role = data['target_role']
-    subject_ids = data.get('selected_subjects', [])
-    class_num = data.get('class_num', 9)
-
-    # Одобряем заявку
-    success = await db.approve_registration_request(
-        user_id=user_id,
-        admin_id=admin_id,
-        role=role,
-        subject_ids=subject_ids,
-        notes=notes
-    )
-
-    if success:
-        # Формируем сообщение для администратора
-        role_text = {
-            'student': 'ученик',
-            'teacher': 'преподаватель',
-            'parent': 'родитель'
-        }.get(role, role)
-
-        subject_text = ""
-        if subject_ids:
-            subject_names = [SUBJECTS.get(s, s) for s in subject_ids]
-            subject_text = f"\n📚 Предметы: {', '.join(subject_names)}"
-
-        class_text = f"\n🎒 Класс: {class_num}" if role == 'student' else ""
-
-        await message.answer(
-            f"✅ Заявка одобрена!\n\n"
-            f"👤 Пользователь: {user_name}\n"
-            f"🆔 ID: {user_id}\n"
-            f"🎭 Роль: {role_text}{subject_text}{class_text}\n"
-            f"📝 Комментарий: {notes if notes else 'нет'}"
-        )
-
-        # Уведомляем пользователя
-        try:
-            role_user_text = {
-                'student': 'Ученик',
-                'teacher': 'Преподаватель',
-                'parent': 'Родитель'
-            }.get(role, role)
-
-            user_message = f"✅ Ваша заявка одобрена!\n\nРоль: {role_user_text}"
-
-            if subject_ids:
-                subject_names = [SUBJECTS.get(s, s) for s in subject_ids]
-                user_message += f"\nПредметы: {', '.join(subject_names)}"
-
-            if role == 'student':
-                user_message += f"\nКласс: {class_num}"
-
-            user_message += "\n\nТеперь вы можете пользоваться ботом!\nНажмите /start для начала работы."
-
-            await bot.send_message(user_id, user_message)
-
-        except Exception as e:
-            logger.error(f"Error notifying user: {e}")
-
+        await state.set_state(BookingStates.SELECT_ROLE)
     else:
-        await message.answer("❌ Ошибка при одобрении заявки")
-
-    await state.clear()
-
-
-@dp.callback_query(F.data.startswith("admin_quick_reject_"))
-async def admin_quick_reject(callback: types.CallbackQuery):
-    """Быстрое отклонение заявки"""
-    admin_id = callback.from_user.id
-    if not is_admin(admin_id):
-        await callback.answer("❌ Недостаточно прав", show_alert=True)
-        return
-
-    try:
-        user_id = int(callback.data.replace("admin_quick_reject_", ""))
-        user_name = storage.get_user_name(user_id) or f"Пользователь {user_id}"
-
-        # Отклоняем заявку
-        success = await db.reject_registration_request(
-            user_id=user_id,
-            admin_id=admin_id,
-            notes="Отклонено администратором"
+        await message.answer(
+            "✅ Ваше ФИО сохранено!\n"
+            "⏳ Обратитесь к администратору для получения ролей. \n Телефон администратора: +79001372727",
+            reply_markup=await generate_main_menu(user_id,storage)
         )
+        await state.clear()
 
-        if success:
-            await callback.message.edit_text(
-                f"❌ Заявка отклонена\n\n"
-                f"👤 Пользователь: {user_name}\n"
-                f"🆔 ID: {user_id}"
-            )
-
-            # Уведомляем пользователя
-            try:
-                await bot.send_message(
-                    user_id,
-                    "❌ Ваша заявка отклонена администратором.\n\n"
-                    "Свяжитесь с администратором для уточнения:\n"
-                    "📞 +79001372727"
-                )
-            except Exception as e:
-                logger.error(f"Error notifying user: {e}")
-
-        await callback.answer()
-
-    except Exception as e:
-        logger.error(f"Error in admin_quick_reject: {e}")
-        await callback.answer("❌ Ошибка", show_alert=True)
-
-
-# Команда для просмотра заявок
-@dp.message(Command("admin_pending"))
-async def admin_pending_requests(message: types.Message):
-    """Показывает ожидающие заявки"""
-    if not is_admin(message.from_user.id):
-        await message.answer("❌ Эта команда только для администраторов")
-        return
-
-    try:
-        requests = await db.get_pending_registration_requests()
-
-        if not requests:
-            await message.answer("📭 Нет ожидающих заявок")
-            return
-
-        response = "📋 Ожидающие заявки:\n\n"
-
-        for i, req in enumerate(requests, 1):
-            response += f"{i}. {req['user_name']} (ID: {req['user_id']})\n"
-            response += f"   📅 {req['requested_at'].strftime('%d.%m.%Y %H:%M')}\n\n"
-
-        await message.answer(response)
-
-    except Exception as e:
-        logger.error(f"Error getting pending requests: {e}")
-        await message.answer("❌ Ошибка при получении заявок")
-@dp.message(Command("admin_remove_role_from_user"))
-async def admin_remove_role_from_user(message: types.Message):
-    """Удаляет роль у пользователя"""
-    if not is_admin(message.from_user.id):
-        await message.answer("❌ Эта команда только для администраторов")
-        return
-
-    args = message.text.split()
-    if len(args) != 3:
-        await message.answer("📝 Использование: /admin_remove_role_from_user <user_id> <role>")
-        return
-
-    try:
-        user_id = int(args[1])
-        role = args[2].lower()
-
-        if role not in ['student', 'teacher', 'parent', 'admin']:
-            await message.answer("❌ Неверная роль. Доступные: student, teacher, parent, admin")
-            return
-
-        # Получаем имя пользователя
-        user_name = storage.get_user_name(user_id) or f"ID: {user_id}"
-
-        # Удаляем роль
-        success = await db.remove_role_from_user(user_id, role)
-
-        if success:
-            await message.answer(
-                f"✅ Роль '{role}' удалена у пользователя {user_name} (ID: {user_id})"
-            )
-
-            # Уведомляем пользователя
-            try:
-                role_names = {
-                    'student': 'Ученик',
-                    'teacher': 'Преподаватель',
-                    'parent': 'Родитель',
-                    'admin': 'Администратор'
-                }
-
-                await bot.send_message(
-                    user_id,
-                    f"ℹ️ *Изменение ролей*\n\n"
-                    f"У вас удалена роль: {role_names.get(role, role)}\n\n"
-                    f"Если это ошибка, свяжитесь с администратором:\n"
-                    f"📞 +79001372727",
-                    parse_mode="Markdown"
-                )
-            except Exception as e:
-                logger.error(f"Не удалось уведомить пользователя: {e}")
-        else:
-            await message.answer(f"❌ Не удалось удалить роль '{role}' у пользователя {user_id}")
-
-    except ValueError:
-        await message.answer("❌ Неверный формат ID. Введите число")
-    except Exception as e:
-        logger.error(f"Error removing role: {e}")
-        await message.answer("❌ Ошибка при удалении роли")
 
 # Обработчик команды генерации материалов
 @dp.message(F.text == "📚 Сгенерировать материалы")
@@ -3252,8 +2765,6 @@ async def main():
     try:
         from database import db
         await db.connect()
-        async with db.pool.acquire() as conn:
-            await db._create_tables(conn)
         storage.set_database_manager(db)
         logger.info("✅ PostgreSQL database connected in main()")
     except Exception as e:
@@ -3267,7 +2778,7 @@ async def main():
     tasks = background_tasks.start_all_tasks()
     for task in tasks:
         asyncio.create_task(task)
-    register_menu_handlers(dp, booking_manager, storage, bot)
+
     # Простой запуск бота
     try:
         await dp.start_polling(bot)
