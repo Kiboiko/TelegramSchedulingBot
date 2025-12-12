@@ -50,10 +50,11 @@ class DatabaseManager:
                     FROM information_schema.tables 
                     WHERE table_schema = 'public'
                     AND table_name IN ('content_info', 'content_data', 'payments', 
-                                      'users', 'subjects', 'students', 'teachers', 'bookings')
+                                      'users', 'subjects', 'students', 'teachers', 
+                                      'bookings', 'parent_children')
                 """)
 
-                if len(tables) == 8:
+                if len(tables) == 9:
                     logger.info("✅ All tables exist")
                 else:
                     logger.warning("⚠️ Some tables are missing")
@@ -153,6 +154,17 @@ class DatabaseManager:
                 )
             """)
 
+            # Таблица связи родитель-дети
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS parent_children (
+                    id SERIAL PRIMARY KEY,
+                    parent_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                    child_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(parent_id, child_id)
+                )
+            """)
+
             # Таблица бронирований
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS bookings (
@@ -182,6 +194,8 @@ class DatabaseManager:
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_bookings_user_role ON bookings(user_role)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_students_user_id ON students(user_id)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_teachers_user_id ON teachers(user_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_parent_children_parent ON parent_children(parent_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_parent_children_child ON parent_children(child_id)")
 
             logger.info("✅ Tables created successfully")
 
@@ -767,9 +781,16 @@ class DatabaseManager:
 
     async def get_parent_children_sync(self, parent_id: int) -> List[int]:
         """Получает список ID детей родителя"""
-        # Пока не реализовано в БД, возвращаем пустой список
-        # TODO: Добавить таблицу parent_children если нужно
-        return []
+        try:
+            async with self.pool.acquire() as conn:
+                children = await conn.fetch(
+                    "SELECT child_id FROM parent_children WHERE parent_id = $1",
+                    parent_id
+                )
+                return [c['child_id'] for c in children]
+        except Exception as e:
+            logger.error(f"❌ Error getting parent children: {e}")
+            return []
 
     async def get_child_info_sync(self, child_id: int) -> dict:
         """Получает информацию о ребенке (ученике)"""
@@ -798,8 +819,28 @@ class DatabaseManager:
     async def save_parent_info_sync(self, parent_id: int, parent_name: str, children_ids: List[int] = None) -> bool:
         """Сохраняет информацию о родителе"""
         try:
-            await self.save_or_update_user(parent_id, parent_name, 'parent')
-            # TODO: Сохранить связь родитель-дети, если нужна отдельная таблица
+            # Сохраняем пользователя с ролью parent
+            current_roles = await self.get_user_roles(parent_id)
+            new_roles = set(current_roles)
+            new_roles.add('parent')
+            await self.save_or_update_user(parent_id, parent_name, ",".join(new_roles))
+            
+            # Сохраняем связи родитель-дети
+            if children_ids:
+                async with self.pool.acquire() as conn:
+                    # Удаляем старые связи
+                    await conn.execute(
+                        "DELETE FROM parent_children WHERE parent_id = $1",
+                        parent_id
+                    )
+                    # Добавляем новые связи
+                    for child_id in children_ids:
+                        await conn.execute("""
+                            INSERT INTO parent_children (parent_id, child_id)
+                            VALUES ($1, $2)
+                            ON CONFLICT (parent_id, child_id) DO NOTHING
+                        """, parent_id, child_id)
+            
             return True
         except Exception as e:
             logger.error(f"❌ Error saving parent info: {e}")
