@@ -28,3 +28,8 @@ class AdminAssignStates(StatesGroup):
     SELECT_ROLE = State()
     SELECT_SUBJECTS = State()
     CONFIRM = State()
+
+class AdminAddRoleStates(StatesGroup):
+    INPUT_USER_NAME = State()  # Ввод ФИО пользователя
+    SELECT_ROLE_TO_ADD = State()  # Выбор роли для добавления
+    SELECT_SUBJECTS = State()  # Выбор предметов (для teacher/student)

@@ -232,6 +232,44 @@ class DatabaseManager:
             logger.error(f"❌ Error saving content: {e}")
             raise
 
+    async def save_user_roles(self, user_id: int, roles: List[str]) -> bool:
+        """Сохраняет несколько ролей пользователя"""
+        try:
+            async with self.pool.acquire() as conn:
+                roles_str = ','.join(roles)
+                await conn.execute("""
+                    UPDATE users 
+                    SET roles = $1, updated_at = CURRENT_TIMESTAMP 
+                    WHERE user_id = $2
+                """, roles_str, user_id)
+                logger.info(f"✅ User {user_id} roles saved: {roles_str}")
+                return True
+        except Exception as e:
+            logger.error(f"❌ Error saving user roles: {e}")
+            return False
+
+    async def add_user_role(self, user_id: int, role: str) -> bool:
+        """Добавляет роль пользователю (если ее еще нет)"""
+        try:
+            current_roles = await self.get_user_roles(user_id)
+            if role in current_roles:
+                return True  # Роль уже есть
+
+            new_roles = current_roles + [role]
+            roles_str = ','.join(new_roles)
+
+            async with self.pool.acquire() as conn:
+                await conn.execute("""
+                    UPDATE users 
+                    SET roles = $1, updated_at = CURRENT_TIMESTAMP 
+                    WHERE user_id = $2
+                """, roles_str, user_id)
+                logger.info(f"✅ Added role {role} to user {user_id}")
+                return True
+        except Exception as e:
+            logger.error(f"❌ Error adding user role: {e}")
+            return False
+
     async def save_payment_with_content(self, from_user_id: int, to_user_id: int,
                                         content_id: int, amount: float, subject_id: str,
                                         target_user_id: int) -> int:

@@ -60,7 +60,7 @@ from calendar_utils import generate_calendar,get_time_range_for_date
 from time_utils import generate_time_range_keyboard_with_availability,calculate_lesson_duration
 from datetime import datetime
 from aiogram.fsm.state import State, StatesGroup
-from states import BookingStates, FinanceStates, AdminAssignStates
+from states import BookingStates, FinanceStates, AdminAssignStates, AdminAddRoleStates
 from teacher_reminder import TeacherReminderManager
 from booking_history_manager import BookingHistoryManager
 from menu_handlers import (
@@ -258,7 +258,7 @@ def build_subjects_keyboard(selected: list):
 
 @dp.callback_query(F.data.startswith("admin_assign_role_"))
 async def admin_assign_role(callback: types.CallbackQuery, state: FSMContext):
-    """Старт назначения роли и предметов администратором"""
+    """Старт назначения роли и предметов администратором - МОЖНО ДОБАВИТЬ К СУЩЕСТВУЮЩИМ"""
     admin_id = callback.from_user.id
     if not is_admin(admin_id):
         await callback.answer("Недостаточно прав", show_alert=True)
@@ -266,7 +266,6 @@ async def admin_assign_role(callback: types.CallbackQuery, state: FSMContext):
 
     try:
         parts = callback.data.split("_")
-        # ожидаем формат: admin_assign_role_{role}_{user_id}
         if len(parts) < 5:
             raise ValueError("bad callback format")
         role = parts[3]
@@ -275,27 +274,39 @@ async def admin_assign_role(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("Ошибка данных", show_alert=True)
         return
 
-    # Получаем имя пользователя из БД
+    # Получаем текущие данные пользователя
     user = await db.get_user(target_user_id)
     target_user_name = user.get('user_name', 'Без имени') if user else 'Без имени'
+    current_roles = await db.get_user_roles(target_user_id)
 
-    # Родитель — без выбора предметов
+    # Проверяем, есть ли уже такая роль
+    if role in current_roles:
+        await callback.answer(
+            f"У пользователя уже есть роль '{role}'",
+            show_alert=True
+        )
+        return
+
+    # Если добавляем родителя - без выбора предметов
     if role == "parent":
-        # Получаем текущие роли
-        current_roles = await db.get_user_roles(target_user_id)
+        # Добавляем роль к существующим
         new_roles = set(current_roles)
         new_roles.add("parent")
-        
+
         # Сохраняем в БД
         await db.save_or_update_user(target_user_id, target_user_name, ",".join(new_roles))
-        
+
         await callback.message.edit_text(
-            f"✅ Роль родителя назначена\nID: {target_user_id}\nИмя: {target_user_name}"
+            f"✅ Роль родителя добавлена к существующим ролям\n"
+            f"ID: {target_user_id}\nИмя: {target_user_name}\n"
+            f"Теперь роли: {', '.join(new_roles)}"
         )
+
         try:
             await bot.send_message(
                 target_user_id,
-                "✅ Вам назначена роль Родитель. Теперь вы можете бронировать время для детей."
+                f"✅ Вам добавлена роль Родитель. Теперь вы можете бронировать время для детей.\n"
+                f"Ваши текущие роли: {', '.join(new_roles)}"
             )
         except Exception:
             pass
@@ -308,13 +319,18 @@ async def admin_assign_role(callback: types.CallbackQuery, state: FSMContext):
         target_user_id=target_user_id,
         target_user_name=target_user_name,
         target_role=role,
-        selected_subjects=[]
+        selected_subjects=[],
+        current_roles=current_roles  # Сохраняем текущие роли
     )
 
     role_text = "ученика" if role == "student" else "преподавателя"
+    current_roles_text = ', '.join(current_roles) if current_roles else "нет ролей"
+
     await callback.message.edit_text(
-        f"Выберите предметы для {role_text}\n"
-        f"ID: {target_user_id}\nИмя: {target_user_name}",
+        f"Добавление роли {role_text}\n"
+        f"ID: {target_user_id}\nИмя: {target_user_name}\n"
+        f"Текущие роли: {current_roles_text}\n\n"
+        f"Выберите предметы для {role_text}:",
         reply_markup=build_subjects_keyboard([])
     )
     await callback.answer()
@@ -337,7 +353,7 @@ async def admin_toggle_subject(callback: types.CallbackQuery, state: FSMContext)
 
 @dp.callback_query(AdminAssignStates.SELECT_SUBJECTS, F.data == "admin_assign_done")
 async def admin_assign_done(callback: types.CallbackQuery, state: FSMContext):
-    """Завершение назначения роли и предметов"""
+    """Завершение назначения роли и предметов - ДОБАВЛЯЕМ К СУЩЕСТВУЮЩИМ"""
     admin_id = callback.from_user.id
     if not is_admin(admin_id):
         await callback.answer("Недостаточно прав", show_alert=True)
@@ -348,18 +364,18 @@ async def admin_assign_done(callback: types.CallbackQuery, state: FSMContext):
     role = data.get("target_role")
     target_user_id = data.get("target_user_id")
     target_user_name = data.get("target_user_name", "")
+    current_roles = data.get("current_roles", [])
 
     if role in ("student", "teacher") and not selected:
         await callback.answer("Выберите хотя бы один предмет", show_alert=True)
         return
 
-    # Обновляем роли в БД
-    current_roles = await db.get_user_roles(target_user_id)
+    # Обновляем роли в БД - ДОБАВЛЯЕМ К СУЩЕСТВУЮЩИМ
     new_roles = set(current_roles)
     new_roles.add(role)
     await db.save_or_update_user(target_user_id, target_user_name, ",".join(new_roles))
 
-    # Сохраняем предметы в БД
+    # Сохраняем предметы в БД (если это новая роль)
     if role == "student":
         for subj in selected:
             await db.save_student(target_user_id, subj)
@@ -367,19 +383,28 @@ async def admin_assign_done(callback: types.CallbackQuery, state: FSMContext):
         for subj in selected:
             await db.save_teacher(target_user_id, subj)
 
+    # Формируем текст предметов для сообщения
+    subj_text = ", ".join([SUBJECTS.get(s, s) for s in selected]) if selected else "не указаны"
+
     await callback.message.edit_text(
-        f"✅ Роль и предметы назначены\n"
+        f"✅ Роль и предметы успешно добавлены!\n"
         f"ID: {target_user_id}\nИмя: {target_user_name}\n"
-        f"Роль: {role}\nПредметы: {', '.join(selected)}"
+        f"Добавлена роль: {role}\n"
+        f"Предметы: {subj_text}\n"
+        f"Теперь роли: {', '.join(new_roles)}"
     )
 
     # Уведомляем пользователя
     try:
         role_text = "Преподаватель" if role == "teacher" else "Ученик"
-        subj_text = ", ".join([SUBJECTS.get(s, s) for s in selected]) if selected else "не указаны"
         await bot.send_message(
             target_user_id,
-            f"✅ Вам назначена роль: {role_text}\nПредметы: {subj_text}"
+            f"✅ Вам добавлена новая роль: {role_text}\n"
+            f"Предметы: {subj_text}\n"
+            f"Ваши текущие роли: {', '.join(new_roles)}\n\n"
+            f"Теперь вы можете:\n"
+            f"• Использовать все назначенные роли для бронирования\n"
+            f"• Переключаться между ролями при создании записи"
         )
     except Exception:
         pass
@@ -1134,6 +1159,339 @@ async def start_schedule_generation(message: types.Message, state: FSMContext):
     await state.set_state(BookingStates.SELECT_SCHEDULE_DATE)
 
 
+from states import AdminAddRoleStates  # Импортируем новые состояния
+
+
+# Команда для администратора - добавить роль пользователю
+@dp.message(F.text == "➕ Добавить роль пользователю")
+@dp.message(Command("addrole"))
+async def admin_add_role_command(message: types.Message, state: FSMContext):
+    """Начало процесса добавления роли пользователю"""
+    user_id = message.from_user.id
+
+    if not is_admin(user_id):
+        await message.answer("❌ Эта команда только для администраторов")
+        return
+
+    await message.answer(
+        "Введите ФИО пользователя, которому хотите добавить роль:\n\n"
+        "💡 Подсказка: можно ввести часть имени для поиска"
+    )
+    await state.set_state(AdminAddRoleStates.INPUT_USER_NAME)
+
+
+# Поиск пользователей по имени
+@dp.message(AdminAddRoleStates.INPUT_USER_NAME)
+async def admin_search_user(message: types.Message, state: FSMContext):
+    """Поиск пользователей по ФИО"""
+    search_query = message.text.strip()
+
+    if not search_query:
+        await message.answer("Пожалуйста, введите ФИО для поиска")
+        return
+
+    try:
+        # Ищем пользователей в БД
+        if storage.db and storage.db.pool:
+            async with storage.db.pool.acquire() as conn:
+                # Ищем пользователей, у которых имя содержит запрос
+                users = await conn.fetch(
+                    "SELECT user_id, user_name, roles FROM users WHERE user_name ILIKE $1 ORDER BY user_name LIMIT 10",
+                    f"%{search_query}%"
+                )
+
+                if not users:
+                    await message.answer(
+                        f"❌ Пользователи с именем '{search_query}' не найдены.\n"
+                        "Попробуйте другое имя или проверьте правильность написания."
+                    )
+                    return
+
+                # Создаем клавиатуру с найденными пользователями
+                builder = InlineKeyboardBuilder()
+
+                for user in users:
+                    user_id = user['user_id']
+                    user_name = user['user_name']
+                    roles = user['roles'] or "нет ролей"
+
+                    # Формируем текст для кнопки
+                    button_text = f"{user_name} (ID: {user_id}, роли: {roles})"
+
+                    # Укорачиваем если слишком длинно
+                    if len(button_text) > 40:
+                        button_text = f"{user_name[:20]}... (ID: {user_id})"
+
+                    builder.button(
+                        text=button_text,
+                        callback_data=f"admin_addrole_selectuser_{user_id}"
+                    )
+
+                builder.adjust(1)
+
+                await message.answer(
+                    f"🔍 Найдено пользователей: {len(users)}\n"
+                    "Выберите пользователя:",
+                    reply_markup=builder.as_markup()
+                )
+
+                # Сохраняем результаты поиска
+                await state.update_data(
+                    search_results=[dict(user) for user in users],
+                    search_query=search_query
+                )
+        else:
+            await message.answer("❌ Ошибка подключения к базе данных")
+
+    except Exception as e:
+        logger.error(f"Ошибка поиска пользователей: {e}")
+        await message.answer("❌ Произошла ошибка при поиске пользователей")
+
+
+# Выбор пользователя из результатов поиска
+@dp.callback_query(F.data.startswith("admin_addrole_selectuser_"))
+async def admin_select_user_for_role(callback: types.CallbackQuery, state: FSMContext):
+    """Выбор пользователя для добавления роли"""
+    try:
+        user_id = int(callback.data.replace("admin_addrole_selectuser_", ""))
+
+        # Получаем данные пользователя
+        if storage.db and storage.db.pool:
+            user = await storage.db.get_user(user_id)
+
+            if not user:
+                await callback.answer("Пользователь не найден", show_alert=True)
+                return
+
+            user_name = user.get('user_name', 'Без имени')
+            current_roles = await storage.db.get_user_roles(user_id)
+
+            # Сохраняем данные в состоянии
+            await state.update_data(
+                target_user_id=user_id,
+                target_user_name=user_name,
+                current_roles=current_roles
+            )
+
+            # Создаем клавиатуру выбора ролей
+            builder = InlineKeyboardBuilder()
+
+            # Определяем, какие роли можно добавить
+            available_roles = []
+
+            if 'teacher' not in current_roles:
+                available_roles.append(('👨‍🏫 Преподаватель', 'teacher'))
+
+            if 'student' not in current_roles:
+                available_roles.append(('👨‍🎓 Ученик', 'student'))
+
+            if 'parent' not in current_roles:
+                available_roles.append(('👨‍👩‍👧‍👦 Родитель', 'parent'))
+
+            if not available_roles:
+                await callback.message.edit_text(
+                    f"✅ У пользователя {user_name} уже есть все возможные роли:\n"
+                    f"{', '.join(current_roles)}"
+                )
+                await state.clear()
+                return
+
+            # Добавляем кнопки для доступных ролей
+            for role_text, role_value in available_roles:
+                builder.button(
+                    text=role_text,
+                    callback_data=f"admin_addrole_chooserole_{role_value}"
+                )
+
+            builder.button(text="❌ Отмена", callback_data="admin_addrole_cancel")
+            builder.adjust(1)
+
+            current_roles_text = ', '.join(current_roles) if current_roles else "нет ролей"
+
+            await callback.message.edit_text(
+                f"👤 Пользователь: {user_name}\n"
+                f"📋 Текущие роли: {current_roles_text}\n\n"
+                "Выберите роль для добавления:",
+                reply_markup=builder.as_markup()
+            )
+
+            await state.set_state(AdminAddRoleStates.SELECT_ROLE_TO_ADD)
+
+        else:
+            await callback.answer("Ошибка подключения к БД", show_alert=True)
+
+    except Exception as e:
+        logger.error(f"Ошибка выбора пользователя: {e}")
+        await callback.answer("Произошла ошибка", show_alert=True)
+
+
+# Выбор роли для добавления
+@dp.callback_query(AdminAddRoleStates.SELECT_ROLE_TO_ADD, F.data.startswith("admin_addrole_chooserole_"))
+async def admin_choose_role_to_add(callback: types.CallbackQuery, state: FSMContext):
+    """Обработка выбора роли для добавления"""
+    try:
+        role = callback.data.replace("admin_addrole_chooserole_", "")
+
+        # Сохраняем выбранную роль
+        await state.update_data(target_role=role)
+
+        data = await state.get_data()
+        user_name = data.get('target_user_name', '')
+
+        # Если добавляем родителя - сразу сохраняем
+        if role == "parent":
+            await admin_save_parent_role(callback, state)
+            return
+
+        # Если добавляем ученика или преподавателя - запрашиваем предметы
+        await callback.message.edit_text(
+            f"Добавление роли {role} для пользователя {user_name}\n\n"
+            "Выберите предметы:",
+            reply_markup=build_subjects_keyboard([])  # Используем существующую функцию
+        )
+        await state.set_state(AdminAddRoleStates.SELECT_SUBJECTS)
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Ошибка выбора роли: {e}")
+        await callback.answer("Произошла ошибка", show_alert=True)
+
+
+# Обработка выбора предметов (для teacher/student)
+@dp.callback_query(AdminAddRoleStates.SELECT_SUBJECTS, F.data.startswith("admin_toggle_subject_"))
+async def admin_toggle_subject_addrole(callback: types.CallbackQuery, state: FSMContext):
+    """Переключение выбора предмета при добавлении роли"""
+    data = await state.get_data()
+    selected = set(data.get("selected_subjects", []))
+    subj_id = callback.data.replace("admin_toggle_subject_", "")
+
+    if subj_id in selected:
+        selected.remove(subj_id)
+    else:
+        selected.add(subj_id)
+
+    await state.update_data(selected_subjects=list(selected))
+    await callback.message.edit_reply_markup(
+        reply_markup=build_subjects_keyboard(list(selected))
+    )
+    await callback.answer()
+
+
+# Завершение добавления роли с предметами
+@dp.callback_query(AdminAddRoleStates.SELECT_SUBJECTS, F.data == "admin_assign_done")
+async def admin_addrole_with_subjects_done(callback: types.CallbackQuery, state: FSMContext):
+    """Завершение добавления роли с предметами (для teacher/student)"""
+    data = await state.get_data()
+    selected = data.get("selected_subjects", [])
+    role = data.get("target_role")
+    target_user_id = data.get("target_user_id")
+    target_user_name = data.get("target_user_name", "")
+    current_roles = data.get("current_roles", [])
+
+    if not selected:
+        await callback.answer("Выберите хотя бы один предмет", show_alert=True)
+        return
+
+    # Обновляем роли в БД - добавляем к существующим
+    new_roles = set(current_roles)
+    new_roles.add(role)
+    await storage.db.save_or_update_user(target_user_id, target_user_name, ",".join(new_roles))
+
+    # Сохраняем предметы в БД
+    if role == "student":
+        for subj in selected:
+            await storage.db.save_student(target_user_id, subj)
+    elif role == "teacher":
+        for subj in selected:
+            await storage.db.save_teacher(target_user_id, subj)
+
+    # Формируем текст предметов
+    subj_text = ", ".join([SUBJECTS.get(s, s) for s in selected])
+
+    await callback.message.edit_text(
+        f"✅ Роль успешно добавлена!\n\n"
+        f"👤 Пользователь: {target_user_name}\n"
+        f"🎯 Добавлена роль: {role}\n"
+        f"📚 Предметы: {subj_text}\n"
+        f"📋 Теперь роли: {', '.join(new_roles)}"
+    )
+
+    # Уведомляем пользователя
+    try:
+        role_text = "Преподаватель" if role == "teacher" else "Ученик"
+        await bot.send_message(
+            target_user_id,
+            f"✅ Вам добавлена новая роль: {role_text}\n"
+            f"📚 Предметы: {subj_text}\n"
+            f"📋 Ваши текущие роли: {', '.join(new_roles)}\n\n"
+            f"Теперь вы можете использовать эту роль для бронирования!"
+        )
+    except Exception:
+        pass
+
+    await state.clear()
+    await callback.answer()
+
+
+# Функция для сохранения роли родителя
+async def admin_save_parent_role(callback: types.CallbackQuery, state: FSMContext):
+    """Сохранение роли родителя"""
+    try:
+        data = await state.get_data()
+        target_user_id = data.get('target_user_id')
+        target_user_name = data.get('target_user_name', '')
+        current_roles = data.get('current_roles', [])
+
+        # Добавляем роль родителя
+        new_roles = set(current_roles)
+        new_roles.add("parent")
+
+        # Сохраняем в БД
+        await storage.db.save_or_update_user(target_user_id, target_user_name, ",".join(new_roles))
+
+        await callback.message.edit_text(
+            f"✅ Роль родителя успешно добавлена!\n\n"
+            f"👤 Пользователь: {target_user_name}\n"
+            f"🎯 Добавлена роль: родитель\n"
+            f"📋 Теперь роли: {', '.join(new_roles)}"
+        )
+
+        # Уведомляем пользователя
+        try:
+            await bot.send_message(
+                target_user_id,
+                f"✅ Вам добавлена новая роль: Родитель\n"
+                f"📋 Ваши текущие роли: {', '.join(new_roles)}\n\n"
+                f"Теперь вы можете записывать детей на занятия!"
+            )
+        except Exception:
+            pass
+
+        await state.clear()
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Ошибка сохранения роли родителя: {e}")
+        await callback.answer("Произошла ошибка", show_alert=True)
+
+
+# Отмена добавления роли
+@dp.callback_query(F.data == "admin_addrole_cancel")
+async def admin_addrole_cancel(callback: types.CallbackQuery, state: FSMContext):
+    """Отмена процесса добавления роли"""
+    await callback.message.edit_text("❌ Добавление роли отменено")
+    await state.clear()
+    await callback.answer()
+
+
+# Также обработка отмены в состоянии выбора предметов
+@dp.callback_query(AdminAddRoleStates.SELECT_SUBJECTS, F.data == "admin_assign_cancel")
+async def admin_addrole_subjects_cancel(callback: types.CallbackQuery, state: FSMContext):
+    """Отмена выбора предметов"""
+    await callback.message.edit_text("❌ Добавление роли отменено")
+    await state.clear()
+    await callback.answer()
+
 @dp.message(Command("admin"))
 async def admin_command(message: types.Message):
     """Команда для администраторов"""
@@ -1492,9 +1850,9 @@ async def process_name(message: types.Message, state: FSMContext):
         
         # Уведомляем администраторов о новом пользователе
         admin_kb = InlineKeyboardBuilder()
-        admin_kb.button(text="👨‍🎓 Ученик", callback_data=f"admin_assign_role_student_{user_id}")
-        admin_kb.button(text="👨‍🏫 Преподаватель", callback_data=f"admin_assign_role_teacher_{user_id}")
-        admin_kb.button(text="👨‍👩‍👧‍👦 Родитель", callback_data=f"admin_assign_role_parent_{user_id}")
+        admin_kb.button(text="👨‍🎓 Добавить ученика", callback_data=f"admin_assign_role_student_{user_id}")
+        admin_kb.button(text="👨‍🏫 Добавить преподавателя", callback_data=f"admin_assign_role_teacher_{user_id}")
+        admin_kb.button(text="👨‍👩‍👧‍👦 Добавить родителя", callback_data=f"admin_assign_role_parent_{user_id}")
         admin_kb.adjust(1)
 
         for admin_id in ADMIN_IDS:
@@ -1503,13 +1861,13 @@ async def process_name(message: types.Message, state: FSMContext):
                     admin_id,
                     f"🆕 Новый пользователь ожидает ролей:\n"
                     f"ID: {user_id}\n"
-                    f"Имя: {user_name}\n"
-                    f"Выберите роль и предметы:",
+                    f"Имя: {user_name}\n\n"
+                    f"Выберите роль для добавления (можно добавить несколько ролей):",  # Измененный текст
                     reply_markup=admin_kb.as_markup()
                 )
             except Exception as e:
                 logger.error(f"Не удалось уведомить админа {admin_id}: {e}")
-        
+
         await state.clear()
 
 
