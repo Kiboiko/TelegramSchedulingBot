@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  shedullbot-postgres:
+    image: postgres:15-alpine
+    container_name: shedullbot-postgres
+    environment:
+      POSTGRES_DB: ShedullBot
+      POSTGRES_USER: shedull_user
+      POSTGRES_PASSWORD: ShedullBot123!  # ⬅️ ОДИНАКОВЫЙ ДЛЯ ВСЕХ
+    ports:
+      - "5433:5432"  # Используем порт 5433 чтобы не конфликтовать
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

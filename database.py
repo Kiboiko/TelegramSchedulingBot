@@ -13,17 +13,31 @@ logger = logging.getLogger(__name__)
 
 class DatabaseManager:
     def __init__(self):
-        # Получаем строку подключения из .env
+        # 1. Сначала пробуем получить строку подключения из DATABASE_URL
         self.connection_string = os.getenv("DATABASE_URL")
-        if not self.connection_string:
-            # Если нет DATABASE_URL, собираем из отдельных параметров
+
+        if self.connection_string:
+            logger.info("✅ Используется DATABASE_URL для подключения")
+        else:
+            # 2. Если DATABASE_URL нет, собираем из отдельных параметров
+            # Используем настройки для Docker-базы по умолчанию
             db_host = os.getenv("DB_HOST", "localhost")
-            db_port = os.getenv("DB_PORT", "5432")
-            db_user = os.getenv("DB_USER", "postgres")
-            db_password = os.getenv("DB_PASSWORD", "")
+            db_port = os.getenv("DB_PORT", "5433")  # ⬅️ ПОРТ 5433 для Docker
+            db_user = os.getenv("DB_USER", "shedull_user")
+            db_password = os.getenv("DB_PASSWORD", "ShedullBot123!")
             db_name = os.getenv("DB_NAME", "ShedullBot")
 
+            # Формируем строку подключения
             self.connection_string = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+
+            logger.info(f"✅ Собрана строка подключения: {db_host}:{db_port}")
+
+        # Выводим отладочную информацию (без пароля)
+        safe_connection_string = self.connection_string.replace(
+            os.getenv("DB_PASSWORD", ""),
+            "***"
+        ) if os.getenv("DB_PASSWORD") else self.connection_string
+        logger.info(f"📊 Подключение к базе: {safe_connection_string}")
 
         self.pool = None
 
@@ -31,16 +45,24 @@ class DatabaseManager:
         """Установка соединения с базой данных"""
         try:
             self.pool = await asyncpg.create_pool(self.connection_string)
-            logger.info("✅ Connected to PostgreSQL database")
+            logger.info("✅ Успешно подключились к PostgreSQL базе данных")
 
             # Проверяем существование таблиц
-            await self._check_tables()
+            await self.check_tables()  # ⬅️ Изменили с _check_tables на check_tables
 
+        except asyncpg.InvalidPasswordError:
+            logger.error("❌ ОШИБКА: Неверный пароль для подключения к базе")
+            logger.error("Проверьте DB_PASSWORD в .env файле")
+            raise
+        except asyncpg.ConnectionDoesNotExistError:
+            logger.error("❌ ОШИБКА: Не удалось подключиться к базе")
+            logger.error(f"Проверьте: {self.connection_string}")
+            raise
         except Exception as e:
-            logger.error(f"❌ Database connection error: {e}")
+            logger.error(f"❌ Ошибка подключения к базе данных: {e}")
             raise
 
-    async def _check_tables(self):
+    async def check_tables(self):
         """Проверяет существование таблиц"""
         try:
             async with self.pool.acquire() as conn:
@@ -59,13 +81,13 @@ class DatabaseManager:
                 else:
                     logger.warning("⚠️ Some tables are missing")
                     # Создаем таблицы если их нет
-                    await self._create_tables(conn)
+                    await self.create_tables(conn)
 
         except Exception as e:
             logger.error(f"Error checking tables: {e}")
             raise
 
-    async def _create_tables(self, conn):
+    async def create_tables(self, conn):
         """Создает таблицы если они не существуют"""
         try:
             # Таблица информации о контенте
