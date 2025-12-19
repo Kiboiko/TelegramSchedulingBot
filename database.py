@@ -332,38 +332,6 @@ class DatabaseManager:
             logger.error(f"❌ Error adding user role: {e}")
             return False
 
-    async def remove_user_role(self, user_id: int, role: str) -> bool:
-        """Удаляет роль пользователя и связанные с ней записи (students/teachers/parent_children)"""
-        try:
-            current_roles = await self.get_user_roles(user_id)
-            if role not in current_roles:
-                return True  # Роль уже отсутствует
-
-            new_roles = [r for r in current_roles if r != role]
-            roles_str = ','.join(new_roles)
-
-            async with self.pool.acquire() as conn:
-                # Обновляем строку ролей
-                await conn.execute(
-                    "UPDATE users SET roles = $1, updated_at = CURRENT_TIMESTAMP WHERE user_id = $2",
-                    roles_str, user_id
-                )
-
-                # Удаляем связанные записи
-                if role == 'student':
-                    await conn.execute("DELETE FROM students WHERE user_id = $1", user_id)
-                elif role == 'teacher':
-                    await conn.execute("DELETE FROM teachers WHERE user_id = $1", user_id)
-                elif role == 'parent':
-                    # Удаляем связи родитель-дети, где пользователь является родителем
-                    await conn.execute("DELETE FROM parent_children WHERE parent_id = $1", user_id)
-
-            logger.info(f"✅ Removed role {role} from user {user_id}")
-            return True
-        except Exception as e:
-            logger.error(f"❌ Error removing user role: {e}")
-            return False
-
     async def save_payment_with_content(self, from_user_id: int, to_user_id: int,
                                         content_id: int, amount: float, subject_id: str,
                                         target_user_id: int) -> int:
