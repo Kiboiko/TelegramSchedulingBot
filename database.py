@@ -231,6 +231,46 @@ class DatabaseManager:
             await self.pool.close()
             logger.info("Database connection closed")
 
+    async def check_parent_child_link(self, parent_id: int, child_id: int) -> bool:
+        """Проверяет, есть ли привязка родитель-ребенок"""
+        try:
+            async with self.pool.acquire() as conn:
+                link = await conn.fetchrow(
+                    "SELECT id FROM parent_children WHERE parent_id = $1 AND child_id = $2",
+                    parent_id, child_id
+                )
+                return link is not None
+        except Exception as e:
+            logger.error(f"Error checking parent-child link: {e}")
+            return False
+
+    async def link_parent_child(self, parent_id: int, child_id: int) -> bool:
+        """Привязывает ребенка к родителю"""
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO parent_children (parent_id, child_id)
+                    VALUES ($1, $2)
+                    ON CONFLICT (parent_id, child_id) DO NOTHING
+                """, parent_id, child_id)
+                return True
+        except Exception as e:
+            logger.error(f"Error linking parent-child: {e}")
+            return False
+
+    async def unlink_parent_child(self, parent_id: int, child_id: int) -> bool:
+        """Отвязывает ребенка от родителя"""
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute(
+                    "DELETE FROM parent_children WHERE parent_id = $1 AND child_id = $2",
+                    parent_id, child_id
+                )
+                return True
+        except Exception as e:
+            logger.error(f"Error unlinking parent-child: {e}")
+            return False
+
     async def save_content(self, added_by: int, content_type: str, file_data: Dict[str, Any]) -> int:
         """Сохранение контента в базу данных"""
         try:

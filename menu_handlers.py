@@ -40,17 +40,23 @@ async def generate_main_menu(user_id: int, storage) -> ReplyKeyboardMarkup:
     if can_book:
         keyboard_buttons.append([KeyboardButton(text="📅 Забронировать время")])
 
-    # ДОБАВЬТЕ эту кнопку - возможность пополнения баланса
+    # КНОПКА ДЛЯ РОДИТЕЛЕЙ - ДОБАВЛЯЕМ РЕБЕНКА
+    if 'parent' in roles:
+        keyboard_buttons.append([KeyboardButton(text="👶 Добавить ребенка")])
+        keyboard_buttons.append([KeyboardButton(text="👨‍👩‍👧‍👦 Мои дети")])
+
+    # Финансы и оплата
     if 'student' in roles or 'parent' in roles:
         keyboard_buttons.append([KeyboardButton(text="💰 Финансы")])
-        keyboard_buttons.append([KeyboardButton(text="💳 Пополнить баланс")])  # НОВАЯ КНОПКА
+        keyboard_buttons.append([KeyboardButton(text="💳 Пополнить баланс")])
 
+    # Общие кнопки
     keyboard_buttons.append([KeyboardButton(text="📋 Мои бронирования")])
     keyboard_buttons.append([KeyboardButton(text="📚 Прошедшие бронирования")])
     keyboard_buttons.append([KeyboardButton(text="👤 Моя роль")])
     keyboard_buttons.append([KeyboardButton(text="ℹ️ Помощь")])
 
-    # Добавляем кнопки для администраторов
+    # Кнопки для админов
     if is_admin(user_id):
         keyboard_buttons.append([KeyboardButton(text="📊 Составить расписание")])
         keyboard_buttons.append([KeyboardButton(text="📚 Сгенерировать материалы")])
@@ -58,10 +64,11 @@ async def generate_main_menu(user_id: int, storage) -> ReplyKeyboardMarkup:
 
     return ReplyKeyboardMarkup(keyboard=keyboard_buttons, resize_keyboard=True)
 
+
 async def cmd_start(message: types.Message, state: FSMContext, storage):
     """Обработчик команды /start"""
     user_id = message.from_user.id
-    
+
     # ВАЖНО: Вызываем асинхронный метод напрямую, так как мы в async контексте
     if storage.db and storage.db.pool:
         user_name = await storage.db.get_user_name_sync(user_id)
@@ -71,9 +78,23 @@ async def cmd_start(message: types.Message, state: FSMContext, storage):
     menu = await generate_main_menu(user_id, storage)
 
     if user_name:
+        # Проверяем роли для показа дополнительной информации
+        if storage.db and storage.db.pool:
+            roles = await storage.db.get_user_roles(user_id)
+        else:
+            roles = storage.get_user_roles(user_id)
+
+        welcome_text = f"С возвращением, {user_name}!\nИспользуйте кнопки ниже для навигации:"
+
+        # Дополнительная информация для родителей
+        if 'parent' in roles:
+            welcome_text += "\n\n👶 <b>Вы родитель!</b>\n"
+            welcome_text += "• Добавляйте детей через '👶 Добавить ребенка'\n"
+            welcome_text += "• Смотрите список через '👨‍👩‍👧‍👦 Мои дети'"
+
         await message.answer(
-            f"С возвращением, {user_name}!\n"
-            "Используйте кнопки ниже для навигации:",
+            welcome_text,
+            parse_mode="HTML",  # Используем HTML
             reply_markup=menu
         )
     else:
@@ -251,6 +272,54 @@ def register_menu_handlers(dp, booking_manager, storage):
     async def wrapped_back_to_menu_from_past_handler(callback: types.CallbackQuery):
         return await back_to_menu_from_past_handler(callback, storage)
 
+    # Создаем обработчик для кнопки "Мои дети"
+    async def show_my_children_handler(message: types.Message):
+        """Показывает список детей родителя"""
+        user_id = message.from_user.id
+
+        if storage.db and storage.db.pool:
+            user_roles = await storage.db.get_user_roles(user_id)
+        else:
+            user_roles = storage.get_user_roles(user_id)
+
+        if 'parent' not in user_roles:
+            await message.answer("❌ У вас нет роли родителя")
+            return
+
+        if storage.db and storage.db.pool:
+            children_ids = await storage.db.get_parent_children_sync(user_id)
+        else:
+            children_ids = storage.get_parent_children(user_id)
+
+        if not children_ids:
+            await message.answer(
+                "👶 У вас еще нет привязанных детей.\n\n"
+                "Используйте кнопку '👶 Добавить ребенка' чтобы добавить ребенка."
+            )
+            return
+
+        children_info = []
+        for child_id in children_ids:
+            if storage.db and storage.db.pool:
+                child_data = await storage.db.get_user(child_id)
+                child_name = child_data.get('user_name', f'Ребенок {child_id}') if child_data else f'Ребенок {child_id}'
+
+                # Получаем предметы ребенка
+                subjects = await storage.db.get_available_subjects_for_student_sync(child_id)
+                subject_names = [subjects.get(s, s) for s in subjects]
+
+                children_info.append(
+                    f"👶 <b>{child_name}</b>\n"
+                    f"🆔 <b>ID:</b> {child_id}\n"
+                    f"🎯 <b>Предметы:</b> {', '.join(subject_names) if subject_names else 'не назначены'}\n"
+                    f"────────────────────"
+                )
+
+        await message.answer(
+            f"👨‍👩‍👧‍👦 <b>Ваши дети:</b>\n\n" + "\n\n".join(children_info),
+            parse_mode="HTML"
+        )
+
     # Команды
     dp.message.register(wrapped_cmd_start, CommandStart())
     dp.message.register(cmd_help, Command("help"))
@@ -264,6 +333,12 @@ def register_menu_handlers(dp, booking_manager, storage):
     dp.message.register(contact_admin, F.text == "❓ Обратиться к администратору")
     dp.message.register(show_bookings_handler, F.text == "📋 Мои бронирования")
     dp.message.register(show_past_bookings_handler, F.text == "📚 Прошедшие бронирования")
+
+    # Обработчик для кнопки "Мои дети" (ОН ОСТАЕТСЯ)
+    dp.message.register(show_my_children_handler, F.text == "👨‍👩‍👧‍👦 Мои дети")
+
+    # Обработчик для кнопки "👶 Добавить ребенка" УДАЛЕН отсюда!
+    # Он должен быть только в main.py
 
     # Callback обработчики навигации
     dp.callback_query.register(
@@ -282,6 +357,48 @@ def register_menu_handlers(dp, booking_manager, storage):
         wrapped_back_to_menu_from_past_handler,
         F.data == "back_to_menu_from_past"
     )
+
+
+async def show_my_role(message: types.Message, storage):
+    """Показывает роли пользователя"""
+    user_id = message.from_user.id
+
+    # ВАЖНО: Вызываем асинхронный метод напрямую, так как мы в async контексте
+    if storage.db and storage.db.pool:
+        roles = await storage.db.get_user_roles(user_id)
+    else:
+        roles = storage.get_user_roles(user_id)
+
+    logger.info("Найденные роли: " + ",".join(role for role in roles))
+    logger.info("ID для поиска: " + str(user_id))
+
+    if roles:
+        role_translations = {
+            "teacher": "👨‍🏫 преподаватель",
+            "student": "👨‍🎓 ученик",
+            "parent": "👨‍👩‍👧‍👦 родитель"
+        }
+        role_text = ", ".join([role_translations.get(role, role) for role in roles])
+
+        # Дополнительные инструкции для родителей
+        message_text = f"🎯 Ваши роли: {role_text}"
+
+        if 'parent' in roles:
+            message_text += "\n\n👶 *Вы родитель!*\n"
+            message_text += "Используйте кнопки:\n"
+            message_text += "• '👶 Добавить ребенка' - добавить детей\n"
+            message_text += "• '👨‍👩‍👧‍👦 Мои дети' - посмотреть список детей"
+
+        await message.answer(
+            message_text,
+            parse_mode="Markdown" if 'parent' in roles else None,
+            reply_markup=await generate_main_menu(user_id, storage)  # ПОКАЗЫВАЕМ ОБНОВЛЕННОЕ МЕНЮ!
+        )
+    else:
+        await message.answer(
+            "Ваши роли еще не назначены. Обратитесь к администратору. \n Телефон администратора: +79001372727",
+            reply_markup=await generate_main_menu(user_id, storage)
+        )
 
 async def cmd_pay(message: types.Message, state: FSMContext):
     """Обработчик команды оплаты"""

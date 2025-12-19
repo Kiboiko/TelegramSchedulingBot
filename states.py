@@ -33,3 +33,8 @@ class AdminAddRoleStates(StatesGroup):
     INPUT_USER_NAME = State()  # Ввод ФИО пользователя
     SELECT_ROLE_TO_ADD = State()  # Выбор роли для добавления
     SELECT_SUBJECTS = State()  # Выбор предметов (для teacher/student)
+
+class ParentStates(StatesGroup):
+    INPUT_CHILD_USERNAME = State()      # Ввод @username ребенка (ОБЯЗАТЕЛЬНО!)
+    INPUT_CHILD_NAME = State()          # Ввод ФИО ребенка
+    WAITING_ADMIN_APPROVAL = State()    # Ожидание подтверждения админа

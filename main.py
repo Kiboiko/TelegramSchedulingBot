@@ -60,7 +60,7 @@ from calendar_utils import generate_calendar,get_time_range_for_date
 from time_utils import generate_time_range_keyboard_with_availability,calculate_lesson_duration
 from datetime import datetime
 from aiogram.fsm.state import State, StatesGroup
-from states import BookingStates, FinanceStates, AdminAssignStates, AdminAddRoleStates
+from states import BookingStates, FinanceStates, AdminAssignStates, AdminAddRoleStates, ParentStates
 from teacher_reminder import TeacherReminderManager
 from booking_history_manager import BookingHistoryManager
 from menu_handlers import (
@@ -258,7 +258,7 @@ def build_subjects_keyboard(selected: list):
 
 @dp.callback_query(F.data.startswith("admin_assign_role_"))
 async def admin_assign_role(callback: types.CallbackQuery, state: FSMContext):
-    """Старт назначения роли и предметов администратором - МОЖНО ДОБАВИТЬ К СУЩЕСТВУЮЩИМ"""
+    """Старт назначения роли и предметов администратором"""
     admin_id = callback.from_user.id
     if not is_admin(admin_id):
         await callback.answer("Недостаточно прав", show_alert=True)
@@ -287,7 +287,7 @@ async def admin_assign_role(callback: types.CallbackQuery, state: FSMContext):
         )
         return
 
-    # Если добавляем родителя - без выбора предметов
+    # Если добавляем родителя - БЕЗ выбора предметов, сразу добавляем
     if role == "parent":
         # Добавляем роль к существующим
         new_roles = set(current_roles)
@@ -302,25 +302,33 @@ async def admin_assign_role(callback: types.CallbackQuery, state: FSMContext):
             f"Теперь роли: {', '.join(new_roles)}"
         )
 
+        # Уведомляем пользователя с ОБНОВЛЕННЫМ МЕНЮ
         try:
             await bot.send_message(
                 target_user_id,
-                f"✅ Вам добавлена роль Родитель. Теперь вы можете бронировать время для детей.\n"
-                f"Ваши текущие роли: {', '.join(new_roles)}"
+                f"✅ Вам добавлена роль *Родитель*\n"
+                f"📋 Ваши текущие роли: {', '.join(new_roles)}\n\n"
+                f"*Теперь вы можете:*\n"
+                f"• Добавлять детей (кнопка '👶 Добавить ребенка')\n"
+                f"• Записывать детей на занятия\n"
+                f"• Просматривать своих детей",
+                parse_mode="Markdown",
+                reply_markup=await generate_main_menu(target_user_id, storage)  # ОБНОВЛЕННОЕ МЕНЮ!
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Не удалось уведомить пользователя {target_user_id}: {e}")
+
         await callback.answer()
         return
 
-    # Для student/teacher запрашиваем предметы
+    # Для student/teacher запрашиваем предметы (старая логика)
     await state.set_state(AdminAssignStates.SELECT_SUBJECTS)
     await state.update_data(
         target_user_id=target_user_id,
         target_user_name=target_user_name,
         target_role=role,
         selected_subjects=[],
-        current_roles=current_roles  # Сохраняем текущие роли
+        current_roles=current_roles
     )
 
     role_text = "ученика" if role == "student" else "преподавателя"
@@ -336,6 +344,17 @@ async def admin_assign_role(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+@dp.message(F.text == "🔄 Обновить меню")
+@dp.message(Command("refresh"))
+async def refresh_menu(message: types.Message):
+    """Принудительно обновляет меню пользователя"""
+    user_id = message.from_user.id
+
+    await message.answer(
+        "🔄 Обновляю меню...",
+        reply_markup=await generate_main_menu(user_id, storage)
+    )
+
 @dp.callback_query(AdminAssignStates.SELECT_SUBJECTS, F.data.startswith("admin_toggle_subject_"))
 async def admin_toggle_subject(callback: types.CallbackQuery, state: FSMContext):
     """Переключение выбора предмета"""
@@ -350,6 +369,8 @@ async def admin_toggle_subject(callback: types.CallbackQuery, state: FSMContext)
     await callback.message.edit_reply_markup(reply_markup=build_subjects_keyboard(list(selected)))
     await callback.answer()
 
+
+# main.py - найти обработчик admin_assign_done и обновить для родителя
 
 @dp.callback_query(AdminAssignStates.SELECT_SUBJECTS, F.data == "admin_assign_done")
 async def admin_assign_done(callback: types.CallbackQuery, state: FSMContext):
@@ -373,6 +394,8 @@ async def admin_assign_done(callback: types.CallbackQuery, state: FSMContext):
     # Обновляем роли в БД - ДОБАВЛЯЕМ К СУЩЕСТВУЮЩИМ
     new_roles = set(current_roles)
     new_roles.add(role)
+
+    # Сохраняем в БД
     await db.save_or_update_user(target_user_id, target_user_name, ",".join(new_roles))
 
     # Сохраняем предметы в БД (если это новая роль)
@@ -382,6 +405,7 @@ async def admin_assign_done(callback: types.CallbackQuery, state: FSMContext):
     elif role == "teacher":
         for subj in selected:
             await db.save_teacher(target_user_id, subj)
+    # Для родителя не нужно сохранять предметы
 
     # Формируем текст предметов для сообщения
     subj_text = ", ".join([SUBJECTS.get(s, s) for s in selected]) if selected else "не указаны"
@@ -394,22 +418,151 @@ async def admin_assign_done(callback: types.CallbackQuery, state: FSMContext):
         f"Теперь роли: {', '.join(new_roles)}"
     )
 
-    # Уведомляем пользователя
+    # Уведомляем пользователя - ВАЖНОЕ ИЗМЕНЕНИЕ!
     try:
-        role_text = "Преподаватель" if role == "teacher" else "Ученик"
+        role_text = "Преподаватель" if role == "teacher" else "Ученик" if role == "student" else "Родитель"
+
+        if role == "parent":
+            message_text = (
+                f"✅ Вам добавлена новая роль: *{role_text}*\n"
+                f"📋 Ваши текущие роли: {', '.join(new_roles)}\n\n"
+                f"*Теперь вы можете:*\n"
+                f"• Добавлять детей (кнопка '👶 Добавить ребенка')\n"
+                f"• Записывать детей на занятия\n"
+                f"• Просматривать своих детей"
+            )
+        else:
+            message_text = (
+                f"✅ Вам добавлена новая роль: {role_text}\n"
+                f"📚 Предметы: {subj_text}\n"
+                f"📋 Ваши текущие роли: {', '.join(new_roles)}\n\n"
+                f"Теперь вы можете:\n"
+                f"• Использовать все назначенные роли для бронирования\n"
+                f"• Переключаться между ролями при создании записи"
+            )
+
+        # Отправляем сообщение пользователю с ОБНОВЛЕННЫМ МЕНЮ
         await bot.send_message(
             target_user_id,
-            f"✅ Вам добавлена новая роль: {role_text}\n"
-            f"Предметы: {subj_text}\n"
-            f"Ваши текущие роли: {', '.join(new_roles)}\n\n"
-            f"Теперь вы можете:\n"
-            f"• Использовать все назначенные роли для бронирования\n"
-            f"• Переключаться между ролями при создании записи"
+            message_text,
+            parse_mode="Markdown",
+            reply_markup=await generate_main_menu(target_user_id, storage)  # ОТПРАВЛЯЕМ ОБНОВЛЕННОЕ МЕНЮ!
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"Не удалось уведомить пользователя {target_user_id}: {e}")
 
     await state.clear()
+    await callback.answer()
+
+# Модифицируем существующий обработчик завершения назначения предметов
+@dp.callback_query(AdminAddRoleStates.SELECT_SUBJECTS, F.data == "admin_assign_done")
+async def admin_assign_done_handler(callback: types.CallbackQuery, state: FSMContext):
+    """Завершение назначения предметов (работает и для детей, и для преподавателей)"""
+    data = await state.get_data()
+    selected = data.get("selected_subjects", [])
+
+    if not selected:
+        await callback.answer("Выберите хотя бы один предмет", show_alert=True)
+        return
+
+    # Проверяем, что добавляем: ребенка или преподавателя
+    is_adding_child = data.get("admin_adding_child", False)
+    is_setting_child_subjects = data.get("admin_setting_subjects", False)
+
+    if is_adding_child:
+        # ДОБАВЛЕНИЕ НОВОГО РЕБЕНКА
+        child_tg_id = data.get("admin_child_tg_id")
+        child_name = data.get("admin_child_name")
+        parent_id = data.get("admin_parent_id")
+
+        if not all([child_tg_id, child_name, parent_id]):
+            await callback.answer("❌ Ошибка данных", show_alert=True)
+            return
+
+        # 1. Добавляем ребенка в таблицу users с ролью student
+        success = await storage.db.save_or_update_user(
+            user_id=child_tg_id,
+            user_name=child_name,
+            roles="student"
+        )
+
+        if not success:
+            await callback.answer("❌ Ошибка сохранения ребенка", show_alert=True)
+            return
+
+        # 2. Добавляем предметы ребенку
+        for subject_id in selected:
+            await storage.db.save_student(
+                user_id=child_tg_id,
+                subject_id=subject_id
+            )
+
+        # 3. Привязываем ребенка к родителю
+        link_success = await storage.db.link_parent_child(parent_id, child_tg_id)
+
+        if link_success:
+            # Уведомляем родителя
+            try:
+                await bot.send_message(
+                    parent_id,
+                    f"✅ Ребенок *{child_name}* успешно добавлен!\n\n"
+                    f"*Предметы:* {', '.join([SUBJECTS.get(s, s) for s in selected])}\n\n"
+                    f"Теперь вы можете записывать ребенка на занятия.",
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                logger.error(f"Не удалось уведомить родителя: {e}")
+
+            subject_names = [SUBJECTS.get(s, s) for s in selected]
+
+            await callback.message.edit_text(
+                f"✅ *Ребенок успешно добавлен!*\n\n"
+                f"👶 *Имя:* {child_name}\n"
+                f"🆔 *TG ID:* {child_tg_id}\n"
+                f"👨‍👩‍👧‍👦 *Родитель ID:* {parent_id}\n"
+                f"🎯 *Предметы:* {', '.join(subject_names)}"
+            )
+        else:
+            await callback.message.edit_text("❌ Ошибка при привязке к родителю")
+
+        await state.clear()
+
+    elif is_setting_child_subjects:
+        # НАЗНАЧЕНИЕ ПРЕДМЕТОВ СУЩЕСТВУЮЩЕМУ РЕБЕНКУ
+        child_tg_id = data.get("admin_child_tg_id")
+        child_name = data.get("admin_child_name")
+
+        # Удаляем старые предметы и добавляем новые
+        if storage.db and storage.db.pool:
+            async with storage.db.pool.acquire() as conn:
+                # Удаляем все текущие предметы ребенка
+                await conn.execute(
+                    "DELETE FROM students WHERE user_id = $1",
+                    child_tg_id
+                )
+
+                # Добавляем новые предметы
+                for subject_id in selected:
+                    await conn.execute("""
+                        INSERT INTO students (user_id, subject_id)
+                        VALUES ($1, $2)
+                        ON CONFLICT (user_id, subject_id) DO NOTHING
+                    """, child_tg_id, subject_id)
+
+        subject_names = [SUBJECTS.get(s, s) for s in selected]
+
+        await callback.message.edit_text(
+            f"✅ *Предметы обновлены!*\n\n"
+            f"👶 *Ребенок:* {child_name}\n"
+            f"🎯 *Новые предметы:* {', '.join(subject_names)}"
+        )
+
+        await state.clear()
+
+    else:
+        # Старая логика для преподавателей (оставляем как есть)
+        await admin_assign_done(callback, state)
+
     await callback.answer()
 
 
@@ -1248,6 +1401,798 @@ async def admin_search_user(message: types.Message, state: FSMContext):
         await message.answer("❌ Произошла ошибка при поиске пользователей")
 
 
+@dp.message(F.text == "👶 Добавить ребенка")
+@dp.message(Command("addchild"))
+async def add_child_start(message: types.Message, state: FSMContext):
+    """Начало процесса добавления ребенка по ФИО"""
+    user_id = message.from_user.id
+
+    # Проверяем роль родителя
+    if storage.db and storage.db.pool:
+        user_roles = await storage.db.get_user_roles(user_id)
+    else:
+        user_roles = storage.get_user_roles(user_id)
+
+    if 'parent' not in user_roles:
+        await message.answer("❌ У вас нет роли родителя")
+        return
+
+    await message.answer(
+        "👶 <b>Добавление ребенка</b>\n\n"
+        "Введите <b>полное ФИО ребенка</b> (например, Иванов Иван Иванович):",
+        parse_mode="HTML"
+    )
+
+    await state.set_state(ParentStates.INPUT_CHILD_NAME)
+
+
+@dp.callback_query(ParentStates.WAITING_ADMIN_APPROVAL, F.data.startswith("confirm_child_"))
+async def confirm_found_child(callback: types.CallbackQuery, state: FSMContext):
+    """Подтверждение найденного ребенка"""
+    child_id = int(callback.data.split('_')[2])
+
+    data = await state.get_data()
+    child_found_name = data.get('child_found_name')
+    parent_id = callback.from_user.id
+
+    # Получаем данные ребенка
+    if storage.db and storage.db.pool:
+        child_data = await storage.db.get_user(child_id)
+        if child_data:
+            child_roles = child_data.get('roles', '').split(',')
+
+            await state.update_data(
+                child_name=child_found_name,
+                child_tg_id=child_id,
+                is_new_child=False,
+                child_has_student_role='student' in child_roles
+            )
+
+            # Проверяем, не привязан ли уже этот ребенок к другому родителю
+            existing_parents = await get_parents_of_child(child_id)
+
+            if parent_id in existing_parents:
+                await callback.message.edit_text(
+                    f"❌ Ребенок <b>{child_found_name}</b> уже привязан к вашему аккаунту!",
+                    parse_mode="HTML"
+                )
+                await state.clear()
+                await callback.answer()
+                return
+
+            await callback.message.edit_text(
+                f"✅ Вы подтвердили ребенка: <b>{child_found_name}</b>\n\n"
+                f"Отправить запрос администратору на привязку?",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="✅ Да, отправить",
+                            callback_data="confirm_send_request"
+                        ),
+                        InlineKeyboardButton(
+                            text="❌ Нет, отменить",
+                            callback_data="cancel_child_add"
+                        )
+                    ]
+                ])
+            )
+
+    await callback.answer()
+
+
+@dp.callback_query(ParentStates.WAITING_ADMIN_APPROVAL, F.data == "search_another_child")
+async def search_another_child(callback: types.CallbackQuery, state: FSMContext):
+    """Поиск другого ребенка"""
+    await callback.message.edit_text(
+        "Введите другое ФИО ребенка:"
+    )
+
+    # Возвращаемся к вводу имени
+    await state.set_state(ParentStates.INPUT_CHILD_NAME)
+    await callback.answer()
+
+
+@dp.callback_query(ParentStates.WAITING_ADMIN_APPROVAL, F.data == "try_again_search")
+async def try_again_search(callback: types.CallbackQuery, state: FSMContext):
+    """Попытка поиска снова"""
+    await callback.message.edit_text(
+        "Введите ФИО ребенка еще раз:"
+    )
+
+    # Возвращаемся к вводу имени
+    await state.set_state(ParentStates.INPUT_CHILD_NAME)
+    await callback.answer()
+@dp.message(ParentStates.INPUT_CHILD_NAME)
+async def process_child_name(message: types.Message, state: FSMContext):
+    """Обработка ФИО ребенка - ищем в системе"""
+    child_name = message.text.strip()
+
+    logger.info(f"=== ПОИСК РЕБЕНКА ПО ИМЕНИ: '{child_name}' ===")
+
+    if len(child_name.split()) < 2:
+        await message.answer("❌ Пожалуйста, введите полное ФИО (минимум имя и фамилия)")
+        return
+
+    parent_id = message.from_user.id
+
+    # Получаем имя родителя
+    if storage.db and storage.db.pool:
+        parent_data = await storage.db.get_user(parent_id)
+        parent_name = parent_data.get('user_name', f'Родитель {parent_id}') if parent_data else f'Родитель {parent_id}'
+    else:
+        parent_name = storage.get_user_name(parent_id) or f'Родитель {parent_id}'
+
+    # Ищем ребенка в базе по ФИО
+    if storage.db and storage.db.pool:
+        # Сначала посмотрим всех пользователей в системе для отладки
+        async with storage.db.pool.acquire() as conn:
+            all_users = await conn.fetch(
+                "SELECT user_id, user_name, roles FROM users ORDER BY user_name"
+            )
+            logger.info(f"=== ВСЕ ПОЛЬЗОВАТЕЛИ В СИСТЕМЕ ({len(all_users)}) ===")
+            for user in all_users:
+                roles = user['roles'].split(',') if user['roles'] else []
+                if 'student' in roles:
+                    logger.info(f"СТУДЕНТ: {user['user_name']} (ID: {user['user_id']}, роли: {roles})")
+
+        child_data = await find_child_by_name_in_db(child_name)
+
+        if child_data:
+            # Ребенок найден в системе
+            child_id = child_data['user_id']
+            child_found_name = child_data['user_name']
+            child_roles = child_data.get('roles', '').split(',')
+
+            logger.info(f"✅ НАЙДЕН РЕБЕНОК: {child_found_name} (ID: {child_id}, роли: {child_roles})")
+
+            # Проверяем правильность имени
+            if child_found_name.lower() != child_name.lower():
+                await message.answer(
+                    f"🔍 Найден похожий ребенок: <b>{child_found_name}</b>\n\n"
+                    f"Это тот ребенок, которого вы ищете?",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text=f"✅ Да, это {child_found_name.split()[0]}",
+                                callback_data=f"confirm_child_{child_id}"
+                            ),
+                            InlineKeyboardButton(
+                                text="❌ Нет, другой ребенок",
+                                callback_data="search_another_child"
+                            )
+                        ]
+                    ])
+                )
+                await state.update_data(
+                    child_name=child_name,
+                    child_found_name=child_found_name,
+                    child_tg_id=child_id,
+                    is_new_child=False,
+                    child_has_student_role='student' in child_roles
+                )
+                await state.set_state(ParentStates.WAITING_ADMIN_APPROVAL)
+                return
+
+            await state.update_data(
+                child_name=child_found_name,  # Используем найденное имя
+                child_tg_id=child_id,
+                is_new_child=False,
+                child_has_student_role='student' in child_roles
+            )
+
+            # Проверяем, не привязан ли уже этот ребенок к другому родителю
+            existing_parents = await get_parents_of_child(child_id)
+
+            if existing_parents:
+                # Получаем имена родителей
+                parent_names = []
+                for pid in existing_parents:
+                    if pid == parent_id:
+                        parent_names.append("Вы")
+                    else:
+                        parent_data = await storage.db.get_user(pid)
+                        pname = parent_data.get('user_name', f'Родитель {pid}') if parent_data else f'Родитель {pid}'
+                        parent_names.append(f"{pname} (ID: {pid})")
+
+                parents_text = ", ".join(parent_names)
+                await message.answer(
+                    f"✅ Ребенок <b>{child_found_name}</b> найден в системе!\n\n"
+                    f"🆔 <b>ID ребенка:</b> {child_id}\n"
+                    f"🎯 <b>Роль student:</b> {'✅ есть' if 'student' in child_roles else '❌ нет'}\n"
+                    f"👨‍👩‍👧‍👦 <b>Уже привязан к:</b> {parents_text}\n\n"
+                    "Отправить запрос администратору на привязку?",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text="✅ Да, отправить",
+                                callback_data="confirm_send_request"
+                            ),
+                            InlineKeyboardButton(
+                                text="❌ Нет, отменить",
+                                callback_data="cancel_child_add"
+                            )
+                        ]
+                    ])
+                )
+                await state.set_state(ParentStates.WAITING_ADMIN_APPROVAL)
+            else:
+                # Ребенок не привязан ни к кому
+                await message.answer(
+                    f"✅ Ребенок <b>{child_found_name}</b> найден в системе!\n\n"
+                    f"🆔 <b>ID ребенка:</b> {child_id}\n"
+                    f"🎯 <b>Роль student:</b> {'✅ есть' if 'student' in child_roles else '❌ нет'}\n\n"
+                    "Отправить запрос администратору на привязку?",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text="✅ Да, отправить",
+                                callback_data="confirm_send_request"
+                            ),
+                            InlineKeyboardButton(
+                                text="❌ Нет, отменить",
+                                callback_data="cancel_child_add"
+                            )
+                        ]
+                    ])
+                )
+                await state.set_state(ParentStates.WAITING_ADMIN_APPROVAL)
+
+        else:
+            # Ребенок НЕ найден в системе
+            logger.info(f"❌ Ребенок '{child_name}' не найден в базе")
+
+            await state.update_data(
+                child_name=child_name,
+                child_tg_id=None,
+                is_new_child=True
+            )
+
+            await message.answer(
+                f"❌ Ребенок <b>{child_name}</b> не найден в системе.\n\n"
+                "Возможные причины:\n"
+                "1. Ребенок еще не зарегистрирован в боте (/start)\n"
+                "2. Имя введено с ошибкой\n"
+                "3. Ребенок зарегистрирован под другим именем\n\n"
+                "Вы можете:\n"
+                "1. Попросить ребенка зарегистрироваться в боте (/start)\n"
+                "2. Проверить правильность введенного имени\n"
+                "3. Отправить запрос администратору",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="📨 Отправить запрос админу",
+                            callback_data="send_new_child_request"
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="🔄 Попробовать снова",
+                            callback_data="try_again_search"
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="❌ Отмена",
+                            callback_data="cancel_child_add"
+                        )
+                    ]
+                ])
+            )
+            await state.set_state(ParentStates.WAITING_ADMIN_APPROVAL)
+
+async def get_parents_of_child(child_id: int):
+    """Получает список родителей ребенка"""
+    try:
+        if storage.db and storage.db.pool:
+            async with storage.db.pool.acquire() as conn:
+                parents = await conn.fetch(
+                    "SELECT parent_id FROM parent_children WHERE child_id = $1",
+                    child_id
+                )
+                return [p['parent_id'] for p in parents]
+        return []
+    except Exception as e:
+        logger.error(f"Error getting parents of child: {e}")
+        return []
+
+
+@dp.callback_query(ParentStates.WAITING_ADMIN_APPROVAL, F.data == "confirm_send_request")
+async def confirm_send_request(callback: types.CallbackQuery, state: FSMContext):
+    """Подтверждение отправки запроса администратору"""
+    data = await state.get_data()
+    parent_id = callback.from_user.id
+    child_name = data.get('child_name')
+    child_id = data.get('child_tg_id')
+    is_new_child = data.get('is_new_child', False)
+
+    # Получаем имя родителя
+    if storage.db and storage.db.pool:
+        parent_data = await storage.db.get_user(parent_id)
+        parent_name = parent_data.get('user_name', f'Родитель {parent_id}') if parent_data else f'Родитель {parent_id}'
+    else:
+        parent_name = storage.get_user_name(parent_id) or f'Родитель {parent_id}'
+
+    if is_new_child:
+        # Новый ребенок
+        await notify_admin_about_new_child(
+            parent_id=parent_id,
+            parent_name=parent_name,
+            child_name=child_name
+        )
+
+        await callback.message.edit_text(
+            f"📨 Запрос на добавление ребенка <b>{child_name}</b> отправлен администратору.\n\n"
+            "Администратор свяжется с вами после добавления ребенка в систему.",
+            parse_mode="HTML"
+        )
+    else:
+        # Существующий ребенок
+        child_has_student_role = data.get('child_has_student_role', False)
+
+        await notify_admin_about_child_link(
+            parent_id=parent_id,
+            parent_name=parent_name,
+            child_tg_id=child_id,
+            child_name=child_name,
+            child_has_student_role=child_has_student_role
+        )
+
+        await callback.message.edit_text(
+            f"📨 Запрос на привязку к ребенку <b>{child_name}</b> отправлен администратору.",
+            parse_mode="HTML"
+        )
+
+    await state.clear()
+    await callback.answer()
+
+
+@dp.callback_query(ParentStates.WAITING_ADMIN_APPROVAL, F.data == "send_new_child_request")
+async def send_new_child_request(callback: types.CallbackQuery, state: FSMContext):
+    """Отправка запроса на нового ребенка"""
+    data = await state.get_data()
+    parent_id = callback.from_user.id
+    child_name = data.get('child_name')
+
+    # Получаем имя родителя
+    if storage.db and storage.db.pool:
+        parent_data = await storage.db.get_user(parent_id)
+        parent_name = parent_data.get('user_name', f'Родитель {parent_id}') if parent_data else f'Родитель {parent_id}'
+    else:
+        parent_name = storage.get_user_name(parent_id) or f'Родитель {parent_id}'
+
+    await notify_admin_about_new_child(
+        parent_id=parent_id,
+        parent_name=parent_name,
+        child_name=child_name
+    )
+
+    await callback.message.edit_text(
+        f"📨 Запрос на добавление ребенка <b>{child_name}</b> отправлен администратору.\n\n"
+        "Администратор свяжется с вами после добавления ребенка в систему.",
+        parse_mode="HTML"
+    )
+
+    await state.clear()
+    await callback.answer()
+
+
+@dp.callback_query(ParentStates.WAITING_ADMIN_APPROVAL, F.data == "cancel_child_add")
+async def cancel_child_add(callback: types.CallbackQuery, state: FSMContext):
+    """Отмена добавления ребенка"""
+    await callback.message.edit_text(
+        "❌ Добавление ребенка отменено."
+    )
+
+    await state.clear()
+    await callback.answer()
+
+
+async def find_child_by_name_in_db(child_name: str):
+    """Ищет ребенка по ФИО в базе данных"""
+    try:
+        if storage.db and storage.db.pool:
+            async with storage.db.pool.acquire() as conn:
+                # Нормализуем имя для поиска (убираем лишние пробелы, приводим к нижнему регистру)
+                normalized_search = ' '.join(child_name.strip().split()).lower()
+
+                # Ищем точное совпадение по ФИО (без учета регистра)
+                child = await conn.fetchrow(
+                    "SELECT user_id, user_name, roles FROM users WHERE LOWER(user_name) = $1",
+                    normalized_search
+                )
+
+                if child:
+                    logger.info(f"Найден ребенок по точному совпадению: {child['user_name']}")
+                    return dict(child)
+
+                # Разбиваем ФИО на части для поиска
+                name_parts = normalized_search.split()
+
+                # Ищем по частичным совпадениям
+                if len(name_parts) >= 2:
+                    # Ищем по имени и фамилии
+                    first_name = name_parts[0]
+                    last_name = name_parts[1] if len(name_parts) > 1 else ""
+
+                    if first_name and last_name:
+                        # Ищем где есть и имя и фамилия в любом порядке
+                        children = await conn.fetch(
+                            """
+                            SELECT user_id, user_name, roles FROM users 
+                            WHERE LOWER(user_name) LIKE $1 AND LOWER(user_name) LIKE $2
+                            """,
+                            f"%{first_name}%", f"%{last_name}%"
+                        )
+
+                        if children:
+                            logger.info(f"Найдено {len(children)} детей по имени и фамилии")
+                            # Возвращаем первого с ролью student, если есть
+                            for child in children:
+                                roles = child['roles'].split(',') if child['roles'] else []
+                                if 'student' in roles:
+                                    logger.info(f"Выбран ребенок с ролью student: {child['user_name']}")
+                                    return dict(child)
+                            # Если нет со student ролью, берем первого
+                            return dict(children[0])
+
+                # Ищем по любому из слов в ФИО
+                for part in name_parts:
+                    if len(part) > 2:  # Ищем только по словам длиннее 2 символов
+                        children = await conn.fetch(
+                            "SELECT user_id, user_name, roles FROM users WHERE LOWER(user_name) LIKE $1",
+                            f"%{part}%"
+                        )
+
+                        if children:
+                            logger.info(f"Найдено {len(children)} детей по части '{part}'")
+                            # Возвращаем первого с ролью student, если есть
+                            for child in children:
+                                roles = child['roles'].split(',') if child['roles'] else []
+                                if 'student' in roles:
+                                    logger.info(f"Выбран ребенок с ролью student: {child['user_name']}")
+                                    return dict(child)
+                            # Если нет со student ролью, берем первого
+                            return dict(children[0])
+
+                # Последняя попытка: поиск по началу имени
+                if len(name_parts) > 0:
+                    children = await conn.fetch(
+                        "SELECT user_id, user_name, roles FROM users WHERE LOWER(user_name) LIKE $1",
+                        f"{name_parts[0]}%"
+                    )
+
+                    if children:
+                        logger.info(f"Найдено {len(children)} детей по началу имени '{name_parts[0]}'")
+                        return dict(children[0])
+
+        logger.info(f"Ребенок с именем '{child_name}' не найден в базе")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error finding child by name '{child_name}': {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return None
+
+@dp.message(ParentStates.INPUT_CHILD_NAME)
+async def process_child_name_for_new(message: types.Message, state: FSMContext):
+    """Обработка ФИО ребенка (для новых и существующих)"""
+    child_name = message.text.strip()
+
+    if len(child_name.split()) < 2:
+        await message.answer("❌ Пожалуйста, введите полное ФИО (минимум имя и фамилия)")
+        return
+
+    data = await state.get_data()
+    parent_id = message.from_user.id
+
+    # Получаем имя родителя
+    if storage.db and storage.db.pool:
+        parent_data = await storage.db.get_user(parent_id)
+        parent_name = parent_data.get('user_name', f'Родитель {parent_id}') if parent_data else f'Родитель {parent_id}'
+    else:
+        parent_name = storage.get_user_name(parent_id) or f'Родитель {parent_id}'
+
+    child_tg_id = data.get('child_tg_id')
+    child_username = data.get('child_username')
+    is_new_child = data.get('is_new_child', True)
+
+    # Обновляем имя ребенка в состоянии
+    await state.update_data(child_name=child_name)
+
+    if is_new_child:
+        # НОВЫЙ ребенок - запрашиваем у админа предметы
+        await message.answer(
+            f"✅ Данные ребенка сохранены!\n\n"
+            f"👶 *Имя:* {child_name}\n"
+            f"📱 *Username:* @{child_username}\n"
+            f"🆔 *TG ID:* {child_tg_id}\n\n"
+            "📨 Запрос отправлен администратору.\n"
+            "Администратор назначит предметы и подтвердит добавление.",
+            parse_mode="Markdown"
+        )
+
+        # Уведомляем админа о НОВОМ ребенке
+        await notify_admin_about_new_child(
+            parent_id=parent_id,
+            parent_name=parent_name,
+            child_tg_id=child_tg_id,
+            child_name=child_name,
+            child_username=child_username
+        )
+
+    else:
+        # СУЩЕСТВУЮЩИЙ ребенок - только привязка
+        child_has_student_role = data.get('child_has_student_role', False)
+
+        if not child_has_student_role:
+            await message.answer(
+                f"⚠️ Внимание! У ребенка нет роли 'student'.\n\n"
+                f"Администратор должен назначить роль и предметы.",
+                parse_mode="Markdown"
+            )
+
+        await message.answer(
+            f"✅ Запрос на привязку отправлен!\n\n"
+            f"Администратор подтвердит привязку вас к ребенку.",
+            parse_mode="Markdown"
+        )
+
+        # Уведомляем админа о ПРИВЯЗКЕ существующего ребенка
+        await notify_admin_about_child_link(
+            parent_id=parent_id,
+            parent_name=parent_name,
+            child_tg_id=child_tg_id,
+            child_name=child_name,
+            child_username=child_username,
+            child_has_student_role=child_has_student_role
+        )
+
+    await state.set_state(ParentStates.WAITING_ADMIN_APPROVAL)
+
+
+async def notify_admin_about_new_child(parent_id: int, parent_name: str, child_name: str):
+    """Уведомляет администратора о новом ребенке"""
+    try:
+        message_text = (
+            f"👶 НОВЫЙ РЕБЕНОК - ТРЕБУЕТСЯ ДОБАВЛЕНИЕ\n\n"
+            f"👨‍👩‍👧‍👦 Родитель: {parent_name} (ID: {parent_id})\n"
+            f"👶 Ребенок: {child_name}\n\n"
+            f"Ребенок не найден в системе!\n"
+            f"Требуется:\n"
+            f"1. Добавить ребенка в базу\n"
+            f"2. Назначить роль 'student'\n"
+            f"3. Выбрать предметы\n"
+            f"4. Привязать к родителю"
+        )
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Добавить ребенка",
+                    callback_data=f"admin_add_new_child_{parent_id}_{child_name.replace(' ', '_')}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Отклонить",
+                    callback_data=f"admin_reject_request_{parent_id}"
+                )
+            ]
+        ])
+
+        for admin_id in ADMIN_IDS:
+            try:
+                await bot.send_message(
+                    admin_id,
+                    message_text,
+                    reply_markup=keyboard
+                )
+            except Exception as e:
+                logger.error(f"Не удалось уведомить админа {admin_id}: {e}")
+
+    except Exception as e:
+        logger.error(f"Error notifying admin about new child: {e}")
+
+
+async def notify_admin_about_child_link(parent_id: int, parent_name: str,
+                                        child_tg_id: int, child_name: str,
+                                        child_has_student_role: bool):
+    """Уведомляет администратора о привязке существующего ребенка"""
+    try:
+        role_status = "✅ ЕСТЬ роль 'student'" if child_has_student_role else "❌ НЕТ роли 'student'"
+
+        message_text = (
+            f"👶 ПРИВЯЗКА СУЩЕСТВУЮЩЕГО РЕБЕНКА\n\n"
+            f"👨‍👩‍👧‍👦 Родитель: {parent_name} (ID: {parent_id})\n"
+            f"👶 Ребенок: {child_name}\n"
+            f"🆔 TG ID: {child_tg_id}\n"
+            f"🎯 Роль student: {role_status}\n\n"
+            f"Подтвердить привязку родителя к ребенку?"
+        )
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Подтвердить привязку",
+                    callback_data=f"admin_link_child_{parent_id}_{child_tg_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"{'🎯 Назначить предметы' if not child_has_student_role else '🎯 Изменить предметы'}",
+                    callback_data=f"admin_set_subjects_{child_tg_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Отклонить",
+                    callback_data=f"admin_reject_link_{parent_id}_{child_tg_id}"
+                )
+            ]
+        ])
+
+        for admin_id in ADMIN_IDS:
+            try:
+                await bot.send_message(
+                    admin_id,
+                    message_text,
+                    reply_markup=keyboard
+                )
+            except Exception as e:
+                logger.error(f"Не удалось уведомить админа {admin_id}: {e}")
+
+    except Exception as e:
+        logger.error(f"Error notifying admin about child link: {e}")
+
+@dp.callback_query(F.data.startswith("admin_add_child_"))
+async def admin_add_new_child_handler(callback: types.CallbackQuery, state: FSMContext):
+    """Админ добавляет нового ребенка"""
+    try:
+        data_parts = callback.data.split('_')
+        parent_id = int(data_parts[3])
+        child_tg_id = int(data_parts[4])
+        child_name = '_'.join(data_parts[5:]).replace('_', ' ')  # Восстанавливаем имя с пробелами
+
+        # Сохраняем данные в состоянии админа
+        await state.update_data(
+            admin_adding_child=True,
+            admin_child_tg_id=child_tg_id,
+            admin_child_name=child_name,
+            admin_parent_id=parent_id
+        )
+
+        # Просим админа выбрать предметы
+        await callback.message.edit_text(
+            f"👶 *Добавление нового ребенка*\n\n"
+            f"*Имя:* {child_name}\n"
+            f"*TG ID:* {child_tg_id}\n"
+            f"*Родитель ID:* {parent_id}\n\n"
+            f"Выберите предметы для ребенка:",
+            parse_mode="Markdown",
+            reply_markup=generate_subjects_keyboard([])
+        )
+
+        # Переходим в состояние выбора предметов
+        await state.set_state(AdminAddRoleStates.SELECT_SUBJECTS)
+
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Error in admin_add_new_child_handler: {e}")
+        await callback.answer("Ошибка обработки", show_alert=True)
+
+
+@dp.callback_query(F.data.startswith("admin_link_child_"))
+async def admin_link_existing_child_handler(callback: types.CallbackQuery):
+    """Админ привязывает существующего ребенка к родителю"""
+    try:
+        data_parts = callback.data.split('_')
+        parent_id = int(data_parts[3])
+        child_tg_id = int(data_parts[4])
+
+        if not storage.db or not storage.db.pool:
+            await callback.answer("❌ Ошибка базы данных", show_alert=True)
+            return
+
+        # 1. Проверяем, что ребенок существует
+        child_data = await storage.db.get_user(child_tg_id)
+        if not child_data:
+            await callback.answer("❌ Ребенок не найден в базе", show_alert=True)
+            return
+
+        child_name = child_data.get('user_name', 'Ребенок')
+
+        # 2. Проверяем, нет ли уже привязки
+        existing_link = await storage.db.check_parent_child_link(parent_id, child_tg_id)
+        if existing_link:
+            await callback.message.edit_text(f"❌ Ребенок {child_name} уже привязан к этому родителю")
+            return
+
+        # 3. Создаем привязку
+        success = await storage.db.link_parent_child(parent_id, child_tg_id)
+
+        if success:
+            # Уведомляем родителя
+            try:
+                await bot.send_message(
+                    parent_id,
+                    f"✅ Администратор подтвердил привязку к ребенку *{child_name}*!\n\n"
+                    f"Теперь вы можете записывать ребенка на занятия.",
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                logger.error(f"Не удалось уведомить родителя: {e}")
+
+            # Получаем имя родителя
+            parent_data = await storage.db.get_user(parent_id)
+            parent_name = parent_data.get('user_name',
+                                          f'Родитель {parent_id}') if parent_data else f'Родитель {parent_id}'
+
+            await callback.message.edit_text(
+                f"✅ Ребенок *{child_name}* привязан к родителю *{parent_name}*"
+            )
+        else:
+            await callback.message.edit_text("❌ Ошибка при привязке ребенка")
+
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Error in admin_link_child_handler: {e}")
+        await callback.answer("Ошибка обработки", show_alert=True)
+
+
+@dp.callback_query(F.data.startswith("admin_set_subjects_"))
+async def admin_set_child_subjects_handler(callback: types.CallbackQuery, state: FSMContext):
+    """Админ назначает/изменяет предметы ребенку"""
+    try:
+        child_tg_id = int(callback.data.split('_')[3])
+
+        # Получаем данные ребенка
+        if storage.db and storage.db.pool:
+            child_data = await storage.db.get_user(child_tg_id)
+
+            if not child_data:
+                await callback.answer("❌ Ребенок не найден", show_alert=True)
+                return
+
+            child_name = child_data.get('user_name', 'Ребенок')
+
+            # Получаем текущие предметы ребенка
+            current_subjects = await storage.db.get_available_subjects_for_student_sync(child_tg_id)
+
+            # Сохраняем в состоянии
+            await state.update_data(
+                admin_setting_subjects=True,
+                admin_child_tg_id=child_tg_id,
+                admin_child_name=child_name
+            )
+
+            await callback.message.edit_text(
+                f"🎯 *Назначение предметов ребенку*\n\n"
+                f"*Имя:* {child_name}\n"
+                f"*TG ID:* {child_tg_id}\n\n"
+                f"Выберите предметы:",
+                parse_mode="Markdown",
+                reply_markup=generate_subjects_keyboard(
+                    selected_subjects=current_subjects,
+                    is_teacher=False
+                )
+            )
+
+            await state.set_state(AdminAddRoleStates.SELECT_SUBJECTS)
+
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Error in admin_set_subjects_handler: {e}")
+        await callback.answer("Ошибка обработки", show_alert=True)
+
 # Выбор пользователя из результатов поиска
 @dp.callback_query(F.data.startswith("admin_addrole_selectuser_"))
 async def admin_select_user_for_role(callback: types.CallbackQuery, state: FSMContext):
@@ -1802,6 +2747,7 @@ async def handle_waiting_receipt_text(message: types.Message):
         "• Отправьте его в этот чат"
     )
 
+
 @dp.message(BookingStates.INPUT_NAME)
 async def process_name(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
@@ -1815,7 +2761,7 @@ async def process_name(message: types.Message, state: FSMContext):
     storage.save_user_name(user_id, user_name)
     await state.update_data(user_name=user_name)
 
-    # Проверяем, есть ли роли - ВАЖНО: вызываем асинхронный метод напрямую
+    # Проверяем, есть ли роли
     if storage.db and storage.db.pool:
         has_roles = await storage.db.has_user_roles_sync(user_id)
         if has_roles:
@@ -1828,26 +2774,28 @@ async def process_name(message: types.Message, state: FSMContext):
             user_roles = storage.get_user_roles(user_id)
         else:
             user_roles = []
-    
-    if user_roles:
-        builder = InlineKeyboardBuilder()
-        if 'teacher' in user_roles:
-            builder.button(text="👨‍🏫 Как преподаватель", callback_data="role_teacher")
-        if 'student' in user_roles:
-            builder.button(text="👨‍🎓 Как ученик", callback_data="role_student")
 
+    if user_roles:
+        # Если есть роли, показываем меню СРАЗУ
         await message.answer(
-            "Выберите роль для этого бронирования:",
-            reply_markup=builder.as_markup()
+            f"✅ Ваше ФИО сохранено: {user_name}",
+            reply_markup=await generate_main_menu(user_id, storage)  # ПОКАЗЫВАЕМ МЕНЮ!
         )
-        await state.set_state(BookingStates.SELECT_ROLE)
+
+        # Дополнительно для родителей
+        if 'parent' in user_roles:
+            await message.answer(
+                "👶 *Вы родитель!*\n\n"
+                "Используйте кнопку '👶 Добавить ребенка' чтобы добавить своих детей.",
+                parse_mode="Markdown"
+            )
     else:
         await message.answer(
             "✅ Ваше ФИО сохранено!\n"
             "⏳ Обратитесь к администратору для получения ролей. \n Телефон администратора: +79001372727",
-            reply_markup=await generate_main_menu(user_id,storage)
+            reply_markup=ReplyKeyboardRemove()
         )
-        
+
         # Уведомляем администраторов о новом пользователе
         admin_kb = InlineKeyboardBuilder()
         admin_kb.button(text="👨‍🎓 Добавить ученика", callback_data=f"admin_assign_role_student_{user_id}")
@@ -1862,7 +2810,7 @@ async def process_name(message: types.Message, state: FSMContext):
                     f"🆕 Новый пользователь ожидает ролей:\n"
                     f"ID: {user_id}\n"
                     f"Имя: {user_name}\n\n"
-                    f"Выберите роль для добавления (можно добавить несколько ролей):",  # Измененный текст
+                    f"Выберите роль для добавления (можно добавить несколько ролей):",
                     reply_markup=admin_kb.as_markup()
                 )
             except Exception as e:
@@ -2904,6 +3852,45 @@ async def confirm_time_range(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(BookingStates.CONFIRMATION)
     await callback.answer()
 
+
+@dp.message(F.text == "👶 Мои дети")
+async def show_my_children(message: types.Message):
+    """Показывает список детей родителя"""
+    user_id = message.from_user.id
+
+    if storage.db and storage.db.pool:
+        children_ids = await storage.db.get_parent_children_sync(user_id)
+    else:
+        children_ids = storage.get_parent_children(user_id)
+
+    if not children_ids:
+        await message.answer(
+            "👶 У вас еще нет привязанных детей.\n\n"
+            "Используйте команду /addchild чтобы добавить ребенка."
+        )
+        return
+
+    children_info = []
+    for child_id in children_ids:
+        if storage.db and storage.db.pool:
+            child_data = await storage.db.get_user(child_id)
+            child_name = child_data.get('user_name', f'Ребенок {child_id}') if child_data else f'Ребенок {child_id}'
+
+            # Получаем предметы ребенка
+            subjects = await storage.db.get_available_subjects_for_student_sync(child_id)
+            subject_names = [SUBJECTS.get(s, s) for s in subjects]
+
+            children_info.append(
+                f"👶 *{child_name}*\n"
+                f"🆔 *ID:* {child_id}\n"
+                f"🎯 *Предметы:* {', '.join(subject_names) if subject_names else 'не назначены'}\n"
+                f"────────────────────"
+            )
+
+    await message.answer(
+        f"👨‍👩‍👧‍👦 *Ваши дети:*\n\n" + "\n\n".join(children_info),
+        parse_mode="Markdown"
+    )
 
 @dp.callback_query(BookingStates.CONFIRMATION, F.data == "booking_confirm")
 async def process_confirmation(callback: types.CallbackQuery, state: FSMContext):
