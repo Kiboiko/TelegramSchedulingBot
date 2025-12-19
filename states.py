@@ -38,3 +38,7 @@ class ParentStates(StatesGroup):
     INPUT_CHILD_USERNAME = State()      # Ввод @username ребенка (ОБЯЗАТЕЛЬНО!)
     INPUT_CHILD_NAME = State()          # Ввод ФИО ребенка
     WAITING_ADMIN_APPROVAL = State()    # Ожидание подтверждения админа
+
+class AdminRemoveRoleStates(StatesGroup):
+    INPUT_USER_NAME = State()  # Ввод ФИО пользователя для поиска
+    SELECT_ROLE_TO_REMOVE = State()  # Выбор роли для удаления

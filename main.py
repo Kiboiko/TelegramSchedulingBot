@@ -1,7 +1,7 @@
 # main.py
 import sys
 
-sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\shedule_app")
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.session.aiohttp import AiohttpSession
 from payment_handlers import PaymentStates
@@ -1312,7 +1312,7 @@ async def start_schedule_generation(message: types.Message, state: FSMContext):
     await state.set_state(BookingStates.SELECT_SCHEDULE_DATE)
 
 
-from states import AdminAddRoleStates  # Импортируем новые состояния
+from states import AdminAddRoleStates, AdminRemoveRoleStates  # Импортируем новые состояния
 
 
 # Команда для администратора - добавить роль пользователю
@@ -1331,6 +1331,24 @@ async def admin_add_role_command(message: types.Message, state: FSMContext):
         "💡 Подсказка: можно ввести часть имени для поиска"
     )
     await state.set_state(AdminAddRoleStates.INPUT_USER_NAME)
+
+
+# Команда для администратора - удалить роль у пользователя
+@dp.message(F.text == "➖ Удалить роль пользователю")
+@dp.message(Command("removerole"))
+async def admin_remove_role_command(message: types.Message, state: FSMContext):
+    """Начало процесса удаления роли у пользователя"""
+    user_id = message.from_user.id
+
+    if not is_admin(user_id):
+        await message.answer("❌ Эта команда только для администраторов")
+        return
+
+    await message.answer(
+        "Введите ФИО пользователя, у которого хотите удалить роль:\n\n"
+        "💡 Подсказка: можно ввести часть имени для поиска"
+    )
+    await state.set_state(AdminRemoveRoleStates.INPUT_USER_NAME)
 
 
 # Поиск пользователей по имени
@@ -2193,6 +2211,67 @@ async def admin_set_child_subjects_handler(callback: types.CallbackQuery, state:
         logger.error(f"Error in admin_set_subjects_handler: {e}")
         await callback.answer("Ошибка обработки", show_alert=True)
 
+# Аналогичный поиск для удаления ролей
+@dp.message(AdminRemoveRoleStates.INPUT_USER_NAME)
+async def admin_search_user_for_removal(message: types.Message, state: FSMContext):
+    """Поиск пользователей по ФИО (для удаления ролей)"""
+    search_query = message.text.strip()
+
+    if not search_query:
+        await message.answer("Пожалуйста, введите ФИО для поиска")
+        return
+
+    try:
+        if storage.db and storage.db.pool:
+            async with storage.db.pool.acquire() as conn:
+                users = await conn.fetch(
+                    "SELECT user_id, user_name, roles FROM users WHERE user_name ILIKE $1 ORDER BY user_name LIMIT 10",
+                    f"%{search_query}%"
+                )
+
+                if not users:
+                    await message.answer(
+                        f"❌ Пользователи с именем '{search_query}' не найдены.\n"
+                        "Попробуйте другое имя или проверьте правильность написания."
+                    )
+                    return
+
+                builder = InlineKeyboardBuilder()
+
+                for user in users:
+                    user_id = user['user_id']
+                    user_name = user['user_name']
+                    roles = user['roles'] or "нет ролей"
+
+                    button_text = f"{user_name} (ID: {user_id}, роли: {roles})"
+                    if len(button_text) > 40:
+                        button_text = f"{user_name[:20]}... (ID: {user_id})"
+
+                    builder.button(
+                        text=button_text,
+                        callback_data=f"admin_removerole_selectuser_{user_id}"
+                    )
+
+                builder.adjust(1)
+
+                await message.answer(
+                    f"🔍 Найдено пользователей: {len(users)}\n"
+                    "Выберите пользователя:",
+                    reply_markup=builder.as_markup()
+                )
+
+                await state.update_data(
+                    search_results=[dict(user) for user in users],
+                    search_query=search_query
+                )
+        else:
+            await message.answer("❌ Ошибка подключения к базе данных")
+
+    except Exception as e:
+        logger.error(f"Ошибка поиска пользователей (удаление ролей): {e}")
+        await message.answer("❌ Произошла ошибка при поиске пользователей")
+
+
 # Выбор пользователя из результатов поиска
 @dp.callback_query(F.data.startswith("admin_addrole_selectuser_"))
 async def admin_select_user_for_role(callback: types.CallbackQuery, state: FSMContext):
@@ -2262,11 +2341,66 @@ async def admin_select_user_for_role(callback: types.CallbackQuery, state: FSMCo
 
             await state.set_state(AdminAddRoleStates.SELECT_ROLE_TO_ADD)
 
+    except Exception as e:
+        logger.error(f"Ошибка выбора пользователя: {e}")
+        await callback.answer("Произошла ошибка", show_alert=True)
+
+
+# Выбор пользователя для удаления роли
+@dp.callback_query(F.data.startswith("admin_removerole_selectuser_"))
+async def admin_select_user_for_removal(callback: types.CallbackQuery, state: FSMContext):
+    """Выбор пользователя для удаления роли"""
+    try:
+        user_id = int(callback.data.replace("admin_removerole_selectuser_", ""))
+
+        if storage.db and storage.db.pool:
+            user = await storage.db.get_user(user_id)
+
+            if not user:
+                await callback.answer("Пользователь не найден", show_alert=True)
+                return
+
+            user_name = user.get('user_name', 'Без имени')
+            current_roles = await storage.db.get_user_roles(user_id)
+
+            await state.update_data(
+                target_user_id=user_id,
+                target_user_name=user_name,
+                current_roles=current_roles
+            )
+
+            if not current_roles:
+                await callback.message.edit_text(
+                    f"❌ У пользователя {user_name} нет назначенных ролей"
+                )
+                await state.clear()
+                return
+
+            builder = InlineKeyboardBuilder()
+
+            # Добавляем кнопки для ролей, которые можно удалить
+            for r in current_roles:
+                pretty = 'преподаватель' if r == 'teacher' else ('ученик' if r == 'student' else ('родитель' if r == 'parent' else r))
+                builder.button(text=f"Удалить роль: {pretty}", callback_data=f"admin_removerole_chooserole_{r}")
+
+            builder.button(text="❌ Отмена", callback_data="admin_removerole_cancel")
+            builder.adjust(1)
+
+            current_roles_text = ', '.join(current_roles) if current_roles else "нет ролей"
+
+            await callback.message.edit_text(
+                f"👤 Пользователь: {user_name}\n"
+                f"📋 Текущие роли: {current_roles_text}\n\n"
+                "Выберите роль для удаления:",
+                reply_markup=builder.as_markup()
+            )
+
+            await state.set_state(AdminRemoveRoleStates.SELECT_ROLE_TO_REMOVE)
         else:
             await callback.answer("Ошибка подключения к БД", show_alert=True)
 
     except Exception as e:
-        logger.error(f"Ошибка выбора пользователя: {e}")
+        logger.error(f"Ошибка выбора пользователя для удаления роли: {e}")
         await callback.answer("Произошла ошибка", show_alert=True)
 
 
@@ -2299,6 +2433,37 @@ async def admin_choose_role_to_add(callback: types.CallbackQuery, state: FSMCont
 
     except Exception as e:
         logger.error(f"Ошибка выбора роли: {e}")
+        await callback.answer("Произошла ошибка", show_alert=True)
+
+
+# Выбор роли для удаления
+@dp.callback_query(AdminRemoveRoleStates.SELECT_ROLE_TO_REMOVE, F.data.startswith("admin_removerole_chooserole_"))
+async def admin_choose_role_to_remove(callback: types.CallbackQuery, state: FSMContext):
+    """Обработка выбора роли для удаления: показываем подтверждение"""
+    try:
+        role = callback.data.replace("admin_removerole_chooserole_", "")
+
+        await state.update_data(target_role=role)
+
+        data = await state.get_data()
+        user_name = data.get('target_user_name', '')
+
+        # Подтверждение удаления
+        builder = InlineKeyboardBuilder()
+        builder.button(text="✅ Удалить", callback_data=f"admin_removerole_confirm_{role}")
+        builder.button(text="❌ Отмена", callback_data="admin_removerole_cancel")
+        builder.adjust(2)
+
+        await callback.message.edit_text(
+            f"Удалить роль {role} у пользователя {user_name}?\n\n"
+            "Внимание: при удалении роли у преподавателя/ученика будут удалены связанные предметы.",
+            reply_markup=builder.as_markup()
+        )
+        await state.set_state(AdminRemoveRoleStates.SELECT_ROLE_TO_REMOVE)
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Ошибка при выборе роли для удаления: {e}")
         await callback.answer("Произошла ошибка", show_alert=True)
 
 
@@ -2436,6 +2601,60 @@ async def admin_addrole_subjects_cancel(callback: types.CallbackQuery, state: FS
     await callback.message.edit_text("❌ Добавление роли отменено")
     await state.clear()
     await callback.answer()
+
+
+# Подтверждение удаления роли
+@dp.callback_query(AdminRemoveRoleStates.SELECT_ROLE_TO_REMOVE, F.data.startswith("admin_removerole_confirm_"))
+async def admin_confirm_role_removal(callback: types.CallbackQuery, state: FSMContext):
+    """Выполняет удаление роли и связанных данных"""
+    try:
+        role = callback.data.replace("admin_removerole_confirm_", "")
+        data = await state.get_data()
+        target_user_id = data.get('target_user_id')
+        target_user_name = data.get('target_user_name', '')
+
+        if not target_user_id:
+            await callback.answer("Нет выбранного пользователя", show_alert=True)
+            return
+
+        # Выполняем удаление
+        success = await storage.db.remove_user_role(target_user_id, role)
+
+        if not success:
+            await callback.message.edit_text("❌ Ошибка при удалении роли. Попробуйте позже.")
+            await state.clear()
+            return
+
+        await callback.message.edit_text(
+            f"✅ Роль '{role}' успешно удалена у пользователя {target_user_name}"
+        )
+
+        # Уведомляем пользователя
+        try:
+            pretty = 'Преподаватель' if role == 'teacher' else ('Ученик' if role == 'student' else 'Родитель')
+            await bot.send_message(
+                target_user_id,
+                f"❌ Ваша роль '{pretty}' была удалена администратором.\nЕсли это ошибка, свяжитесь с администратором."
+            )
+        except Exception:
+            pass
+
+        await state.clear()
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Ошибка при подтверждении удаления роли: {e}")
+        await callback.answer("Произошла ошибка", show_alert=True)
+
+
+# Отмена удаления роли
+@dp.callback_query(F.data == "admin_removerole_cancel")
+async def admin_removerole_cancel(callback: types.CallbackQuery, state: FSMContext):
+    """Отмена процесса удаления роли"""
+    await callback.message.edit_text("❌ Удаление роли отменено")
+    await state.clear()
+    await callback.answer()
+
 
 @dp.message(Command("admin"))
 async def admin_command(message: types.Message):
