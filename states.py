@@ -38,3 +38,8 @@ class AdminAddRoleStates(StatesGroup):
 class AdminRemoveRoleStates(StatesGroup):
     INPUT_USER_NAME = State()  # Ввод ФИО пользователя для поиска
     SELECT_ROLE_TO_REMOVE = State()  # Выбор роли для удаления
+
+
+class AdminViewFeedbackStates(StatesGroup):
+    INPUT_USER_NAME = State()  # Ввод ФИО пользователя для просмотра отзывов
+    SELECT_USER = State()  # Выбор пользователя из результатов поиска

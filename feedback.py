@@ -254,6 +254,18 @@ class FeedbackManager:
         if rating in ['better', 'bad']:
             asyncio.create_task(self.send_admin_notification(feedback_record))
 
+    def get_user_feedbacks(self, user_id: int) -> List[Dict[str, Any]]:
+        """Возвращает все завершенные отзывы для пользователя (локально)."""
+        try:
+            data = self.load_feedback_data()
+            user_feedbacks = [f for f in data if str(f.get('user_id')) == str(user_id) and f.get('status') == 'completed']
+            # Сортируем по времени ответа (последние первыми)
+            user_feedbacks.sort(key=lambda x: x.get('responded_at', ''), reverse=True)
+            return user_feedbacks
+        except Exception as e:
+            logger.error(f"Ошибка получения отзывов пользователя {user_id}: {e}")
+            return []
+
     async def send_admin_notification(self, feedback_record: Dict[str, Any]):
         """Отправляет уведомление администраторам о негативной обратной связи"""
         try:

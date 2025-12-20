@@ -24,10 +24,23 @@ async def generate_main_menu(user_id: int, storage) -> ReplyKeyboardMarkup:
     # ВАЖНО: Вызываем асинхронный метод напрямую, так как мы в async контексте
     if storage.db and storage.db.pool:
         roles = await storage.db.get_user_roles(user_id)
+        logger.info(f"generate_main_menu: fetched roles from DB for {user_id}: {roles}")
     else:
         roles = storage.get_user_roles(user_id)
+        logger.info(f"generate_main_menu: fetched roles from storage for {user_id}: {roles}")
 
     if not roles:
+        # Если пользователь — администратор, показываем дополнительные кнопки
+        if is_admin(user_id):
+            keyboard_buttons = [
+                [KeyboardButton(text="❓ Обратиться к администратору")],
+                [KeyboardButton(text="🔄 Проверить наличие ролей")],
+                [KeyboardButton(text="➕ Добавить роль пользователю")],
+                [KeyboardButton(text="➖ Удалить роль пользователю")],
+            ]
+            logger.info(f"generate_main_menu: user {user_id} is admin and has no roles — returning admin menu")
+            return ReplyKeyboardMarkup(keyboard=keyboard_buttons, resize_keyboard=True)
+        logger.info(f"generate_main_menu: no roles for {user_id}, returning no_roles_menu")
         return no_roles_menu
 
     keyboard_buttons = []
@@ -56,6 +69,7 @@ async def generate_main_menu(user_id: int, storage) -> ReplyKeyboardMarkup:
         keyboard_buttons.append([KeyboardButton(text="📚 Сгенерировать материалы")])
         keyboard_buttons.append([KeyboardButton(text="➕ Добавить роль пользователю")])
         keyboard_buttons.append([KeyboardButton(text="➖ Удалить роль пользователю")])
+        keyboard_buttons.append([KeyboardButton(text="📝 Просмотреть отзывы")])
 
     return ReplyKeyboardMarkup(keyboard=keyboard_buttons, resize_keyboard=True)
 
@@ -70,6 +84,13 @@ async def cmd_start(message: types.Message, state: FSMContext, storage):
         user_name = storage.get_user_name(user_id)
 
     menu = await generate_main_menu(user_id, storage)
+
+    # Debug: log menu type and keyboard rows to help diagnose missing keyboard
+    try:
+        rows = len(menu.keyboard) if hasattr(menu, 'keyboard') else 'N/A'
+    except Exception:
+        rows = 'err'
+    logger.info(f"cmd_start: generated menu for {user_id}, menu_type={type(menu)}, rows={rows}")
 
     if user_name:
         await message.answer(
