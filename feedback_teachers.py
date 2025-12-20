@@ -1,18 +1,11 @@
-# feedback_teachers.py
-import json
 import logging
-from datetime import datetime, time, timedelta
+from datetime import datetime
 from typing import List, Dict, Any
 from aiogram import Bot, types
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
+from database import db
+from config import SUBJECTS
 
 logger = logging.getLogger(__name__)
-
-
-class FeedbackTeacherStates(StatesGroup):
-    WAITING_FEEDBACK_REASON = State()
-    WAITING_FEEDBACK_DETAILS = State()
 
 
 class FeedbackTeacherManager:
@@ -20,124 +13,153 @@ class FeedbackTeacherManager:
         self.storage = storage
         self.gsheets = gsheets_manager
         self.bot = bot
-        self.feedback_file = "feedback_teachers.json"
-        self.good_feedback_delay = 7  # Берем из конфига
+        self.good_feedback_delay = 7
 
-    def load_feedback_data(self) -> List[Dict[str, Any]]:
-        """Загружает данные обратной связи преподавателей из JSON"""
+    async def save_feedback_response(self, user_id: int, date_str: str,
+                                     rating: str, details: str = ""):
+        """Сохраняет ответ обратной связи преподавателя в БД"""
         try:
-            with open(self.feedback_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            return []
+            async with db.pool.acquire() as conn:
+                date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
 
-    def get_lesson_count_since_last_good_feedback(self, user_id: int) -> int:
-        """Получает количество занятий с последнего отзыва 'Хорошо' для преподавателя"""
-        feedback_data = self.load_feedback_data()
+                # Проверяем существующую запись
+                existing = await conn.fetchrow("""
+                    SELECT feedback_id FROM feedback_teachers 
+                    WHERE user_id = $1 AND date = $2
+                """, user_id, date_obj)
 
-        # Находим последний отзыв "Хорошо" для этого преподавателя
-        last_good_feedbacks = [
-            f for f in feedback_data
-            if (f.get('user_id') == user_id and
-                f.get('rating') == 'good' and
-                f.get('status') == 'completed')
-        ]
+                if existing:
+                    # Обновляем существующую запись
+                    await conn.execute("""
+                        UPDATE feedback_teachers 
+                        SET rating = $1, details = $2, created_at = CURRENT_TIMESTAMP
+                        WHERE user_id = $3 AND date = $4
+                    """, rating, details, user_id, date_obj)
+                else:
+                    # Создаем новую запись
+                    await conn.execute("""
+                        INSERT INTO feedback_teachers 
+                        (user_id, date, rating, details)
+                        VALUES ($1, $2, $3, $4)
+                    """, user_id, date_obj, rating, details)
 
-        if not last_good_feedbacks:
-            return 0  # Не было отзывов "Хорошо" - отправляем сразу
+                logger.info(f"✅ Teacher feedback saved: user_id={user_id}, date={date_str}")
 
-        # Берем самый последний отзыв "Хорошо"
-        last_good_feedback = max(last_good_feedbacks, key=lambda x: x.get('responded_at', ''))
-
-        # Получаем все занятия после этого отзыва
-        all_bookings = self.storage.load()
-        user_bookings = [
-            b for b in all_bookings
-            if (b.get('user_id') == user_id and
-                b.get('user_role') == 'teacher')
-        ]
-
-        # Фильтруем занятия, которые были после последнего отзыва "Хорошо"
-        last_feedback_date = datetime.fromisoformat(last_good_feedback['responded_at']).date()
-        subsequent_lessons = [
-            b for b in user_bookings
-            if datetime.strptime(b['date'], "%Y-%m-%d").date() > last_feedback_date
-        ]
-
-        return len(subsequent_lessons)
-
-    def should_send_feedback(self, user_id: int, date: str) -> bool:
-        """Определяет, нужно ли отправлять отзыв для этого занятия преподавателю"""
-        # Проверяем, не отправляли ли уже отзыв для этого занятия
-        if self.check_feedback_sent(user_id, date):
-            return False
-
-        # Получаем количество занятий с последнего "Хорошо"
-        lesson_count = self.get_lesson_count_since_last_good_feedback(user_id)
-
-        # Если было "Хорошо" и прошло меньше занятий, чем delay - не отправляем
-        if lesson_count > 0 and lesson_count < self.good_feedback_delay:
-            return False
-
-        return True
-    def save_feedback_data(self, data: List[Dict[str, Any]]):
-        """Сохраняет данные обратной связи преподавателей в JSON"""
-        try:
-            with open(self.feedback_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            logger.error(f"Ошибка сохранения feedback_teachers: {e}")
+            logger.error(f"❌ Error saving teacher feedback: {e}")
 
-    def get_todays_finished_lessons(self) -> List[Dict[str, Any]]:
-        """Получает список завершенных занятий преподавателей на сегодня с учетом счетчика"""
+    async def get_todays_finished_lessons(self) -> List[Dict[str, Any]]:
+        """Получает список завершенных смен преподавателей на сегодня"""
         try:
             today = datetime.now().date()
             today_str = today.strftime("%Y-%m-%d")
-            bookings = self.storage.load()
-            finished_lessons = []
 
-            for booking in bookings:
-                if (booking.get('user_role') == 'teacher' and
-                        booking.get('date') == today_str):
+            # Получаем бронирования преподавателей на сегодня
+            async with db.pool.acquire() as conn:
+                bookings = await conn.fetch("""
+                    SELECT b.*, u.user_name
+                    FROM bookings b
+                    JOIN users u ON b.user_id = u.user_id
+                    WHERE b.user_role = 'teacher'
+                    AND b.date = $1
+                    AND b.end_time::time < CURRENT_TIME
+                """, today)
 
-                    end_time_str = booking.get('end_time', '')
-                    if end_time_str:
-                        try:
-                            end_time = datetime.strptime(end_time_str, "%H:%M").time()
-                            current_time = datetime.now().time()
+                finished_lessons = []
+                for booking in bookings:
+                    b = dict(booking)
 
-                            if current_time > end_time:
-                                # ИСПРАВЛЕНИЕ: используем новую логику проверки
-                                if self.should_send_feedback(
-                                    booking.get('user_id'),
-                                    today_str
-                                ):
-                                    finished_lessons.append(booking)
+                    # Преобразуем время
+                    if b.get('start_time'):
+                        b['start_time'] = b['start_time'].strftime("%H:%M")
+                    if b.get('end_time'):
+                        b['end_time'] = b['end_time'].strftime("%H:%M")
+                    if b.get('date'):
+                        b['date'] = b['date'].strftime("%Y-%m-%d")
 
-                        except ValueError:
-                            continue
+                    # Получаем предметы преподавателя
+                    subjects = []
+                    if b.get('subjects'):
+                        subjects = [s.strip() for s in b['subjects'].split(',') if s.strip()]
+                    b['subjects'] = subjects
 
-            return finished_lessons
+                    # Проверяем, нужно ли отправлять фидбэк
+                    if await self.should_send_feedback(b['user_id'], today_str):
+                        finished_lessons.append(b)
+
+                return finished_lessons
 
         except Exception as e:
-            logger.error(f"Ошибка получения завершенных занятий преподавателей: {e}")
+            logger.error(f"❌ Error getting finished teacher lessons: {e}")
             return []
 
-    def check_feedback_sent(self, user_id: int, date: str) -> bool:
+    async def should_send_feedback(self, user_id: int, date_str: str) -> bool:
+        """Определяет, нужно ли отправлять отзыв преподавателю"""
+        try:
+            # Проверяем, не отправляли ли уже отзыв
+            if await self.check_feedback_sent(user_id, date_str):
+                return False
+
+            # Получаем количество смен с последнего "Хорошо"
+            shift_count = await self.get_shift_count_since_last_good_feedback(user_id)
+
+            # Если было "Хорошо" и прошло меньше смен, чем delay - не отправляем
+            if shift_count > 0 and shift_count < self.good_feedback_delay:
+                return False
+
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Error checking teacher feedback need: {e}")
+            return True
+
+    async def check_feedback_sent(self, user_id: int, date_str: str) -> bool:
         """Проверяет, была ли уже отправлена обратная связь преподавателю"""
-        feedback_data = self.load_feedback_data()
+        try:
+            async with db.pool.acquire() as conn:
+                date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
+                feedback = await conn.fetchrow("""
+                    SELECT feedback_id FROM feedback_teachers 
+                    WHERE user_id = $1 AND date = $2
+                """, user_id, date_obj)
+                return feedback is not None
+        except Exception as e:
+            logger.error(f"❌ Error checking teacher feedback sent: {e}")
+            return True
 
-        for feedback in feedback_data:
-            if (feedback.get('user_id') == user_id and
-                    feedback.get('date') == date):
-                return True
+    async def get_shift_count_since_last_good_feedback(self, user_id: int) -> int:
+        """Получает количество смен с последнего отзыва 'Хорошо' у преподавателя"""
+        try:
+            async with db.pool.acquire() as conn:
+                # Находим последний отзыв "Хорошо"
+                last_good = await conn.fetchrow("""
+                    SELECT date FROM feedback_teachers 
+                    WHERE user_id = $1 AND rating = 'good'
+                    ORDER BY date DESC LIMIT 1
+                """, user_id)
 
-        return False
+                if not last_good:
+                    return 0
+
+                # Получаем смены после последнего отзыва "Хорошо"
+                shifts = await conn.fetch("""
+                    SELECT COUNT(*) as count
+                    FROM bookings 
+                    WHERE user_id = $1 
+                    AND user_role = 'teacher'
+                    AND date > $2
+                """, user_id, last_good['date'])
+
+                return shifts[0]['count'] if shifts else 0
+
+        except Exception as e:
+            logger.error(f"❌ Error getting teacher shift count: {e}")
+            return 0
 
     async def send_feedback_questions(self):
-        """Отправляет вопросы обратной связи для завершенных занятий преподавателей"""
+        """Отправляет вопросы обратной связи преподавателям"""
         try:
-            finished_lessons = self.get_todays_finished_lessons()
+            finished_lessons = await self.get_todays_finished_lessons()
 
             for lesson in finished_lessons:
                 user_id = lesson.get('user_id')
@@ -147,7 +169,6 @@ class FeedbackTeacherManager:
                 subjects = lesson.get('subjects', [])
 
                 # Получаем название предметов
-                from config import SUBJECTS
                 subject_names = []
                 for subject_id in subjects:
                     subject_name = SUBJECTS.get(subject_id, f"Предмет {subject_id}")
@@ -157,11 +178,12 @@ class FeedbackTeacherManager:
 
                 # Форматируем дату
                 lesson_date = datetime.strptime(date_str, "%Y-%m-%d")
-                weekdays_ru = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+                weekdays_ru = ["Понедельник", "Вторник", "Среда", "Четверг",
+                               "Пятница", "Суббота", "Воскресенье"]
                 weekday = weekdays_ru[lesson_date.weekday()]
                 formatted_date = lesson_date.strftime("%d.%m.%Y")
 
-                # Создаем клавиатуру с вариантами ответов
+                # Создаем клавиатуру
                 keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
                     [
                         types.InlineKeyboardButton(
@@ -196,193 +218,45 @@ class FeedbackTeacherManager:
                         text=message_text,
                         reply_markup=keyboard
                     )
-                    logger.info(f"Отправлен запрос обратной связи преподавателю {user_id}")
+                    logger.info(f"✅ Teacher feedback question sent to user {user_id}")
 
                     # Помечаем как отправленный
-                    self.mark_feedback_sent(user_id, date_str)
+                    await self.mark_feedback_sent(user_id, date_str)
 
                 except Exception as e:
-                    logger.error(f"Не удалось отправить сообщение преподавателю {user_id}: {e}")
+                    logger.error(f"❌ Failed to send feedback to teacher {user_id}: {e}")
 
         except Exception as e:
-            logger.error(f"Ошибка отправки обратной связи преподавателям: {e}")
+            logger.error(f"❌ Error in teacher send_feedback_questions: {e}")
 
-    def mark_feedback_sent(self, user_id: int, date: str):
+    async def mark_feedback_sent(self, user_id: int, date_str: str):
         """Помечает, что запрос обратной связи был отправлен преподавателю"""
-        feedback_data = self.load_feedback_data()
-
-        feedback_record = {
-            'user_id': user_id,
-            'date': date,
-            'sent_at': datetime.now().isoformat(),
-            'status': 'request_sent'
-        }
-
-        feedback_data.append(feedback_record)
-        self.save_feedback_data(feedback_data)
-
-    def save_feedback_response(self, user_id: int, date: str,
-                               rating: str, details: str = ""):
-        """Сохраняет ответ обратной связи преподавателя"""
-        feedback_data = self.load_feedback_data()
-
-        # Удаляем старую запись о отправке
-        feedback_data = [f for f in feedback_data if not (
-                f.get('user_id') == user_id and
-                f.get('date') == date and
-                f.get('status') == 'request_sent'
-        )]
-
-        feedback_record = {
-            'user_id': user_id,
-            'date': date,
-            'rating': rating,
-            'details': details,
-            'responded_at': datetime.now().isoformat(),
-            'status': 'completed'
-        }
-
-        feedback_data.append(feedback_record)
-        self.save_feedback_data(feedback_data)
-
-        # Также сохраняем в Google Sheets
-        self.sync_feedback_to_gsheets(feedback_record)
-
-    def sync_feedback_to_gsheets(self, feedback_record: Dict[str, Any]):
-        """Синхронизирует обратную связь преподавателя с Google Sheets"""
         try:
-            if not self.gsheets:
-                logger.warning("Google Sheets manager не доступен")
-                return
-
-            required_fields = ['user_id', 'date', 'rating']
-            for field in required_fields:
-                if field not in feedback_record:
-                    logger.error(f"Отсутствует обязательное поле {field} в feedback_record")
-                    return
-
-            # Форматируем дату занятия для поиска столбцов
-            date_obj = datetime.strptime(feedback_record['date'], "%Y-%m-%d")
-            formatted_date = date_obj.strftime("%d.%m.%Y")
-
-            # Получаем данные листа "обратная связь преподаватели"
-            worksheet = self.gsheets._get_or_create_worksheet("обратная связь преподаватели")
-            data = worksheet.get_all_values()
-
-            if not data:
-                logger.warning("Лист 'обратная связь преподаватели' пуст")
-                return
-
-            # Находим заголовки
-            headers = [h.strip().lower() for h in data[0]]
-
-            # Ищем колонки для даты занятия
-            date_col_start = -1
-            date_col_end = -1
-
-            for i, header in enumerate(headers):
-                if header.startswith(formatted_date.lower()):
-                    if date_col_start == -1:
-                        date_col_start = i
-                    else:
-                        date_col_end = i
-                        break
-
-            if date_col_start == -1:
-                logger.error(f"Дата {formatted_date} не найдена в заголовках обратной связи преподавателей")
-                return
-
-            # Если не нашли вторую колонку, предполагаем что следующая - для текста
-            if date_col_end == -1:
-                date_col_end = date_col_start + 1
-
-            # Получаем имя преподавателя
-            user_name = self.storage.get_user_name(feedback_record['user_id'])
-            if not user_name:
-                user_name = f"Teacher_{feedback_record['user_id']}"
-
-            # Преобразуем рейтинг в текст
-            rating_text = {
-                'good': 'Хорошо',
-                'better': 'Могло быть лучше',
-                'bad': 'Ужасно'
-            }.get(feedback_record['rating'], feedback_record['rating'])
-
-            details_text = feedback_record.get('details', '')
-
-            # Ищем строку с user_id
-            target_row = -1
-
-            for row_idx, row in enumerate(data[1:], start=2):  # Пропускаем заголовок
-                if len(row) > 0 and str(row[0]).strip() == str(feedback_record['user_id']):
-                    target_row = row_idx
-                    break
-
-            # Если не нашли, создаем новую строку
-            if target_row == -1:
-                # Добавляем новую строку
-                new_row = [
-                    feedback_record['user_id'],
-                    user_name,
-                    # Предметы преподавателя (можно добавить при необходимости)
-                    ''
-                ]
-
-                # Добавляем пустые ячейки до нужного количества колонок
-                current_cols = len(new_row)
-                total_cols = len(headers)
-                if current_cols < total_cols:
-                    new_row.extend([''] * (total_cols - current_cols))
-
-                worksheet.append_row(new_row)
-
-                # Получаем номер новой строки
-                data = worksheet.get_all_values()
-                target_row = len(data)
-
-                logger.info(f"Создана новая строка для преподавателя user_id {feedback_record['user_id']}")
-
-            # Обновляем ячейки с обратной связью
-            try:
-                # Первая колонка даты - рейтинг
-                worksheet.update_cell(target_row, date_col_start + 1, rating_text)
-
-                # Вторая колонка даты - детали
-                worksheet.update_cell(target_row, date_col_end + 1, details_text)
-
-                logger.info(
-                    f"Успешно записана обратная связь для преподавателя {feedback_record['user_id']} на дату {formatted_date}")
-
-            except Exception as e:
-                logger.error(f"Ошибка обновления ячеек обратной связи преподавателя: {e}")
-                return
-
+            async with db.pool.acquire() as conn:
+                date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
+                await conn.execute("""
+                    INSERT INTO feedback_teachers 
+                    (user_id, date, rating, details, sent)
+                    VALUES ($1, $2, 'pending', '', TRUE)
+                    ON CONFLICT (user_id, date) 
+                    DO UPDATE SET sent = TRUE, created_at = CURRENT_TIMESTAMP
+                """, user_id, date_obj)
         except Exception as e:
-            logger.error(f"Ошибка синхронизации feedback преподавателя с GSheets: {e}")
+            logger.error(f"❌ Error marking teacher feedback as sent: {e}")
 
-    def get_pending_feedback_for_gsheets(self) -> List[Dict[str, Any]]:
-        """Получает обратную связь преподавателей, которую нужно синхронизировать с Google Sheets"""
-        feedback_data = self.load_feedback_data()
-
-        # Фильтруем завершенные отзывы, которые еще не синхронизированы
-        pending_feedback = []
-        for feedback in feedback_data:
-            if (feedback.get('status') == 'completed' and
-                    not feedback.get('synced_to_gsheets', False)):
-                pending_feedback.append(feedback)
-
-        return pending_feedback
-
-    def mark_feedback_synced(self, user_id: int, date: str):
-        """Помечает обратную связь преподавателя как синхронизированную с Google Sheets"""
-        feedback_data = self.load_feedback_data()
-
-        for feedback in feedback_data:
-            if (feedback.get('user_id') == user_id and
-                    feedback.get('date') == date and
-                    feedback.get('status') == 'completed'):
-                feedback['synced_to_gsheets'] = True
-                feedback['synced_at'] = datetime.now().isoformat()
-                break
-
-        self.save_feedback_data(feedback_data)
+    async def get_pending_feedback_for_sync(self) -> List[Dict[str, Any]]:
+        """Получает несинхронизированные отзывы преподавателей"""
+        try:
+            async with db.pool.acquire() as conn:
+                feedbacks = await conn.fetch("""
+                    SELECT ft.*, u.user_name
+                    FROM feedback_teachers ft
+                    JOIN users u ON ft.user_id = u.user_id
+                    WHERE ft.synced_to_sheets = FALSE
+                    AND ft.rating != 'pending'
+                    LIMIT 50
+                """)
+                return [dict(f) for f in feedbacks]
+        except Exception as e:
+            logger.error(f"❌ Error getting pending teacher feedback: {e}")
+            return []

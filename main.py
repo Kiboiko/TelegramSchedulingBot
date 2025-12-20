@@ -1,7 +1,7 @@
 # main.py
 import sys
 
-sys.path.append(r"C:\Users\user\Documents\GitHub\TelegramSchedulingBot\shedule_app")
+sys.path.append(r"C:\Users\bestd\OneDrive\Документы\GitHub\TelegramSchedulingBot\shedule_app")
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.session.aiohttp import AiohttpSession
 from payment_handlers import PaymentStates
@@ -51,8 +51,9 @@ from menu_handlers import register_menu_handlers
 # Импорты из новых файлов
 from config import *
 from states import BookingStates
-from feedback import FeedbackManager, FeedbackStates
-from feedback_teachers import FeedbackTeacherManager, FeedbackTeacherStates
+from feedback import FeedbackManager
+from states import FeedbackTeacherStates, FeedbackStates
+from feedback_teachers import FeedbackTeacherManager
 from config import FEEDBACK_CONFIG
 from materials_manager import MaterialsManager
 from database import db

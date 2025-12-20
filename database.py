@@ -205,6 +205,51 @@ class DatabaseManager:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS feedback_students (
+                    feedback_id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                    subject_id VARCHAR(10) REFERENCES subjects(subject_id),
+                    date DATE NOT NULL,
+                    rating VARCHAR(20) NOT NULL,  -- 'good', 'better', 'bad', 'pending'
+                    details TEXT,
+                    sent BOOLEAN DEFAULT FALSE,  -- Запрос отправлен
+                    synced_to_sheets BOOLEAN DEFAULT FALSE,  -- Синхронизировано с Google Sheets
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, subject_id, date)
+                )
+            """)
+
+            # Таблица для обратной связи от преподавателей
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS feedback_teachers (
+                    feedback_id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                    date DATE NOT NULL,
+                    rating VARCHAR(20) NOT NULL,  -- 'good', 'better', 'bad', 'pending'
+                    details TEXT,
+                    sent BOOLEAN DEFAULT FALSE,  -- Запрос отправлен
+                    synced_to_sheets BOOLEAN DEFAULT FALSE,  -- Синхронизировано с Google Sheets
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, date)
+                )
+            """)
+
+            # Таблица для напоминаний
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS reminders (
+                    reminder_id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                    reminder_type VARCHAR(50) NOT NULL,  
+                        -- 'student_no_booking', 'teacher_schedule_reminder', 
+                        -- 'student_no_booking_next_week', 'teacher_feedback'
+                    target_date DATE NOT NULL,
+                    sent BOOLEAN DEFAULT FALSE,
+                    sent_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, reminder_type, target_date)
+                )
+            """)
 
             # Создаем индексы
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_from_user ON payments(from_user_id)")

@@ -1,7 +1,8 @@
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from aiogram import Bot
 from typing import List
+from database import db
 
 logger = logging.getLogger(__name__)
 
@@ -12,40 +13,28 @@ class TeacherReminderManager:
         self.gsheets = gsheets_manager
         self.bot = bot
 
-    def get_all_teachers(self) -> List[int]:
-        """Получает список всех user_id преподавателей"""
+    async def get_all_teachers(self) -> List[int]:
+        """Получает список всех user_id преподавателей из БД"""
         try:
-            if not self.gsheets:
-                logger.warning("Google Sheets manager не доступен")
-                return []
-
-            worksheet = self.gsheets._get_or_create_users_worksheet()
-            records = worksheet.get_all_records()
-
-            teachers = []
-            for record in records:
-                user_id = record.get('user_id')
-                roles_str = record.get('roles', '')
-
-                if user_id and roles_str:
-                    roles = [role.strip().lower() for role in roles_str.split(',')]
-                    if 'teacher' in roles:
-                        teachers.append(int(user_id))
-
-            logger.info(f"Найдено {len(teachers)} преподавателей для напоминаний")
-            return teachers
-
+            async with db.pool.acquire() as conn:
+                teachers = await conn.fetch("""
+                    SELECT DISTINCT u.user_id
+                    FROM users u
+                    JOIN teachers t ON u.user_id = t.user_id
+                    WHERE u.roles LIKE '%teacher%'
+                """)
+                return [t['user_id'] for t in teachers]
         except Exception as e:
-            logger.error(f"Ошибка получения списка преподавателей: {e}")
+            logger.error(f"❌ Error getting teachers: {e}")
             return []
 
     async def send_reminders(self):
         """Отправляет напоминания всем преподавателям"""
         try:
-            teachers = self.get_all_teachers()
+            teachers = await self.get_all_teachers()
 
             if not teachers:
-                logger.info("Нет преподавателей для отправки напоминаний")
+                logger.info("✅ No teachers found for reminders")
                 return
 
             success_count = 0
@@ -58,20 +47,33 @@ class TeacherReminderManager:
                         text="НАПОМИНАНИЕ! Проставьте свои возможности на следующую неделю"
                     )
                     success_count += 1
-                    logger.info(f"Напоминание отправлено преподавателю {teacher_id}")
+                    logger.info(f"✅ Reminder sent to teacher {teacher_id}")
 
-                    # Небольшая задержка чтобы не превысить лимиты Telegram
-                    import asyncio
-                    await asyncio.sleep(0.1)
+                    # Сохраняем факт отправки
+                    await self.save_teacher_reminder_sent(teacher_id)
+
+                    await asyncio.sleep(0.1)  # Задержка
 
                 except Exception as e:
                     fail_count += 1
-                    logger.error(f"Не удалось отправить напоминание преподавателю {teacher_id}: {e}")
+                    logger.error(f"❌ Failed to send reminder to teacher {teacher_id}: {e}")
 
-            logger.info(f"Напоминания отправлены: успешно {success_count}, неудачно {fail_count}")
+            logger.info(f"✅ Reminders sent: success {success_count}, failed {fail_count}")
 
         except Exception as e:
-            logger.error(f"Ошибка отправки напоминаний: {e}")
+            logger.error(f"❌ Error sending teacher reminders: {e}")
+
+    async def save_teacher_reminder_sent(self, teacher_id: int):
+        """Сохраняет факт отправки напоминания преподавателю"""
+        try:
+            async with db.pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO reminders (user_id, reminder_type, target_date, sent)
+                    VALUES ($1, 'teacher_schedule_reminder', CURRENT_DATE, TRUE)
+                    ON CONFLICT (user_id, reminder_type, target_date) DO NOTHING
+                """, teacher_id)
+        except Exception as e:
+            logger.error(f"❌ Error saving teacher reminder: {e}")
 
     def should_send_reminder(self) -> bool:
         """Проверяет, нужно ли отправлять напоминание в текущий момент"""
@@ -91,3 +93,51 @@ class TeacherReminderManager:
             return False
 
         return True
+
+    async def check_and_send_weekly_reminders(self):
+        """Проверяет и отправляет еженедельные напоминания преподавателям"""
+        if self.should_send_reminder():
+            await self.send_reminders()
+
+    async def get_teachers_without_next_week_schedule(self) -> List[int]:
+        """Находит преподавателей без расписания на следующую неделю"""
+        try:
+            next_monday = datetime.now() + timedelta(days=(7 - datetime.now().weekday()))
+            next_friday = next_monday + timedelta(days=4)
+
+            async with db.pool.acquire() as conn:
+                teachers = await conn.fetch("""
+                    SELECT DISTINCT u.user_id
+                    FROM users u
+                    JOIN teachers t ON u.user_id = t.user_id
+                    WHERE u.roles LIKE '%teacher%'
+                    AND NOT EXISTS (
+                        SELECT 1 FROM bookings b
+                        WHERE b.user_id = u.user_id
+                        AND b.user_role = 'teacher'
+                        AND b.date BETWEEN $1 AND $2
+                    )
+                """, next_monday.date(), next_friday.date())
+
+                return [t['user_id'] for t in teachers]
+
+        except Exception as e:
+            logger.error(f"❌ Error finding teachers without schedule: {e}")
+            return []
+
+    async def send_specific_reminders(self, teacher_ids: List[int], message: str):
+        """Отправляет специфические напоминания выбранным преподавателям"""
+        try:
+            for teacher_id in teacher_ids:
+                try:
+                    await self.bot.send_message(
+                        chat_id=teacher_id,
+                        text=message
+                    )
+                    logger.info(f"✅ Specific reminder sent to teacher {teacher_id}")
+                    await asyncio.sleep(0.1)
+                except Exception as e:
+                    logger.error(f"❌ Failed to send specific reminder to {teacher_id}: {e}")
+
+        except Exception as e:
+            logger.error(f"❌ Error in send_specific_reminders: {e}")

@@ -48,6 +48,101 @@ class BackgroundTasks:
                 logger.error(f"Error in cleanup_old_bookings: {e}")
                 await asyncio.sleep(60)  # Подождать минуту при ошибке
 
+    async def sync_feedback_task(self):
+        """Фоновая задача синхронизации фидбэков с Google Sheets (для обратной совместимости)"""
+        while True:
+            try:
+                # Студенческие фидбэки
+                pending_student_feedbacks = await self.feedback_manager.get_pending_feedback_for_sync()
+                for feedback in pending_student_feedbacks:
+                    if self.gsheets:
+                        # Здесь можно добавить синхронизацию с Google Sheets если нужно
+                        pass
+                    # Помечаем как синхронизированные в БД
+                    async with self.storage.db.pool.acquire() as conn:
+                        await conn.execute("""
+                            UPDATE feedback_students 
+                            SET synced_to_sheets = TRUE 
+                            WHERE feedback_id = $1
+                        """, feedback['feedback_id'])
+
+                # Преподавательские фидбэки
+                pending_teacher_feedbacks = await self.feedback_teacher_manager.get_pending_feedback_for_sync()
+                for feedback in pending_teacher_feedbacks:
+                    if self.gsheets:
+                        # Здесь можно добавить синхронизацию с Google Sheets если нужно
+                        pass
+                    # Помечаем как синхронизированные в БД
+                    async with self.storage.db.pool.acquire() as conn:
+                        await conn.execute("""
+                            UPDATE feedback_teachers 
+                            SET synced_to_sheets = TRUE 
+                            WHERE feedback_id = $1
+                        """, feedback['feedback_id'])
+
+                await asyncio.sleep(300)  # Каждые 5 минут
+
+            except Exception as e:
+                logger.error(f"Error in sync_feedback_task: {e}")
+                await asyncio.sleep(60)
+
+    async def check_student_feedback_task(self):
+        """Фоновая задача проверки и отправки фидбэков студентам"""
+        while True:
+            try:
+                await self.feedback_manager.send_feedback_questions()
+                await asyncio.sleep(1800)  # Каждые 30 минут
+            except Exception as e:
+                logger.error(f"Error in check_student_feedback_task: {e}")
+                await asyncio.sleep(300)
+
+    async def check_teacher_feedback_task(self):
+        """Фоновая задача проверки и отправки фидбэков преподавателям"""
+        while True:
+            try:
+                await self.feedback_teacher_manager.send_feedback_questions()
+                await asyncio.sleep(1800)  # Каждые 30 минут
+            except Exception as e:
+                logger.error(f"Error in check_teacher_feedback_task: {e}")
+                await asyncio.sleep(300)
+
+    async def student_reminder_task(self):
+        """Фоновая задача проверки и отправки напоминаний студентам"""
+        from reminder_manager import StudentReminderManager
+
+        student_reminder_manager = StudentReminderManager(self.storage, self.gsheets, self.bot)
+
+        while True:
+            try:
+                await student_reminder_manager.check_and_send_reminders()
+
+                # Также создаем напоминания на следующую неделю
+                await student_reminder_manager.create_reminders_for_no_bookings()
+
+                # Проверяем ежедневно
+                await asyncio.sleep(86400)  # 24 часа
+
+            except Exception as e:
+                logger.error(f"Error in student_reminder_task: {e}")
+                await asyncio.sleep(3600)  # 1 час при ошибке
+
+    async def teacher_reminder_task(self):
+        """Фоновая задача проверки и отправки напоминаний преподавателям"""
+        from teacher_reminder import TeacherReminderManager
+
+        teacher_reminder_manager = TeacherReminderManager(self.storage, self.gsheets, self.bot)
+
+        while True:
+            try:
+                await teacher_reminder_manager.check_and_send_weekly_reminders()
+
+                # Проверяем чаще для timely reminders
+                await asyncio.sleep(3600)  # Каждый час
+
+            except Exception as e:
+                logger.error(f"Error in teacher_reminder_task: {e}")
+                await asyncio.sleep(1800)  # 30 минут при ошибке
+
     # ЗАКОММЕНТИРОВАНО: Переход на БД
     # async def sync_with_gsheets(self):
     #     """Фоновая синхронизация с Google Sheets"""
@@ -224,6 +319,11 @@ class BackgroundTasks:
             self.check_teacher_feedback_background(),
             self.sync_pending_teacher_feedback_background(),
             self.reminder_check_task(),
-            self.student_reminder_check_task()
+            self.student_reminder_check_task(),
+            self.sync_feedback_task(),
+            self.check_student_feedback_task(),
+            self.check_teacher_feedback_task(),
+            self.student_reminder_task(),
+            self.teacher_reminder_task()
         ]
         return tasks

@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict
 from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from database import db
 
 logger = logging.getLogger(__name__)
 
@@ -12,70 +13,57 @@ class StudentReminderManager:
         self.storage = storage
         self.gsheets = gsheets
         self.bot = bot
-        self.sent_reminders = set()  # Чтобы не отправлять повторные напоминания
 
-    def has_bookings_in_current_month(self, user_id: int) -> bool:
-        """Проверяет, есть ли у ученика записи в текущем месяце"""
+    async def has_bookings_in_current_month(self, user_id: int) -> bool:
+        """Проверяет, есть ли у ученика записи в текущем месяце через БД"""
         try:
-            # Получаем текущий месяц
             now = datetime.now()
-            current_month_start = datetime(now.year, now.month, 1)
-            if now.month == 12:
-                current_month_end = datetime(now.year + 1, 1, 1) - timedelta(days=1)
-            else:
-                current_month_end = datetime(now.year, now.month + 1, 1) - timedelta(days=1)
+            current_month_start = datetime(now.year, now.month, 1).date()
 
-            # Загружаем все бронирования
-            bookings = self.storage.load_all_bookings()
+            async with db.pool.acquire() as conn:
+                bookings = await conn.fetch("""
+                    SELECT COUNT(*) as count
+                    FROM bookings 
+                    WHERE user_id = $1 
+                    AND user_role = 'student'
+                    AND date >= $2
+                    AND date < $3
+                """, user_id, current_month_start,
+                                            current_month_start + timedelta(days=31))
 
-            for booking in bookings:
-                if (booking.get('user_id') == user_id and
-                        booking.get('user_role') == 'student'):
-
-                    try:
-                        booking_date = datetime.strptime(booking['date'], "%Y-%m-%d")
-
-                        # Проверяем, попадает ли бронь в текущий месяц
-                        if current_month_start <= booking_date <= current_month_end:
-                            return True
-
-                    except (ValueError, KeyError):
-                        continue
-
-            return False
+                return bookings[0]['count'] > 0 if bookings else False
 
         except Exception as e:
-            logger.error(f"Error checking bookings for user {user_id}: {e}")
-            return True  # В случае ошибки считаем, что записи есть (не отправляем напоминание)
+            logger.error(f"❌ Error checking bookings for user {user_id}: {e}")
+            return True  # В случае ошибки считаем, что записи есть
 
-    def get_all_students(self) -> List[Dict]:
-        """Получает всех учеников из Google Sheets с проверкой ФИО"""
+    async def get_all_students(self) -> List[Dict]:
+        """Получает всех учеников из БД"""
         try:
-            if not self.gsheets:
-                return []
+            async with db.pool.acquire() as conn:
+                students = await conn.fetch("""
+                    SELECT u.user_id, u.user_name, u.roles
+                    FROM users u
+                    JOIN students s ON u.user_id = s.user_id
+                    WHERE u.roles LIKE '%student%'
+                    AND u.user_name IS NOT NULL
+                    AND u.user_name != ''
+                    GROUP BY u.user_id, u.user_name, u.roles
+                """)
 
-            worksheet = self.gsheets._get_or_create_users_worksheet()
-            records = worksheet.get_all_records()
-
-            students = []
-            for record in records:
-                roles_str = record.get('roles', '')
-                user_name = record.get('user_name', '').strip()
-
-                # Проверяем, что пользователь имеет роль студента И имеет ФИО
-                if (roles_str and 'student' in roles_str.lower() and user_name):
-                    students.append({
-                        'user_id': int(record.get('user_id', 0)),
-                        'user_name': user_name,
-                        'roles': [role.strip().lower() for role in roles_str.split(',')]
+                result = []
+                for student in students:
+                    result.append({
+                        'user_id': student['user_id'],
+                        'user_name': student['user_name'],
+                        'roles': [r.strip() for r in student['roles'].split(',') if r.strip()]
                     })
-                else:
-                    logger.warning(f"Student {record.get('user_id')} skipped: no name or roles")
 
-            return students
+                logger.info(f"✅ Found {len(result)} students")
+                return result
 
         except Exception as e:
-            logger.error(f"Error getting students: {e}")
+            logger.error(f"❌ Error getting students: {e}")
             return []
 
     def generate_reminder_keyboard(self):
@@ -88,7 +76,9 @@ class StudentReminderManager:
     async def send_reminder(self, user_id: int, user_name: str):
         """Отправляет напоминание ученику"""
         try:
-            if user_id in self.sent_reminders:
+            # Проверяем, не отправляли ли уже напоминание в этом месяце
+            if await self.check_reminder_sent(user_id, 'student_no_booking'):
+                logger.info(f"✅ Reminder already sent to {user_id} this month")
                 return
 
             keyboard = self.generate_reminder_keyboard()
@@ -101,19 +91,52 @@ class StudentReminderManager:
                 reply_markup=keyboard
             )
 
-            self.sent_reminders.add(user_id)
-            logger.info(f"Reminder sent to user {user_id} ({user_name})")
+            # Сохраняем факт отправки напоминания
+            await self.save_reminder_sent(user_id, 'student_no_booking')
+            logger.info(f"✅ Reminder sent to user {user_id} ({user_name})")
 
         except Exception as e:
-            logger.error(f"Error sending reminder to user {user_id}: {e}")
+            logger.error(f"❌ Error sending reminder to user {user_id}: {e}")
+
+    async def check_reminder_sent(self, user_id: int, reminder_type: str) -> bool:
+        """Проверяет, отправляли ли уже напоминание в этом месяце"""
+        try:
+            async with db.pool.acquire() as conn:
+                this_month_start = datetime.now().replace(day=1).date()
+                reminder = await conn.fetchrow("""
+                    SELECT reminder_id FROM reminders 
+                    WHERE user_id = $1 
+                    AND reminder_type = $2
+                    AND target_date >= $3
+                """, user_id, reminder_type, this_month_start)
+                return reminder is not None
+        except Exception as e:
+            logger.error(f"❌ Error checking reminder sent: {e}")
+            return False
+
+    async def save_reminder_sent(self, user_id: int, reminder_type: str):
+        """Сохраняет факт отправки напоминания"""
+        try:
+            async with db.pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO reminders (user_id, reminder_type, target_date, sent)
+                    VALUES ($1, $2, $3, TRUE)
+                """, user_id, reminder_type, datetime.now().date())
+        except Exception as e:
+            logger.error(f"❌ Error saving reminder: {e}")
 
     async def check_and_send_reminders(self):
         """Основная функция проверки и отправки напоминаний"""
         try:
-            logger.info("Starting student reminder check for current month...")
+            logger.info("✅ Starting student reminder check for current month...")
 
-            students = self.get_all_students()
-            logger.info(f"Found {len(students)} students to check")
+            # Проверяем, нужно ли запускать проверку (15 число каждого месяца)
+            if not self.should_run_check():
+                logger.info("✅ Not the 15th of the month, skipping reminder check")
+                return
+
+            students = await self.get_all_students()
+            logger.info(f"✅ Found {len(students)} students to check")
 
             reminders_sent = 0
 
@@ -122,32 +145,68 @@ class StudentReminderManager:
                 user_name = student['user_name']
 
                 # Проверяем, есть ли записи в текущем месяце
-                has_bookings = self.has_bookings_in_current_month(user_id)
+                has_bookings = await self.has_bookings_in_current_month(user_id)
 
                 if not has_bookings:
-                    logger.info(f"Student {user_name} ({user_id}) has no bookings this month, sending reminder")
+                    logger.info(f"✅ Student {user_name} ({user_id}) has no bookings this month, sending reminder")
                     await self.send_reminder(user_id, user_name)
                     reminders_sent += 1
-                    # Небольшая задержка между отправками
-                    import asyncio
-                    await asyncio.sleep(0.1)
+                    await asyncio.sleep(0.1)  # Небольшая задержка
                 else:
-                    logger.info(f"Student {user_name} ({user_id}) has bookings this month, skipping")
+                    logger.info(f"✅ Student {user_name} ({user_id}) has bookings this month, skipping")
 
-            logger.info(f"Student reminder check completed. Sent {reminders_sent} reminders")
+            logger.info(f"✅ Student reminder check completed. Sent {reminders_sent} reminders")
 
         except Exception as e:
-            logger.error(f"Error in student reminder check: {e}")
+            logger.error(f"❌ Error in student reminder check: {e}")
 
     def should_run_check(self) -> bool:
         """Проверяет, нужно ли запускать проверку (15 число каждого месяца)"""
         now = datetime.now()
-        # Запускаем 15 числа каждого месяца
         return now.day == 15
 
-    def clear_sent_reminders(self):
-        """Очищает список отправленных напоминаний (в начале месяца)"""
-        now = datetime.now()
-        if now.day == 1:  # В первый день месяца очищаем
-            self.sent_reminders.clear()
-            logger.info("Cleared sent reminders list for new month")
+    async def create_reminders_for_no_bookings(self):
+        """Создает напоминания для студентов без записей"""
+        try:
+            # Находим студентов без записей на следующую неделю
+            next_week_start = datetime.now() + timedelta(days=7)
+            next_week_end = next_week_start + timedelta(days=7)
+
+            async with db.pool.acquire() as conn:
+                students = await conn.fetch("""
+                    SELECT u.user_id, u.user_name
+                    FROM users u
+                    JOIN students s ON u.user_id = s.user_id
+                    WHERE u.roles LIKE '%student%'
+                    AND NOT EXISTS (
+                        SELECT 1 FROM bookings b
+                        WHERE b.user_id = u.user_id
+                        AND b.user_role = 'student'
+                        AND b.date BETWEEN $1 AND $2
+                    )
+                """, next_week_start.date(), next_week_end.date())
+
+                for student in students:
+                    await self.create_reminder(
+                        student['user_id'],
+                        'student_no_booking_next_week',
+                        next_week_start.strftime("%Y-%m-%d")
+                    )
+
+                logger.info(f"✅ Created reminders for {len(students)} students without bookings")
+
+        except Exception as e:
+            logger.error(f"❌ Error creating reminders: {e}")
+
+    async def create_reminder(self, user_id: int, reminder_type: str, target_date: str):
+        """Создает напоминание в БД"""
+        try:
+            async with db.pool.acquire() as conn:
+                date_obj = datetime.strptime(target_date, "%Y-%m-%d").date()
+                await conn.execute("""
+                    INSERT INTO reminders (user_id, reminder_type, target_date, sent)
+                    VALUES ($1, $2, $3, FALSE)
+                    ON CONFLICT (user_id, reminder_type, target_date) DO NOTHING
+                """, user_id, reminder_type, date_obj)
+        except Exception as e:
+            logger.error(f"❌ Error creating reminder: {e}")
