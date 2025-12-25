@@ -245,8 +245,21 @@ class FeedbackTeacherManager:
         feedback_data.append(feedback_record)
         self.save_feedback_data(feedback_data)
 
-        # Также сохраняем в Google Sheets
-        self.sync_feedback_to_gsheets(feedback_record)
+        # Локальная запись — не синхронизируем отзывы преподавателей с Google Sheets
+        # (teacher feedback is local-only)
+
+    def get_user_feedbacks(self, user_id: int) -> List[Dict[str, Any]]:
+        """Возвращает все завершенные отзывы для преподавателя (локально)."""
+        try:
+            data = self.load_feedback_data()
+            user_feedbacks = [f for f in data if str(f.get('user_id')) == str(user_id) and f.get('status') == 'completed']
+            # Сортируем по времени ответа (последние первыми)
+            user_feedbacks.sort(key=lambda x: x.get('responded_at', ''), reverse=True)
+            return user_feedbacks
+        except Exception as e:
+            logger.error(f"Ошибка получения отзывов преподавателя {user_id}: {e}")
+            return []
+
 
     def sync_feedback_to_gsheets(self, feedback_record: Dict[str, Any]):
         """Синхронизирует обратную связь преподавателя с Google Sheets"""

@@ -794,27 +794,11 @@ async def check_teacher_feedback_background():
             await asyncio.sleep(300)
 
 async def sync_pending_teacher_feedback_background():
-    """Фоновая задача для синхронизации неотправленных отзывов преподавателей"""
+    """Фоновая задача синхронизации отзывов преподавателей отключена: отзывы хранятся локально"""
     while True:
         try:
-            pending_feedback = feedback_teacher_manager.get_pending_feedback_for_gsheets()
-
-            if pending_feedback:
-                logger.info(f"Найдено {len(pending_feedback)} несинхронизированных отзывов преподавателей")
-
-                for feedback in pending_feedback:
-                    try:
-                        feedback_teacher_manager.sync_feedback_to_gsheets(feedback)
-                        feedback_teacher_manager.mark_feedback_synced(
-                            feedback['user_id'],
-                            feedback['date']
-                        )
-                        logger.info(f"Синхронизирован отзыв преподавателя user_id {feedback['user_id']}")
-                    except Exception as e:
-                        logger.error(f"Ошибка синхронизации отзыва преподавателя: {e}")
-                        continue
-
-            await asyncio.sleep(300)  # Проверка каждые 5 минут
+            # Отзывы преподавателей теперь локальные. GSheets синхронизация не нужна.
+            await asyncio.sleep(300)  # Ничего не делаем, проверяем каждые 5 минут
 
         except Exception as e:
             logger.error(f"Ошибка в фоновой задаче синхронизации отзывов преподавателей: {e}")
@@ -1140,6 +1124,39 @@ async def show_help(message: types.Message,state:FSMContext):
     await cmd_start(message, state, storage)
 
 
+@dp.message(F.text == "📝 Мои отзывы")
+@dp.message(Command("myfeedback"))
+async def my_feedback_command(message: types.Message, state: FSMContext):
+    """Показывает пользователю его отзывы как ученика и как преподавателя"""
+    try:
+        user_id = message.from_user.id
+
+        student_feedbacks = feedback_manager.get_user_feedbacks(user_id)
+        teacher_feedbacks = feedback_teacher_manager.get_user_feedbacks(user_id)
+
+        if not student_feedbacks and not teacher_feedbacks:
+            await message.answer("У вас пока нет сохраненных отзывов.")
+            return
+
+        lines = ["Ваши отзывы (последние 10):\n"]
+
+        if student_feedbacks:
+            lines.append("— Как ученик:")
+            for f in student_feedbacks[:10]:
+                lines.append(f"📅 {f.get('date')} | {f.get('rating')} | {f.get('details', '')}")
+
+        if teacher_feedbacks:
+            lines.append("\n— Как преподаватель:")
+            for f in teacher_feedbacks[:10]:
+                lines.append(f"📅 {f.get('date')} | {f.get('rating')} | {f.get('details', '')}")
+
+        await message.answer("\n".join(lines))
+
+    except Exception as e:
+        logger.error(f"Ошибка получения моих отзывов: {e}")
+        await message.answer("Ошибка при получении отзывов")
+
+
 
 @dp.message(F.text == "📊 Составить расписание")
 async def start_schedule_generation(message: types.Message, state: FSMContext):
@@ -1452,22 +1469,28 @@ async def admin_select_user_for_feedback(callback: types.CallbackQuery, state: F
 
             user_name = user.get('user_name', 'Без имени')
 
-            # Получаем отзывы из feedback_manager
-            feedbacks = feedback_manager.get_user_feedbacks(user_id)
+            # Получаем отзывы из обоих источников (ученики и преподаватели)
+            student_feedbacks = feedback_manager.get_user_feedbacks(user_id)
+            teacher_feedbacks = feedback_teacher_manager.get_user_feedbacks(user_id)
 
-            if not feedbacks:
+            if not student_feedbacks and not teacher_feedbacks:
                 await callback.message.edit_text(
                     f"❌ У пользователя {user_name} нет сохраненных отзывов."
                 )
                 await state.clear()
                 return
 
-            # Формируем сообщение со списком отзывов
             lines = [f"Отзывы для {user_name} (последние 10):\n"]
-            for f in feedbacks[:10]:
-                lines.append(
-                    f"📅 {f.get('date')} | {f.get('rating')} | {f.get('details', '')}"
-                )
+
+            if student_feedbacks:
+                lines.append("— Как ученик:")
+                for f in student_feedbacks[:10]:
+                    lines.append(f"📅 {f.get('date')} | {f.get('rating')} | {f.get('details', '')}")
+
+            if teacher_feedbacks:
+                lines.append("\n— Как преподаватель:")
+                for f in teacher_feedbacks[:10]:
+                    lines.append(f"📅 {f.get('date')} | {f.get('rating')} | {f.get('details', '')}")
 
             await callback.message.edit_text("\n".join(lines))
             await state.clear()
@@ -2035,27 +2058,42 @@ async def show_past_booking_info(callback: types.CallbackQuery):
         # Импортируем клавиатуру из отдельного файла
         from bookings_management.booking_keyboards import generate_past_booking_info
 
-        # Решаем, показывать ли кнопки обратной связи: только если это занятие ученика и текущий пользователь — владелец,
-        # и для этого занятия ещё не оставлен отзыв
+        # Решаем, показывать ли кнопки обратной связи:
+        # - для ученика: если текущий пользователь — владелец брони и отзыв не оставлен
+        # - для преподавателя: если текущий пользователь — владелец брони и отзыв преподавателя не оставлен
         show_feedback = False
+        is_teacher_booking = booking.get('user_role') == 'teacher'
         try:
             user_id = callback.from_user.id
-            if booking.get('user_role') != 'teacher' and booking.get('user_id') == user_id:
-                subject_id = booking.get('subject', '')
-                b_date = booking.get('date')
-                if hasattr(b_date, 'strftime'):
-                    date_str = b_date.strftime("%Y-%m-%d")
-                else:
-                    date_str = str(b_date)
 
+            b_date = booking.get('date')
+            if hasattr(b_date, 'strftime'):
+                date_str = b_date.strftime("%Y-%m-%d")
+            else:
+                date_str = str(b_date)
+
+            # Учебный кейс (ученик)
+            if not is_teacher_booking and booking.get('user_id') == user_id:
+                subject_id = booking.get('subject', '')
                 if not feedback_manager.check_feedback_sent(user_id, date_str, subject_id):
+                    show_feedback = True
+
+            # Преподавательский кейс
+            if is_teacher_booking and booking.get('user_id') == user_id:
+                if not feedback_teacher_manager.check_feedback_sent(user_id, date_str):
                     show_feedback = True
         except Exception as e:
             logger.error(f"Ошибка при проверке необходимости показа feedback кнопок: {e}")
 
         await callback.message.edit_text(
             message_text,
-            reply_markup=generate_past_booking_info(booking_id, show_feedback=show_feedback, subject=booking.get('subject',''), date_str=(booking.get('date') if isinstance(booking.get('date'), str) else booking.get('date').strftime('%Y-%m-%d')))
+            reply_markup=generate_past_booking_info(
+                booking_id,
+                show_feedback=show_feedback,
+                subject=booking.get('subject',''),
+                date_str=date_str,
+                is_teacher=is_teacher_booking
+            )
         )
         await callback.answer()
 
