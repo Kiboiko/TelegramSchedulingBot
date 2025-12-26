@@ -317,7 +317,7 @@ class BackgroundTasks:
             self.check_feedback_background(),
             self.sync_pending_feedback_background(),
             self.check_teacher_feedback_background(),
-            self.sync_pending_teacher_feedback_background(),
+            # Фоновая синхронизация отзывов преподавателей отключена — отзывы локальные
             self.reminder_check_task(),
             self.student_reminder_check_task(),
             self.sync_feedback_task(),

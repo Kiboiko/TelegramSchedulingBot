@@ -43,8 +43,7 @@ class AdminRemoveRoleStates(StatesGroup):
     INPUT_USER_NAME = State()  # Ввод ФИО пользователя для поиска
     SELECT_ROLE_TO_REMOVE = State()  # Выбор роли для удаления
 
-class FeedbackTeacherStates(StatesGroup):
-    WAITING_FEEDBACK_DETAILS = State()
 
-class FeedbackStates(StatesGroup):
-    WAITING_FEEDBACK_DETAILS = State()
+class AdminViewFeedbackStates(StatesGroup):
+    INPUT_USER_NAME = State()  # Ввод ФИО пользователя для просмотра отзывов
+    SELECT_USER = State()  # Выбор пользователя из результатов поиска

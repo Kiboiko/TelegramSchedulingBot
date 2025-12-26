@@ -5,6 +5,7 @@ from typing import List, Dict, Optional
 from aiogram import types
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+import json, os
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +14,23 @@ class BookingManager:
         self.storage = storage
         self.gsheets = gsheets
     
+    def _feedback_exists(self, user_id: int, date_str: str, subject: str) -> bool:
+        """Проверяет, оставлен ли уже отзыв для user/date/subject в локальном файле feedback.json"""
+        try:
+            feedback_file = os.path.join(os.getcwd(), 'feedback.json')
+            if not os.path.exists(feedback_file):
+                return False
+            with open(feedback_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            for rec in data:
+                if (str(rec.get('user_id')) == str(user_id) and
+                        rec.get('date') == date_str and
+                        str(rec.get('subject')) == str(subject) and
+                        rec.get('status') == 'completed'):
+                    return True
+        except Exception as e:
+            logger.error(f"Ошибка проверки существующего отзыва: {e}")
+        return False
     def load_bookings(self) -> List[Dict]:
         """Загружает бронирования из файла и удаляет прошедшие"""
         data = self.storage.load()

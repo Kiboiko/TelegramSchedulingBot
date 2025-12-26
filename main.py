@@ -582,6 +582,8 @@ def get_subject_distribution_by_time(loader, target_date: str, condition_check: 
     """
     from datetime import time,datetime
     from typing import Dict
+    # Импортируем утилиту из config (создание пустых таймслотов)
+    from config import _create_empty_time_slots
 
     # Загружаем данные студентов
     student_sheet = loader._get_sheet_data("Ученики бот")
@@ -946,27 +948,11 @@ async def check_teacher_feedback_background():
             await asyncio.sleep(300)
 
 async def sync_pending_teacher_feedback_background():
-    """Фоновая задача для синхронизации неотправленных отзывов преподавателей"""
+    """Фоновая задача синхронизации отзывов преподавателей отключена: отзывы хранятся локально"""
     while True:
         try:
-            pending_feedback = feedback_teacher_manager.get_pending_feedback_for_gsheets()
-
-            if pending_feedback:
-                logger.info(f"Найдено {len(pending_feedback)} несинхронизированных отзывов преподавателей")
-
-                for feedback in pending_feedback:
-                    try:
-                        feedback_teacher_manager.sync_feedback_to_gsheets(feedback)
-                        feedback_teacher_manager.mark_feedback_synced(
-                            feedback['user_id'],
-                            feedback['date']
-                        )
-                        logger.info(f"Синхронизирован отзыв преподавателя user_id {feedback['user_id']}")
-                    except Exception as e:
-                        logger.error(f"Ошибка синхронизации отзыва преподавателя: {e}")
-                        continue
-
-            await asyncio.sleep(300)  # Проверка каждые 5 минут
+            # Отзывы преподавателей теперь локальные. GSheets синхронизация не нужна.
+            await asyncio.sleep(300)  # Ничего не делаем, проверяем каждые 5 минут
 
         except Exception as e:
             logger.error(f"Ошибка в фоновой задаче синхронизации отзывов преподавателей: {e}")
@@ -1292,6 +1278,39 @@ async def show_help(message: types.Message,state:FSMContext):
     await cmd_start(message, state, storage)
 
 
+@dp.message(F.text == "📝 Мои отзывы")
+@dp.message(Command("myfeedback"))
+async def my_feedback_command(message: types.Message, state: FSMContext):
+    """Показывает пользователю его отзывы как ученика и как преподавателя"""
+    try:
+        user_id = message.from_user.id
+
+        student_feedbacks = feedback_manager.get_user_feedbacks(user_id)
+        teacher_feedbacks = feedback_teacher_manager.get_user_feedbacks(user_id)
+
+        if not student_feedbacks and not teacher_feedbacks:
+            await message.answer("У вас пока нет сохраненных отзывов.")
+            return
+
+        lines = ["Ваши отзывы (последние 10):\n"]
+
+        if student_feedbacks:
+            lines.append("— Как ученик:")
+            for f in student_feedbacks[:10]:
+                lines.append(f"📅 {f.get('date')} | {f.get('rating')} | {f.get('details', '')}")
+
+        if teacher_feedbacks:
+            lines.append("\n— Как преподаватель:")
+            for f in teacher_feedbacks[:10]:
+                lines.append(f"📅 {f.get('date')} | {f.get('rating')} | {f.get('details', '')}")
+
+        await message.answer("\n".join(lines))
+
+    except Exception as e:
+        logger.error(f"Ошибка получения моих отзывов: {e}")
+        await message.answer("Ошибка при получении отзывов")
+
+
 
 @dp.message(F.text == "📊 Составить расписание")
 async def start_schedule_generation(message: types.Message, state: FSMContext):
@@ -1313,7 +1332,7 @@ async def start_schedule_generation(message: types.Message, state: FSMContext):
     await state.set_state(BookingStates.SELECT_SCHEDULE_DATE)
 
 
-from states import AdminAddRoleStates, AdminRemoveRoleStates  # Импортируем новые состояния
+from states import AdminAddRoleStates, AdminRemoveRoleStates, AdminViewFeedbackStates  # Импортируем новые состояния
 
 
 # Команда для администратора - добавить роль пользователю
@@ -1332,6 +1351,24 @@ async def admin_add_role_command(message: types.Message, state: FSMContext):
         "💡 Подсказка: можно ввести часть имени для поиска"
     )
     await state.set_state(AdminAddRoleStates.INPUT_USER_NAME)
+
+
+# Команда для администратора - просмотреть отзывы пользователя
+@dp.message(F.text == "📝 Просмотреть отзывы")
+@dp.message(Command("viewfeedback"))
+async def admin_view_feedback_command(message: types.Message, state: FSMContext):
+    """Начало просмотра отзывов: ищем пользователя по ФИО"""
+    user_id = message.from_user.id
+
+    if not is_admin(user_id):
+        await message.answer("❌ Эта команда только для администраторов")
+        return
+
+    await message.answer(
+        "Введите ФИО пользователя, чьи отзывы хотите просмотреть:\n\n"
+        "💡 Подсказка: можно ввести часть имени для поиска"
+    )
+    await state.set_state(AdminViewFeedbackStates.INPUT_USER_NAME)
 
 
 # Команда для администратора - удалить роль у пользователя
@@ -1372,6 +1409,29 @@ async def admin_search_user(message: types.Message, state: FSMContext):
                     f"%{search_query}%"
                 )
 
+    except Exception as e:
+        logger.error(f"Ошибка поиска пользователей: {e}")
+        await message.answer("❌ Произошла ошибка при поиске пользователей")
+
+
+# Поиск для просмотра отзывов
+@dp.message(AdminViewFeedbackStates.INPUT_USER_NAME)
+async def admin_search_user_for_feedback(message: types.Message, state: FSMContext):
+    """Поиск пользователей по ФИО для просмотра отзывов"""
+    search_query = message.text.strip()
+
+    if not search_query:
+        await message.answer("Пожалуйста, введите ФИО для поиска")
+        return
+
+    try:
+        if storage.db and storage.db.pool:
+            async with storage.db.pool.acquire() as conn:
+                users = await conn.fetch(
+                    "SELECT user_id, user_name, roles FROM users WHERE user_name ILIKE $1 ORDER BY user_name LIMIT 10",
+                    f"%{search_query}%"
+                )
+
                 if not users:
                     await message.answer(
                         f"❌ Пользователи с именем '{search_query}' не найдены.\n"
@@ -1379,35 +1439,26 @@ async def admin_search_user(message: types.Message, state: FSMContext):
                     )
                     return
 
-                # Создаем клавиатуру с найденными пользователями
+                # Создаем клавиатуру с найденными пользователями для просмотра отзывов
                 builder = InlineKeyboardBuilder()
 
                 for user in users:
                     user_id = user['user_id']
                     user_name = user['user_name']
-                    roles = user['roles'] or "нет ролей"
-
-                    # Формируем текст для кнопки
-                    button_text = f"{user_name} (ID: {user_id}, роли: {roles})"
-
-                    # Укорачиваем если слишком длинно
-                    if len(button_text) > 40:
-                        button_text = f"{user_name[:20]}... (ID: {user_id})"
 
                     builder.button(
-                        text=button_text,
-                        callback_data=f"admin_addrole_selectuser_{user_id}"
+                        text=f"{user_name} (ID: {user_id})",
+                        callback_data=f"admin_viewfeedback_selectuser_{user_id}"
                     )
 
                 builder.adjust(1)
 
                 await message.answer(
                     f"🔍 Найдено пользователей: {len(users)}\n"
-                    "Выберите пользователя:",
+                    "Выберите пользователя для просмотра отзывов:",
                     reply_markup=builder.as_markup()
                 )
 
-                # Сохраняем результаты поиска
                 await state.update_data(
                     search_results=[dict(user) for user in users],
                     search_query=search_query
@@ -1416,7 +1467,7 @@ async def admin_search_user(message: types.Message, state: FSMContext):
             await message.answer("❌ Ошибка подключения к базе данных")
 
     except Exception as e:
-        logger.error(f"Ошибка поиска пользователей: {e}")
+        logger.error(f"Ошибка поиска пользователей (просмотр отзывов): {e}")
         await message.answer("❌ Произошла ошибка при поиске пользователей")
 
 
@@ -2273,7 +2324,7 @@ async def admin_search_user_for_removal(message: types.Message, state: FSMContex
         await message.answer("❌ Произошла ошибка при поиске пользователей")
 
 
-# Выбор пользователя из результатов поиска
+# Выбор пользователя из результатов поиска (для добавления роли)
 @dp.callback_query(F.data.startswith("admin_addrole_selectuser_"))
 async def admin_select_user_for_role(callback: types.CallbackQuery, state: FSMContext):
     """Выбор пользователя для добавления роли"""
@@ -2344,6 +2395,53 @@ async def admin_select_user_for_role(callback: types.CallbackQuery, state: FSMCo
 
     except Exception as e:
         logger.error(f"Ошибка выбора пользователя: {e}")
+
+
+# Выбор пользователя из результатов поиска (для просмотра отзывов)
+@dp.callback_query(F.data.startswith("admin_viewfeedback_selectuser_"))
+async def admin_select_user_for_feedback(callback: types.CallbackQuery, state: FSMContext):
+    """Выбор пользователя для просмотра отзывов"""
+    try:
+        user_id = int(callback.data.replace("admin_viewfeedback_selectuser_", ""))
+
+        # Получаем данные пользователя
+        if storage.db and storage.db.pool:
+            user = await storage.db.get_user(user_id)
+
+            if not user:
+                await callback.answer("Пользователь не найден", show_alert=True)
+                return
+
+            user_name = user.get('user_name', 'Без имени')
+
+            # Получаем отзывы из обоих источников (ученики и преподаватели)
+            student_feedbacks = feedback_manager.get_user_feedbacks(user_id)
+            teacher_feedbacks = feedback_teacher_manager.get_user_feedbacks(user_id)
+
+            if not student_feedbacks and not teacher_feedbacks:
+                await callback.message.edit_text(
+                    f"❌ У пользователя {user_name} нет сохраненных отзывов."
+                )
+                await state.clear()
+                return
+
+            lines = [f"Отзывы для {user_name} (последние 10):\n"]
+
+            if student_feedbacks:
+                lines.append("— Как ученик:")
+                for f in student_feedbacks[:10]:
+                    lines.append(f"📅 {f.get('date')} | {f.get('rating')} | {f.get('details', '')}")
+
+            if teacher_feedbacks:
+                lines.append("\n— Как преподаватель:")
+                for f in teacher_feedbacks[:10]:
+                    lines.append(f"📅 {f.get('date')} | {f.get('rating')} | {f.get('details', '')}")
+
+            await callback.message.edit_text("\n".join(lines))
+            await state.clear()
+
+    except Exception as e:
+        logger.error(f"Ошибка выбора пользователя для просмотра отзывов: {e}")
         await callback.answer("Произошла ошибка", show_alert=True)
 
 
@@ -2904,9 +3002,43 @@ async def show_past_booking_info(callback: types.CallbackQuery):
 
         # Импортируем клавиатуру из отдельного файла
         from bookings_management.booking_keyboards import generate_past_booking_info
+
+        # Решаем, показывать ли кнопки обратной связи:
+        # - для ученика: если текущий пользователь — владелец брони и отзыв не оставлен
+        # - для преподавателя: если текущий пользователь — владелец брони и отзыв преподавателя не оставлен
+        show_feedback = False
+        is_teacher_booking = booking.get('user_role') == 'teacher'
+        try:
+            user_id = callback.from_user.id
+
+            b_date = booking.get('date')
+            if hasattr(b_date, 'strftime'):
+                date_str = b_date.strftime("%Y-%m-%d")
+            else:
+                date_str = str(b_date)
+
+            # Учебный кейс (ученик)
+            if not is_teacher_booking and booking.get('user_id') == user_id:
+                subject_id = booking.get('subject', '')
+                if not feedback_manager.check_feedback_sent(user_id, date_str, subject_id):
+                    show_feedback = True
+
+            # Преподавательский кейс
+            if is_teacher_booking and booking.get('user_id') == user_id:
+                if not feedback_teacher_manager.check_feedback_sent(user_id, date_str):
+                    show_feedback = True
+        except Exception as e:
+            logger.error(f"Ошибка при проверке необходимости показа feedback кнопок: {e}")
+
         await callback.message.edit_text(
             message_text,
-            reply_markup=generate_past_booking_info(booking_id)
+            reply_markup=generate_past_booking_info(
+                booking_id,
+                show_feedback=show_feedback,
+                subject=booking.get('subject',''),
+                date_str=date_str,
+                is_teacher=is_teacher_booking
+            )
         )
         await callback.answer()
 
@@ -3254,6 +3386,11 @@ async def handle_feedback_rating(callback: types.CallbackQuery, state: FSMContex
             feedback_date=date_str,
             feedback_rating=rating_type
         )
+
+        # Проверяем, не оставлял ли пользователь уже отзыв для этой даты и предмета
+        if feedback_manager.check_feedback_sent(user_id, date_str, subject_id):
+            await callback.answer("Вы уже оставили отзыв для этого занятия.", show_alert=True)
+            return
 
         if rating_type == 'good':
             # Для "Хорошо" - сразу сохраняем и благодарим

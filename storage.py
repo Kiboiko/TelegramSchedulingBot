@@ -308,14 +308,23 @@ class JSONStorage:
             logger.error(f"Ошибка при сохранении данных: {e}")
 
     def get_user_name(self, user_id: int) -> str:
-        """Получает ФИО с гарантией отсутствия дубликатов"""
+        """Получает ФИО с гарантией отсутствия дубликатов (поддерживает sync вызовы)."""
         if self.db and self.db.pool:
             try:
                 try:
                     loop = asyncio.get_running_loop()
-                    # Если цикл запущен, создаем задачу, но не можем ждать
-                    loop.create_task(self.db.get_user_name_sync(user_id))
-                    return ""  # Возвращаем пустую строку, т.к. не можем ждать
+                    import threading
+                    result = {}
+                    def _runner():
+                        try:
+                            result['name'] = asyncio.run(self.db.get_user_name_sync(user_id))
+                        except Exception as e:
+                            logger.error(f"Error running get_user_name in background thread: {e}")
+                            result['name'] = ""
+                    t = threading.Thread(target=_runner)
+                    t.start()
+                    t.join()
+                    return result.get('name', "")
                 except RuntimeError:
                     # Если нет запущенного цикла, создаем новый
                     loop = asyncio.new_event_loop()
@@ -334,13 +343,31 @@ class JSONStorage:
         return ""
 
     def get_user_roles(self, user_id: int) -> List[str]:
-        """Получает роли пользователя из БД"""
+        """Получает роли пользователя из БД (работает и в sync контексте).
+
+        Если текущий поток уже запускает event loop, мы выполняем корутину в
+        отдельном фоновом потоке с помощью asyncio.run, чтобы не возвращать
+        пустой список сразу.
+        """
         if self.db and self.db.pool:
             try:
                 try:
+                    # Если цикл уже запущен в текущем потоке, запускаем корутину в новом потоке
                     loop = asyncio.get_running_loop()
-                    return []  # Не можем ждать
+                    import threading
+                    result = {}
+                    def _runner():
+                        try:
+                            result['roles'] = asyncio.run(self.db.get_user_roles_sync(user_id))
+                        except Exception as e:
+                            logger.error(f"Error running get_user_roles in background thread: {e}")
+                            result['roles'] = []
+                    t = threading.Thread(target=_runner)
+                    t.start()
+                    t.join()
+                    return result.get('roles', [])
                 except RuntimeError:
+                    # Нет запущенного цикла — можно выполнить синхронно
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
                     try:
@@ -356,12 +383,23 @@ class JSONStorage:
         return []
 
     def has_user_roles(self, user_id: int) -> bool:
-        """Проверяет, есть ли у пользователя назначенные роли"""
+        """Проверяет, есть ли у пользователя назначенные роли (работает и в sync контексте)."""
         if self.db and self.db.pool:
             try:
                 try:
                     loop = asyncio.get_running_loop()
-                    return False  # Не можем ждать
+                    import threading
+                    result = {}
+                    def _runner():
+                        try:
+                            result['val'] = asyncio.run(self.db.has_user_roles_sync(user_id))
+                        except Exception as e:
+                            logger.error(f"Error running has_user_roles in background thread: {e}")
+                            result['val'] = False
+                    t = threading.Thread(target=_runner)
+                    t.start()
+                    t.join()
+                    return bool(result.get('val', False))
                 except RuntimeError:
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
