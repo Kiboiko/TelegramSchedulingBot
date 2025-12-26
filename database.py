@@ -250,7 +250,20 @@ class DatabaseManager:
                     UNIQUE(user_id, reminder_type, target_date)
                 )
             """)
-
+            await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS reminders (
+                            reminder_id SERIAL PRIMARY KEY,
+                            user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                            reminder_type VARCHAR(50) NOT NULL,  
+                                -- 'student_no_booking', 'teacher_schedule_reminder', 
+                                -- 'student_no_booking_next_week', 'teacher_feedback'
+                            target_date DATE NOT NULL,
+                            sent BOOLEAN DEFAULT FALSE,
+                            sent_at TIMESTAMP,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            UNIQUE(user_id, reminder_type, target_date)
+                        )
+                    """)
             # Создаем индексы
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_from_user ON payments(from_user_id)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_to_user ON payments(to_user_id)")
@@ -408,6 +421,143 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"❌ Error removing user role: {e}")
             return False
+
+    async def get_teachers_without_next_week_schedule(self) -> List[int]:
+        """Находит преподавателей без расписания на следующую неделю"""
+        try:
+            from datetime import datetime, timedelta
+
+            # Следующий понедельник
+            today = datetime.now()
+            days_until_monday = (7 - today.weekday()) % 7
+            days_until_monday = 7 if days_until_monday == 0 else days_until_monday  # Если сегодня понедельник, берем следующий
+            next_monday = today + timedelta(days=days_until_monday)
+            next_friday = next_monday + timedelta(days=4)
+
+            async with self.pool.acquire() as conn:
+                teachers = await conn.fetch("""
+                    SELECT DISTINCT u.user_id
+                    FROM users u
+                    JOIN teachers t ON u.user_id = t.user_id
+                    WHERE u.roles LIKE '%teacher%'
+                    AND NOT EXISTS (
+                        SELECT 1 FROM bookings b
+                        WHERE b.user_id = u.user_id
+                        AND b.user_role = 'teacher'
+                        AND b.date BETWEEN $1 AND $2
+                        AND b.date >= CURRENT_DATE
+                    )
+                """, next_monday.date(), next_friday.date())
+
+                return [t['user_id'] for t in teachers]
+
+        except Exception as e:
+            logger.error(f"❌ Error finding teachers without schedule: {e}")
+            return []
+
+    async def save_reminder(self, user_id: int, reminder_type: str, target_date: datetime.date):
+        """Сохраняет напоминание в БД"""
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO reminders (user_id, reminder_type, target_date, sent, sent_at)
+                    VALUES ($1, $2, $3, FALSE, NULL)
+                    ON CONFLICT (user_id, reminder_type, target_date) DO NOTHING
+                """, user_id, reminder_type, target_date)
+                logger.info(f"✅ Reminder saved for user {user_id}, type {reminder_type}, date {target_date}")
+                return True
+        except Exception as e:
+            logger.error(f"❌ Error saving reminder: {e}")
+            return False
+
+    async def get_unsent_reminders(self, reminder_type: str = None) -> List[Dict]:
+        """Получает неотправленные напоминания"""
+        try:
+            async with self.pool.acquire() as conn:
+                query = """
+                    SELECT r.*, u.user_name 
+                    FROM reminders r
+                    JOIN users u ON r.user_id = u.user_id
+                    WHERE r.sent = FALSE
+                    AND r.target_date <= CURRENT_DATE
+                """
+                params = []
+
+                if reminder_type:
+                    query += " AND r.reminder_type = $1"
+                    params.append(reminder_type)
+
+                query += " ORDER BY r.target_date ASC"
+
+                reminders = await conn.fetch(query, *params)
+                return [dict(reminder) for reminder in reminders]
+        except Exception as e:
+            logger.error(f"❌ Error getting unsent reminders: {e}")
+            return []
+
+    async def mark_reminder_sent(self, reminder_id: int):
+        """Отмечает напоминание как отправленное"""
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute("""
+                    UPDATE reminders 
+                    SET sent = TRUE, sent_at = CURRENT_TIMESTAMP 
+                    WHERE reminder_id = $1
+                """, reminder_id)
+                logger.info(f"✅ Reminder {reminder_id} marked as sent")
+                return True
+        except Exception as e:
+            logger.error(f"❌ Error marking reminder as sent: {e}")
+            return False
+
+    async def check_reminder_sent_today(self, user_id: int, reminder_type: str) -> bool:
+        """Проверяет, отправляли ли уже напоминание сегодня"""
+        try:
+            async with self.pool.acquire() as conn:
+                reminder = await conn.fetchrow("""
+                    SELECT reminder_id FROM reminders 
+                    WHERE user_id = $1 
+                    AND reminder_type = $2
+                    AND sent = TRUE
+                    AND DATE(sent_at) = CURRENT_DATE
+                    LIMIT 1
+                """, user_id, reminder_type)
+                return reminder is not None
+        except Exception as e:
+            logger.error(f"❌ Error checking reminder sent today: {e}")
+            return False
+
+    async def get_teacher_reminder_stats(self) -> Dict:
+        """Получает статистику напоминаний учителям"""
+        try:
+            async with self.pool.acquire() as conn:
+                stats = await conn.fetchrow("""
+                    SELECT 
+                        COUNT(*) as total_reminders,
+                        SUM(CASE WHEN sent THEN 1 ELSE 0 END) as sent_reminders,
+                        SUM(CASE WHEN NOT sent THEN 1 ELSE 0 END) as pending_reminders,
+                        COUNT(DISTINCT user_id) as unique_teachers
+                    FROM reminders
+                    WHERE reminder_type LIKE '%teacher%'
+                """)
+
+                weekly_stats = await conn.fetchrow("""
+                    SELECT 
+                        COUNT(*) as this_week_reminders,
+                        COUNT(DISTINCT user_id) as this_week_teachers
+                    FROM reminders
+                    WHERE reminder_type LIKE '%teacher%'
+                    AND target_date >= DATE_TRUNC('week', CURRENT_DATE)
+                    AND target_date < DATE_TRUNC('week', CURRENT_DATE) + INTERVAL '7 days'
+                """)
+
+                return {
+                    'total': dict(stats) if stats else {},
+                    'this_week': dict(weekly_stats) if weekly_stats else {}
+                }
+        except Exception as e:
+            logger.error(f"❌ Error getting teacher reminder stats: {e}")
+            return {}
 
     async def save_payment_with_content(self, from_user_id: int, to_user_id: int,
                                         content_id: int, amount: float, subject_id: str,

@@ -52,7 +52,6 @@ from menu_handlers import register_menu_handlers
 from config import *
 from states import BookingStates
 from feedback import FeedbackManager
-from states import FeedbackTeacherStates, FeedbackStates
 from feedback_teachers import FeedbackTeacherManager
 from config import FEEDBACK_CONFIG
 from materials_manager import MaterialsManager
@@ -1091,40 +1090,6 @@ async def handle_teacher_feedback_submit(callback: types.CallbackQuery, state: F
         logger.error(f"Ошибка отправки feedback преподавателя: {e}")
         await callback.answer("Ошибка отправки", show_alert=True)
 
-@dp.message(FeedbackTeacherStates.WAITING_FEEDBACK_DETAILS)
-async def handle_teacher_feedback_text_input(message: types.Message, state: FSMContext):
-    """Обрабатывает текстовый ввод для обратной связи преподавателя"""
-    try:
-        data = await state.get_data()
-        rating_type = data.get('feedback_teacher_rating', 'better')
-
-        # Сохраняем текст от пользователя в состоянии
-        await state.update_data(feedback_teacher_details=message.text)
-
-        if rating_type == 'better':
-            base_text = "Что можно улучшить в организации занятий?\n\n"
-        else:  # bad
-            base_text = "Сожалеем о негативном опыте! 😔\nЧто случилось?\n\n"
-            base_text += "Если ситуация требует немедленного решения, звоните: +79001372727\n\n"
-
-        new_text = base_text + f"*Ваш ответ:* {message.text}"
-
-        keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(
-                text="📨 Все написал, отправить",
-                callback_data="feedback_teacher_submit_details"
-            )]
-        ])
-
-        await message.answer(
-            new_text,
-            reply_markup=keyboard,
-            parse_mode="Markdown"
-        )
-
-    except Exception as e:
-        logger.error(f"Ошибка обработки текста feedback преподавателя: {e}")
-        await message.answer("Произошла ошибка, попробуйте еще раз")
 
 @dp.callback_query(BookingStates.SELECT_TIME_RANGE, F.data == "select_end_mode")
 async def select_end_mode_handler(callback: types.CallbackQuery, state: FSMContext):
@@ -1392,25 +1357,80 @@ async def admin_remove_role_command(message: types.Message, state: FSMContext):
 # Поиск пользователей по имени
 @dp.message(AdminAddRoleStates.INPUT_USER_NAME)
 async def admin_search_user(message: types.Message, state: FSMContext):
-    """Поиск пользователей по ФИО"""
+    """Поиск пользователей по ФИО при добавлении роли"""
     search_query = message.text.strip()
+    user_id = message.from_user.id
 
     if not search_query:
         await message.answer("Пожалуйста, введите ФИО для поиска")
         return
 
     try:
+        logger.info(f"🔍 Поиск пользователя по запросу: '{search_query}' (от пользователя {user_id})")
+
+        # Проверяем доступность базы данных
+        if not storage.db or not storage.db.pool:
+            await message.answer("❌ Ошибка подключения к базе данных")
+            return
+
         # Ищем пользователей в БД
-        if storage.db and storage.db.pool:
-            async with storage.db.pool.acquire() as conn:
-                # Ищем пользователей, у которых имя содержит запрос
-                users = await conn.fetch(
-                    "SELECT user_id, user_name, roles FROM users WHERE user_name ILIKE $1 ORDER BY user_name LIMIT 10",
-                    f"%{search_query}%"
+        async with storage.db.pool.acquire() as conn:
+            # Ищем пользователей, у которых имя содержит запрос (без учета регистра)
+            users = await conn.fetch("""
+                SELECT user_id, user_name, roles 
+                FROM users 
+                WHERE user_name ILIKE $1 
+                ORDER BY user_name 
+                LIMIT 15
+            """, f"%{search_query}%")
+
+            logger.info(f"Найдено пользователей: {len(users)}")
+
+            if not users:
+                await message.answer(
+                    f"❌ Пользователи с именем '{search_query}' не найдены.\n"
+                    "Попробуйте другое имя или проверьте правильность написания."
+                )
+                return
+
+            # Создаем клавиатуру с найденными пользователями
+            builder = InlineKeyboardBuilder()
+
+            for user in users:
+                user_id_val = user['user_id']
+                user_name = user['user_name']
+                roles = user['roles'] or "нет ролей"
+
+                # Обрезаем длинные имена для кнопок
+                display_name = user_name
+                if len(user_name) > 30:
+                    display_name = user_name[:27] + "..."
+
+                button_text = f"{display_name} (ID: {user_id_val}, роли: {roles})"
+
+                builder.button(
+                    text=button_text,
+                    callback_data=f"admin_addrole_selectuser_{user_id_val}"
                 )
 
+            builder.adjust(1)
+
+            await message.answer(
+                f"🔍 Найдено пользователей: {len(users)}\n"
+                "Выберите пользователя для добавления роли:",
+                reply_markup=builder.as_markup()
+            )
+
+            # Сохраняем результаты поиска в состоянии
+            await state.update_data(
+                search_results=[dict(user) for user in users],
+                search_query=search_query
+            )
+
     except Exception as e:
-        logger.error(f"Ошибка поиска пользователей: {e}")
+        logger.error(f"❌ Ошибка поиска пользователей: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         await message.answer("❌ Произошла ошибка при поиске пользователей")
 
 
@@ -2216,6 +2236,93 @@ async def admin_link_existing_child_handler(callback: types.CallbackQuery):
         logger.error(f"Error in admin_link_child_handler: {e}")
         await callback.answer("Ошибка обработки", show_alert=True)
 
+
+@dp.message(Command("test_reminder"))
+async def test_reminder_command(message: types.Message):
+    """Тестовая команда для отправки напоминания себе"""
+    try:
+        user_id = message.from_user.id
+
+        # Получаем роли пользователя
+        if storage.db and storage.db.pool:
+            user_roles = await storage.db.get_user_roles(user_id)
+        else:
+            user_roles = storage.get_user_roles(user_id)
+
+        if 'teacher' not in user_roles:
+            await message.answer("❌ Эта команда только для преподавателей")
+            return
+
+        # Отправляем тестовое напоминание
+        await teacher_reminder_manager.create_test_reminder(user_id)
+        await message.answer("✅ Тестовое напоминание отправлено!")
+
+    except Exception as e:
+        logger.error(f"Error in test_reminder_command: {e}")
+        await message.answer(f"❌ Ошибка: {str(e)}")
+
+
+@dp.message(Command("check_schedule"))
+async def check_schedule_command(message: types.Message):
+    """Проверяет, есть ли у пользователя расписание на след неделю"""
+    try:
+        user_id = message.from_user.id
+
+        if storage.db and storage.db.pool:
+            user_roles = await storage.db.get_user_roles(user_id)
+        else:
+            user_roles = storage.get_user_roles(user_id)
+
+        if 'teacher' not in user_roles:
+            await message.answer("❌ Эта команда только для преподавателей")
+            return
+
+        # Проверяем расписание
+        has_schedule = await teacher_reminder_manager.has_schedule_for_next_week(user_id)
+
+        if has_schedule:
+            await message.answer("✅ У вас уже есть записи на следующую неделю!")
+        else:
+            await message.answer("⚠️ У вас пока нет записей на следующую неделю.\n\n"
+                                 "Используйте кнопку '📅 Забронировать время' чтобы записаться!")
+
+    except Exception as e:
+        logger.error(f"Error in check_schedule_command: {e}")
+        await message.answer(f"❌ Ошибка: {str(e)}")
+
+
+@dp.message(Command("list_teachers_no_schedule"))
+async def list_teachers_no_schedule_command(message: types.Message):
+    """Показывает список преподавателей без расписания на след неделю"""
+    try:
+        user_id = message.from_user.id
+        if not is_admin(user_id):
+            await message.answer("❌ Эта команда только для администраторов")
+            return
+
+        await message.answer("⏳ Ищу преподавателей без расписания на следующую неделю...")
+
+        teachers = await teacher_reminder_manager.get_teachers_without_next_week_schedule()
+
+        if not teachers:
+            await message.answer("✅ Все преподаватели уже записались на следующую неделю!")
+            return
+
+        # Формируем список БЕЗ Markdown разметки
+        lines = [f"📋 Преподаватели без расписания на след неделю: ({len(teachers)} человек)"]
+
+        for i, teacher in enumerate(teachers, 1):
+            lines.append(f"{i}. {teacher.get('user_name', 'Без имени')} (ID: {teacher['user_id']})")
+
+        lines.append("")
+        lines.append("ℹ️ Используйте команду /send_reminders для отправки напоминаний")
+
+        # УБЕРИТЕ parse_mode="Markdown"
+        await message.answer("\n".join(lines))  # Без parse_mode
+
+    except Exception as e:
+        logger.error(f"Error in list_teachers_no_schedule_command: {e}")
+        await message.answer(f"❌ Ошибка: {str(e)}")
 
 @dp.callback_query(F.data.startswith("admin_set_subjects_"))
 async def admin_set_child_subjects_handler(callback: types.CallbackQuery, state: FSMContext):
@@ -3501,41 +3608,6 @@ async def handle_feedback_submit(callback: types.CallbackQuery, state: FSMContex
         logger.error(f"Ошибка отправки feedback: {e}")
         await callback.answer("Ошибка отправки", show_alert=True)
 
-
-@dp.message(FeedbackStates.WAITING_FEEDBACK_DETAILS)
-async def handle_feedback_text_input(message: types.Message, state: FSMContext):
-    """Обрабатывает текстовый ввод для обратной связи"""
-    try:
-        data = await state.get_data()
-        rating_type = data.get('feedback_rating', 'better')
-
-        # Сохраняем текст от пользователя в состоянии
-        await state.update_data(feedback_details=message.text)
-
-        if rating_type == 'better':
-            base_text = "Чего не хватило для идеального занятия?\n\n"
-        else:  # bad
-            base_text = "Сожалеем о негативном опыте! 😔\nЧто случилось?\n\n"
-            base_text += "Если ситуация требует немедленного решения, звоните: +79001372727\n\n"
-
-        new_text = base_text + f"*Ваш ответ:* {message.text}"
-
-        keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(
-                text="📨 Все написал, отправить",
-                callback_data="feedback_submit_details"
-            )]
-        ])
-
-        await message.answer(
-            new_text,
-            reply_markup=keyboard,
-            parse_mode="Markdown"
-        )
-
-    except Exception as e:
-        logger.error(f"Ошибка обработки текста feedback: {e}")
-        await message.answer("Произошла ошибка, попробуйте еще раз")
 @dp.callback_query(BookingStates.CONFIRM_SCHEDULE, F.data == "cancel_schedule")
 async def cancel_schedule_generation(callback: types.CallbackQuery, state: FSMContext):
     """Отмена составления расписания"""

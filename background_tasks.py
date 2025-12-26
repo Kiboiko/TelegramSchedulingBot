@@ -128,20 +128,27 @@ class BackgroundTasks:
 
     async def teacher_reminder_task(self):
         """Фоновая задача проверки и отправки напоминаний преподавателям"""
-        from teacher_reminder import TeacherReminderManager
-
-        teacher_reminder_manager = TeacherReminderManager(self.storage, self.gsheets, self.bot)
+        logger.info("Задача проверки напоминаний преподавателям запущена")
 
         while True:
             try:
-                await teacher_reminder_manager.check_and_send_weekly_reminders()
+                # Проверяем каждую минуту, нужно ли отправлять напоминания
+                if self.teacher_reminder_manager.should_send_reminder():
+                    logger.info("🎯 Время отправки еженедельных напоминаний преподавателям")
+                    stats = await self.teacher_reminder_manager.send_reminders()
 
-                # Проверяем чаще для timely reminders
-                await asyncio.sleep(3600)  # Каждый час
+                    if stats:
+                        logger.info(
+                            f"📊 Статистика: всего {stats.get('total_teachers', 0)} преподавателей, "
+                            f"отправлено {stats.get('sent_reminders', 0)} напоминаний"
+                        )
+
+                # Проверяем каждый час для других типов напоминаний
+                await asyncio.sleep(60)  # Проверяем каждую минуту
 
             except Exception as e:
-                logger.error(f"Error in teacher_reminder_task: {e}")
-                await asyncio.sleep(1800)  # 30 минут при ошибке
+                logger.error(f"Ошибка в задаче проверки напоминаний преподавателям: {e}")
+                await asyncio.sleep(300)  # 5 минут при ошибке
 
     # ЗАКОММЕНТИРОВАНО: Переход на БД
     # async def sync_with_gsheets(self):
@@ -324,6 +331,6 @@ class BackgroundTasks:
             self.check_student_feedback_task(),
             self.check_teacher_feedback_task(),
             self.student_reminder_task(),
-            self.teacher_reminder_task()
+            # self.teacher_reminder_task()
         ]
         return tasks
