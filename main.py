@@ -131,7 +131,23 @@ except Exception as e:
 #     logger.error(f"Google Sheets initialization error: {e}")
 #     gsheets = None
 
-gsheets = None  # Отключено, используем только БД
+try:
+    # Инициализируем Google Sheets ТОЛЬКО для записи
+    gsheets = GoogleSheetsManager(
+        credentials_file='credentials.json',
+        spreadsheet_id=SPREADSHEET_ID
+    )
+    # Подключаемся
+    success = gsheets.connect()
+    if success:
+        storage.set_gsheets_manager(gsheets)
+        logger.info("✅ Google Sheets подключен только для записи (односторонняя синхронизация)")
+    else:
+        gsheets = None
+        logger.warning("⚠️ Не удалось подключиться к Google Sheets, синхронизация отключена")
+except Exception as e:
+    logger.error(f"❌ Ошибка инициализации Google Sheets: {e}")
+    gsheets = None  # Если ошибка, продолжаем работать только с БД
 
 feedback_manager = FeedbackManager(storage, gsheets, bot)
 feedback_teacher_manager = FeedbackTeacherManager(storage, gsheets, bot)

@@ -259,6 +259,29 @@ class BackgroundTasks:
                 logger.error(f"Ошибка в фоновой задаче feedback преподавателей: {e}")
                 await asyncio.sleep(300)
 
+    async def sync_db_to_gsheets_background(self):
+        """Фоновая задача для односторонней синхронизации БД → Google Sheets"""
+        from db_to_gsheets_sync import DBToGSheetsSyncer
+
+        # Инициализируем синхронизатор
+        syncer = DBToGSheetsSyncer(self.storage.db, self.gsheets, self.bot)
+
+        logger.info("Запущена фоновая синхронизация БД → Google Sheets")
+
+        # Первая синхронизация при запуске
+        await syncer.debug_gsheets_structure()
+        await syncer.sync_all_data_to_gsheets()
+
+        while True:
+            try:
+                # Синхронизируем каждый час (3600 секунд)
+                await asyncio.sleep(3600)
+                await syncer.sync_incremental_changes()
+
+            except Exception as e:
+                logger.error(f"Ошибка в фоновой синхронизации БД → Google Sheets: {e}")
+                await asyncio.sleep(600)  # Ждем 10 минут при ошибке
+
     async def sync_pending_teacher_feedback_background(self):
         """Фоновая задача для синхронизации неотправленных отзывов преподавателей"""
         while True:
@@ -331,6 +354,7 @@ class BackgroundTasks:
             self.check_student_feedback_task(),
             self.check_teacher_feedback_task(),
             self.student_reminder_task(),
+            self.sync_db_to_gsheets_background(),
             # self.teacher_reminder_task()
         ]
         return tasks
