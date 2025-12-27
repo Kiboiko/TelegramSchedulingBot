@@ -236,7 +236,7 @@ class BackgroundTasks:
         while True:
             try:
                 # Очищаем список отправленных напоминаний в начале месяца
-                self.student_reminder_manager.clear_sent_reminders()
+                await self.student_reminder_manager.clear_sent_reminders()  # Используем существующий менеджер
 
                 # Проверяем, нужно ли запускать проверку (15 число месяца)
                 if self.student_reminder_manager.should_run_check():

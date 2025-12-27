@@ -3765,6 +3765,7 @@ async def process_role_selection(callback: types.CallbackQuery, state: FSMContex
     await callback.answer()
 
 
+
 @dp.callback_query(BookingStates.SELECT_SUBJECT, F.data.startswith("subject_"))
 async def process_student_subject(callback: types.CallbackQuery, state: FSMContext):
     subject_id = callback.data.split("_")[1]

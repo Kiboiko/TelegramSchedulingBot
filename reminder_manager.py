@@ -4,6 +4,7 @@ from typing import List, Dict
 from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from database import db
+import asyncio  # Добавлен импорт
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,7 @@ class StudentReminderManager:
         try:
             now = datetime.now()
             current_month_start = datetime(now.year, now.month, 1).date()
+            current_month_end = (datetime(now.year, now.month, 1) + timedelta(days=31)).date()
 
             async with db.pool.acquire() as conn:
                 bookings = await conn.fetch("""
@@ -28,8 +30,7 @@ class StudentReminderManager:
                     AND user_role = 'student'
                     AND date >= $2
                     AND date < $3
-                """, user_id, current_month_start,
-                                            current_month_start + timedelta(days=31))
+                """, user_id, current_month_start, current_month_end)
 
                 return bookings[0]['count'] > 0 if bookings else False
 
@@ -53,10 +54,11 @@ class StudentReminderManager:
 
                 result = []
                 for student in students:
+                    roles_list = [r.strip() for r in student['roles'].split(',') if r.strip()] if student['roles'] else []
                     result.append({
                         'user_id': student['user_id'],
                         'user_name': student['user_name'],
-                        'roles': [r.strip() for r in student['roles'].split(',') if r.strip()]
+                        'roles': roles_list
                     })
 
                 logger.info(f"✅ Found {len(result)} students")
@@ -108,6 +110,7 @@ class StudentReminderManager:
                     WHERE user_id = $1 
                     AND reminder_type = $2
                     AND target_date >= $3
+                    AND sent = TRUE
                 """, user_id, reminder_type, this_month_start)
                 return reminder is not None
         except Exception as e:
@@ -119,8 +122,10 @@ class StudentReminderManager:
         try:
             async with db.pool.acquire() as conn:
                 await conn.execute("""
-                    INSERT INTO reminders (user_id, reminder_type, target_date, sent)
-                    VALUES ($1, $2, $3, TRUE)
+                    INSERT INTO reminders (user_id, reminder_type, target_date, sent, sent_at)
+                    VALUES ($1, $2, $3, TRUE, CURRENT_TIMESTAMP)
+                    ON CONFLICT (user_id, reminder_type, target_date) 
+                    DO UPDATE SET sent = TRUE, sent_at = CURRENT_TIMESTAMP
                 """, user_id, reminder_type, datetime.now().date())
         except Exception as e:
             logger.error(f"❌ Error saving reminder: {e}")
@@ -166,7 +171,7 @@ class StudentReminderManager:
         return now.day == 15
 
     async def create_reminders_for_no_bookings(self):
-        """Создает напоминания для студентов без записей"""
+        """Создает напоминания для студентов без записей на следующую неделю"""
         try:
             # Находим студентов без записей на следующую неделю
             next_week_start = datetime.now() + timedelta(days=7)
@@ -210,3 +215,55 @@ class StudentReminderManager:
                 """, user_id, reminder_type, date_obj)
         except Exception as e:
             logger.error(f"❌ Error creating reminder: {e}")
+
+    async def clear_sent_reminders(self):
+        """Очищает список отправленных напоминаний в начале месяца"""
+        try:
+            # В начале месяца можно очистить старые напоминания
+            now = datetime.now()
+            if now.day == 1:  # Первое число месяца
+                async with db.pool.acquire() as conn:
+                    # Можно удалить напоминания старше 3 месяцев
+                    three_months_ago = (now - timedelta(days=90)).date()
+                    await conn.execute("""
+                        DELETE FROM reminders 
+                        WHERE target_date < $1
+                        AND reminder_type LIKE 'student_%'
+                    """, three_months_ago)
+                    logger.info("✅ Old student reminders cleared")
+        except Exception as e:
+            logger.error(f"❌ Error clearing sent reminders: {e}")
+
+    async def get_reminder_stats(self) -> Dict:
+        """Получает статистику напоминаний для учеников"""
+        try:
+            async with db.pool.acquire() as conn:
+                # Общая статистика
+                total_stats = await conn.fetchrow("""
+                    SELECT 
+                        COUNT(*) as total_reminders,
+                        SUM(CASE WHEN sent THEN 1 ELSE 0 END) as sent_reminders,
+                        SUM(CASE WHEN NOT sent THEN 1 ELSE 0 END) as pending_reminders,
+                        COUNT(DISTINCT user_id) as unique_students
+                    FROM reminders
+                    WHERE reminder_type LIKE 'student_%'
+                """)
+
+                # Статистика за этот месяц
+                monthly_stats = await conn.fetchrow("""
+                    SELECT 
+                        COUNT(*) as this_month_reminders,
+                        COUNT(DISTINCT user_id) as this_month_students
+                    FROM reminders
+                    WHERE reminder_type LIKE 'student_%'
+                    AND target_date >= DATE_TRUNC('month', CURRENT_DATE)
+                    AND target_date < DATE_TRUNC('month', CURRENT_DATE) + INTERVAL '1 month'
+                """)
+
+                return {
+                    'total': dict(total_stats) if total_stats else {},
+                    'this_month': dict(monthly_stats) if monthly_stats else {}
+                }
+        except Exception as e:
+            logger.error(f"❌ Error getting student reminder stats: {e}")
+            return {}
