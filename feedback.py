@@ -43,7 +43,20 @@ class FeedbackManager:
     def get_todays_finished_lessons(self) -> List[Dict[str, Any]]:
         """Получает список завершенных занятий на сегодня с учетом счетчика"""
         try:
-            today = datetime.now().date()
+            now = datetime.now()
+            from config import FEEDBACK_CONFIG
+
+            send_hour = FEEDBACK_CONFIG.get("send_hour", 20)
+            send_minute = FEEDBACK_CONFIG.get("send_minute", 0)
+
+            logger.debug(f"Feedback check at {now.isoformat()}, configured send time {send_hour:02d}:{send_minute:02d}")
+
+            # Не отправляем отзывы до заданного вечернего времени
+            if (now.hour < send_hour) or (now.hour == send_hour and now.minute < send_minute):
+                logger.debug("Не отправляем отзывы: текущее время раньше настроенного вечернего времени")
+                return []
+
+            today = now.date()
             today_str = today.strftime("%Y-%m-%d")
             bookings = self.storage.load()
             finished_lessons = []
@@ -93,6 +106,8 @@ class FeedbackManager:
         try:
             finished_lessons = self.get_todays_finished_lessons()
 
+            logger.debug(f"Found {len(finished_lessons)} finished lessons for feedback (students): {finished_lessons}")
+
             for lesson in finished_lessons:
                 user_id = lesson.get('user_id')
                 subject_id = lesson.get('subject')
@@ -141,6 +156,11 @@ class FeedbackManager:
                 )
 
                 try:
+                    # Double-check that we didn't already send this particular (user, date, subject)
+                    if self.check_feedback_sent(user_id, date_str, subject_id):
+                        logger.debug(f"Пропускаем отправку для user {user_id} {date_str} subject {subject_id}: уже отправлено")
+                        continue
+
                     await self.bot.send_message(
                         chat_id=user_id,
                         text=message_text,

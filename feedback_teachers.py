@@ -91,7 +91,20 @@ class FeedbackTeacherManager:
     def get_todays_finished_lessons(self) -> List[Dict[str, Any]]:
         """Получает список завершенных занятий преподавателей на сегодня с учетом счетчика"""
         try:
-            today = datetime.now().date()
+            now = datetime.now()
+            from config import FEEDBACK_CONFIG
+
+            send_hour = FEEDBACK_CONFIG.get("send_hour", 20)
+            send_minute = FEEDBACK_CONFIG.get("send_minute", 0)
+
+            logger.debug(f"Teacher feedback check at {now.isoformat()}, configured send time {send_hour:02d}:{send_minute:02d}")
+
+            # Не отправляем отзывы до заданного вечернего времени
+            if (now.hour < send_hour) or (now.hour == send_hour and now.minute < send_minute):
+                logger.debug("Не отправляем отзывы преподавателям: текущее время раньше настроенного вечернего времени")
+                return []
+
+            today = now.date()
             today_str = today.strftime("%Y-%m-%d")
             bookings = self.storage.load()
             finished_lessons = []
@@ -138,6 +151,8 @@ class FeedbackTeacherManager:
         """Отправляет вопросы обратной связи для завершенных занятий преподавателей"""
         try:
             finished_lessons = self.get_todays_finished_lessons()
+
+            logger.debug(f"Found {len(finished_lessons)} finished lessons for feedback (teachers): {finished_lessons}")
 
             for lesson in finished_lessons:
                 user_id = lesson.get('user_id')
@@ -191,6 +206,10 @@ class FeedbackTeacherManager:
                 )
 
                 try:
+                    if self.check_feedback_sent(user_id, date_str):
+                        logger.debug(f"Пропускаем отправку преподавателю {user_id} {date_str}: уже отправлено")
+                        continue
+
                     await self.bot.send_message(
                         chat_id=user_id,
                         text=message_text,
