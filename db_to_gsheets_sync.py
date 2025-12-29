@@ -1,4 +1,4 @@
-# db_to_gsheets_sync.py
+# db_to_gsheets_sync.py (исправленная версия)
 import asyncio
 import logging
 from datetime import datetime, timedelta
@@ -11,14 +11,6 @@ logger = logging.getLogger(__name__)
 
 class DBToGSheetsSyncer:
     def __init__(self, db, gsheets_manager, bot):
-        """
-        Инициализация синхронизатора БД → Google Sheets
-
-        Args:
-            db: DatabaseManager instance
-            gsheets_manager: GoogleSheetsManager instance
-            bot: Bot instance
-        """
         self.db = db
         self.gsheets = gsheets_manager
         self.bot = bot
@@ -57,12 +49,12 @@ class DBToGSheetsSyncer:
             return False
 
     async def sync_users_to_gsheets(self):
-        """Синхронизация пользователей в лист 'Пользователи бот'"""
+        """Синхронизация пользователей в лист 'Пользователи бот' - СОХРАНЯЕМ СТРУКТУРУ"""
         try:
             logger.info("🔄 Синхронизация пользователей...")
 
-            if not self.gsheets or not hasattr(self.gsheets, 'client') or not self.gsheets.client:
-                logger.debug("Google Sheets не подключен, пропускаем синхронизацию пользователей")
+            if not self.gsheets:
+                logger.warning("Google Sheets не подключен")
                 return
 
             async with self.db.pool.acquire() as conn:
@@ -77,65 +69,101 @@ class DBToGSheetsSyncer:
                     logger.info("Нет пользователей для синхронизации")
                     return
 
-                # Получаем или создаем лист
+                # Получаем лист БЕЗ очистки
                 worksheet = self.gsheets._get_or_create_users_worksheet()
+                data = worksheet.get_all_values()
 
-                # Очищаем лист (оставляем только заголовки)
-                worksheet.clear()
+                # Если лист пустой, создаем базовую структуру
+                if not data or len(data) == 0:
+                    headers = ["user_id", "user_name", "roles", "teacher_subjects", "student_subjects",
+                               "parent_children"]
+                    worksheet.append_row(headers)
+                    data = [headers]
 
-                # Заголовки
-                headers = ["user_id", "user_name", "roles", "teacher_subjects", "student_subjects", "parent_children"]
-                worksheet.append_row(headers)
+                # Создаем карту существующих пользователей по user_id
+                existing_users = {}
+                header_row = data[0]
 
-                # Подготавливаем данные
-                rows = []
+                # Находим индексы колонок
+                user_id_col = self._find_column_index(header_row, "user_id")
+                user_name_col = self._find_column_index(header_row, "user_name")
+                roles_col = self._find_column_index(header_row, "roles")
+                teacher_subjects_col = self._find_column_index(header_row, "teacher_subjects")
+                student_subjects_col = self._find_column_index(header_row, "student_subjects")
+                parent_children_col = self._find_column_index(header_row, "parent_children")
+
+                if user_id_col == -1:
+                    logger.error("Столбец user_id не найден в листе пользователей")
+                    return
+
+                # Собираем существующих пользователей
+                for i, row in enumerate(data[1:], start=2):
+                    if len(row) > user_id_col and row[user_id_col]:
+                        existing_users[row[user_id_col]] = {
+                            'row_index': i,
+                            'row_data': row
+                        }
+
+                # Обновляем или добавляем пользователей
                 for user in users:
-                    user_id = user['user_id']
+                    user_id = str(user['user_id'])
                     user_name = user['user_name'] or ""
                     roles = user['roles'] or ""
 
-                    # Получаем предметы преподавателя
+                    # Получаем дополнительные данные
                     teacher_subjects = []
                     if 'teacher' in roles:
-                        teacher_subjects = await self.db.get_teacher_subjects(user_id)
+                        teacher_subjects = await self.db.get_teacher_subjects(user['user_id'])
 
-                    # Получаем предметы студента
                     student_subjects = []
                     if 'student' in roles:
                         async with conn:
                             student_records = await conn.fetch(
                                 "SELECT subject_id FROM students WHERE user_id = $1",
-                                user_id
+                                user['user_id']
                             )
                             student_subjects = [record['subject_id'] for record in student_records]
 
-                    # Получаем детей родителя
                     parent_children = []
                     if 'parent' in roles:
-                        parent_children = await self.db.get_parent_children_sync(user_id)
+                        parent_children = await self.db.get_parent_children_sync(user['user_id'])
 
-                    rows.append([
-                        str(user_id),
-                        user_name,
-                        roles,
-                        ','.join(teacher_subjects),
-                        ','.join(student_subjects),
-                        ','.join(map(str, parent_children))
-                    ])
+                    # Подготавливаем строку
+                    row_data = [''] * len(header_row)
+                    if user_id_col != -1:
+                        row_data[user_id_col] = user_id
+                    if user_name_col != -1:
+                        row_data[user_name_col] = user_name
+                    if roles_col != -1:
+                        row_data[roles_col] = roles
+                    if teacher_subjects_col != -1:
+                        row_data[teacher_subjects_col] = ','.join(teacher_subjects)
+                    if student_subjects_col != -1:
+                        row_data[student_subjects_col] = ','.join(student_subjects)
+                    if parent_children_col != -1:
+                        row_data[parent_children_col] = ','.join(map(str, parent_children))
 
-                # Добавляем данные
-                if rows:
-                    worksheet.append_rows(rows)
+                    # Обновляем существующую строку или добавляем новую
+                    if user_id in existing_users:
+                        # Обновляем существующую строку
+                        row_index = existing_users[user_id]['row_index']
+                        worksheet.update(f'A{row_index}', [row_data])
+                        logger.debug(f"Обновлен пользователь: {user_id} - {user_name}")
+                    else:
+                        # Добавляем новую строку
+                        worksheet.append_row(row_data)
+                        logger.debug(f"Добавлен пользователь: {user_id} - {user_name}")
 
                 logger.info(f"✅ Синхронизировано {len(users)} пользователей")
 
         except Exception as e:
             logger.error(f"Ошибка синхронизации пользователей: {e}")
+            logger.error(traceback.format_exc())
 
     async def sync_students_to_gsheets(self):
-        """Синхронизация студентов в лист 'Ученики бот' (основная таблица)"""
+        """Синхронизация студентов в лист 'Ученики бот' - ТОЛЬКО ОБНОВЛЕНИЕ ДАННЫХ"""
         try:
-            logger.info("🔄 Синхронизация студентов...")
+            logger.info("🔄 Синхронизация студентов (обновление данных)...")
 
             if not self.gsheets:
                 logger.warning("Google Sheets не подключен")
@@ -165,66 +193,129 @@ class DBToGSheetsSyncer:
                     logger.info("Нет студентов для синхронизации")
                     return
 
-                # Получаем или создаем лист
+                # Получаем лист БЕЗ очистки
                 worksheet = self.gsheets._get_or_create_worksheet("Ученики бот")
+                data = worksheet.get_all_values()
 
-                # Очищаем лист
-                worksheet.clear()
+                if len(data) < 2:  # Только заголовки или пусто
+                    logger.warning("Лист 'Ученики бот' почти пустой, пропускаем синхронизацию")
+                    return
 
-                # Создаем заголовки для таблицы
-                # Структура: ID, Имя, Предмет ID, Предмет, Класс, Потребность во внимании, Баланс, Тариф
-                headers = [
-                    "ID", "Имя", "Предмет ID", "Предмет", "Класс",
-                    "Потребность во внимании (мин)", "Баланс", "Тариф"
-                ]
+                # Получаем заголовки
+                headers = [str(h).strip() for h in data[0]]
 
-                # Добавляем даты для расписания (текущая неделя + 2 недели вперед)
-                from datetime import datetime, timedelta
-                today = datetime.now().date()
+                # Находим индексы нужных колонок
+                col_indices = {
+                    'id': self._find_column_index(headers, "ID"),
+                    'name': self._find_column_index(headers, "Имя"),
+                    'subject_id': self._find_column_index(headers, "Предмет ID"),
+                    'subject': self._find_column_index(headers, "Предмет"),
+                    'class': self._find_column_index(headers, "Класс"),
+                    'attention': self._find_column_index(headers, "Потребность во внимании"),
+                    'balance': self._find_column_index(headers, "Баланс"),
+                    'tariff': self._find_column_index(headers, "Тариф")
+                }
 
-                date_headers = []
-                for i in range(0, 21):  # 3 недели
-                    current_date = today + timedelta(days=i)
-                    if current_date.weekday() < 5:  # Только будни
-                        date_str = current_date.strftime("%d.%m.%Y")
-                        date_headers.extend([f"{date_str} начало", f"{date_str} конец"])
+                # Создаем карту студентов по ID+Subject для быстрого поиска
+                student_map = {}
+                for i, row in enumerate(data[1:], start=2):
+                    if len(row) > col_indices['id'] and len(row) > col_indices['subject_id']:
+                        student_id = str(row[col_indices['id']]).strip()
+                        subject_id = str(row[col_indices['subject_id']]).strip() if col_indices[
+                                                                                        'subject_id'] != -1 else ""
+                        if student_id and subject_id:
+                            key = f"{student_id}_{subject_id}"
+                            student_map[key] = {
+                                'row_index': i,
+                                'row_data': row
+                            }
 
-                headers.extend(date_headers)
-                worksheet.append_row(headers)
+                # Обновляем или добавляем студентов
+                updated_count = 0
+                added_count = 0
 
-                # Подготавливаем данные
-                rows = []
                 for student in students:
-                    row = [
-                        str(student['user_id']),
-                        student['user_name'] or "",
-                        student['subject_id'] or "",
-                        student['subject_name'] or "",
-                        student['class'] or "",
-                        student['attention_need'] or "",
-                        float(student['balance'] or 0),
-                        float(student['tariff'] or 0)
-                    ]
+                    user_id = str(student['user_id'])
+                    subject_id = student['subject_id'] or ""
+                    key = f"{user_id}_{subject_id}"
 
-                    # Добавляем пустые ячейки для дат (будут заполнены бронированиями позже)
-                    row.extend([''] * len(date_headers))
+                    # Подготавливаем обновленные значения
+                    updates = {}
 
-                    rows.append(row)
+                    # Только обновляем базовые данные, если колонки существуют
+                    if col_indices['id'] != -1:
+                        # ID обычно уже есть, но на всякий случай
+                        pass
 
-                # Добавляем данные
-                if rows:
-                    worksheet.append_rows(rows)
+                    if col_indices['name'] != -1:
+                        updates[col_indices['name']] = student['user_name'] or ""
 
-                logger.info(f"✅ Синхронизировано {len(students)} записей студентов")
+                    if col_indices['subject'] != -1:
+                        updates[col_indices['subject']] = student['subject_name'] or ""
+
+                    if col_indices['class'] != -1 and student['class']:
+                        updates[col_indices['class']] = str(student['class'])
+
+                    if col_indices['attention'] != -1 and student['attention_need']:
+                        updates[col_indices['attention']] = str(student['attention_need'])
+
+                    if col_indices['balance'] != -1 and student['balance']:
+                        updates[col_indices['balance']] = str(float(student['balance'] or 0))
+
+                    if col_indices['tariff'] != -1 and student['tariff']:
+                        updates[col_indices['tariff']] = str(float(student['tariff'] or 0))
+
+                    # Если студент уже есть в таблице - обновляем
+                    if key in student_map:
+                        row_index = student_map[key]['row_index']
+                        existing_row = student_map[key]['row_data']
+
+                        # Создаем обновленную строку
+                        updated_row = existing_row.copy()
+                        for col_idx, value in updates.items():
+                            if col_idx < len(updated_row):
+                                updated_row[col_idx] = value
+
+                        # Обновляем только изменившиеся ячейки
+                        if updated_row != existing_row:
+                            # Преобразуем в диапазон A1
+                            start_col = chr(65)  # 'A'
+                            end_col = chr(65 + len(updated_row) - 1)  # Последняя колонка
+                            range_str = f"{start_col}{row_index}:{end_col}{row_index}"
+                            worksheet.update(range_str, [updated_row])
+                            updated_count += 1
+                            logger.debug(f"Обновлен студент: {user_id} предмет {subject_id}")
+
+                    # Иначе - добавляем новую строку (редкий случай)
+                    else:
+                        # Создаем новую строку
+                        new_row = [''] * len(headers)
+
+                        # Заполняем обязательные поля
+                        if col_indices['id'] != -1:
+                            new_row[col_indices['id']] = user_id
+                        if col_indices['subject_id'] != -1:
+                            new_row[col_indices['subject_id']] = subject_id
+
+                        # Заполняем остальные поля
+                        for col_idx, value in updates.items():
+                            if col_idx < len(new_row):
+                                new_row[col_idx] = value
+
+                        worksheet.append_row(new_row)
+                        added_count += 1
+                        logger.debug(f"Добавлен студент: {user_id} предмет {subject_id}")
+
+                logger.info(f"✅ Обновлено студентов: {updated_count}, добавлено: {added_count}")
 
         except Exception as e:
             logger.error(f"Ошибка синхронизации студентов: {e}")
             logger.error(traceback.format_exc())
 
     async def sync_teachers_to_gsheets(self):
-        """Синхронизация преподавателей в лист 'Преподаватели бот'"""
+        """Синхронизация преподавателей в лист 'Преподаватели бот' - ТОЛЬКО ОБНОВЛЕНИЕ"""
         try:
-            logger.info("🔄 Синхронизация преподавателей...")
+            logger.info("🔄 Синхронизация преподавателей (обновление данных)...")
 
             if not self.gsheets:
                 logger.warning("Google Sheets не подключен")
@@ -248,57 +339,101 @@ class DBToGSheetsSyncer:
                     logger.info("Нет преподавателей для синхронизации")
                     return
 
-                # Получаем или создаем лист
+                # Получаем лист БЕЗ очистки
                 worksheet = self.gsheets._get_or_create_worksheet("Преподаватели бот")
+                data = worksheet.get_all_values()
 
-                # Очищаем лист
-                worksheet.clear()
+                if len(data) < 2:
+                    logger.warning("Лист 'Преподаватели бот' почти пустой, пропускаем синхронизацию")
+                    return
 
-                # Создаем заголовки
-                headers = ["ID", "Имя", "Предметы ID", "Приоритет"]
+                # Получаем заголовки
+                headers = [str(h).strip() for h in data[0]]
 
-                # Добавляем даты для расписания
-                from datetime import datetime, timedelta
-                today = datetime.now().date()
+                # Находим индексы нужных колонок
+                col_indices = {
+                    'id': self._find_column_index(headers, "ID"),
+                    'name': self._find_column_index(headers, "Имя"),
+                    'subjects': self._find_column_index(headers, "Предметы ID"),
+                    'priority': self._find_column_index(headers, "Приоритет")
+                }
 
-                date_headers = []
-                for i in range(0, 21):  # 3 недели
-                    current_date = today + timedelta(days=i)
-                    if current_date.weekday() < 5:  # Только будни
-                        date_str = current_date.strftime("%d.%m.%Y")
-                        date_headers.extend([f"{date_str} начало", f"{date_str} конец"])
+                # Создаем карту преподавателей по ID
+                teacher_map = {}
+                for i, row in enumerate(data[1:], start=2):
+                    if len(row) > col_indices['id']:
+                        teacher_id = str(row[col_indices['id']]).strip()
+                        if teacher_id:
+                            teacher_map[teacher_id] = {
+                                'row_index': i,
+                                'row_data': row
+                            }
 
-                headers.extend(date_headers)
-                worksheet.append_row(headers)
+                # Обновляем преподавателей
+                updated_count = 0
 
-                # Подготавливаем данные
-                rows = []
                 for teacher in teachers:
-                    row = [
-                        str(teacher['user_id']),
-                        teacher['user_name'] or "",
-                        teacher['subjects_ids'] or "",
-                        teacher['priority'] or ""
-                    ]
+                    teacher_id = str(teacher['user_id'])
 
-                    # Добавляем пустые ячейки для дат
-                    row.extend([''] * len(date_headers))
+                    # Подготавливаем обновления
+                    updates = {}
 
-                    rows.append(row)
+                    if col_indices['name'] != -1:
+                        updates[col_indices['name']] = teacher['user_name'] or ""
 
-                # Добавляем данные
-                if rows:
-                    worksheet.append_rows(rows)
+                    if col_indices['subjects'] != -1:
+                        updates[col_indices['subjects']] = teacher['subjects_ids'] or ""
 
-                logger.info(f"✅ Синхронизировано {len(teachers)} преподавателей")
+                    if col_indices['priority'] != -1:
+                        updates[col_indices['priority']] = teacher['priority'] or ""
+
+                    # Если преподаватель уже есть - обновляем
+                    if teacher_id in teacher_map:
+                        row_index = teacher_map[teacher_id]['row_index']
+                        existing_row = teacher_map[teacher_id]['row_data']
+
+                        # Создаем обновленную строку
+                        updated_row = existing_row.copy()
+                        for col_idx, value in updates.items():
+                            if col_idx < len(updated_row):
+                                updated_row[col_idx] = value
+
+                        # Обновляем только изменившиеся ячейки
+                        if updated_row != existing_row:
+                            # Преобразуем в диапазон A1
+                            start_col = chr(65)  # 'A'
+                            end_col = chr(65 + len(updated_row) - 1)
+                            range_str = f"{start_col}{row_index}:{end_col}{row_index}"
+                            worksheet.update(range_str, [updated_row])
+                            updated_count += 1
+                            logger.debug(f"Обновлен преподаватель: {teacher_id}")
+
+                    # Иначе - добавляем новую строку
+                    else:
+                        new_row = [''] * len(headers)
+
+                        # Заполняем обязательные поля
+                        if col_indices['id'] != -1:
+                            new_row[col_indices['id']] = teacher_id
+
+                        # Заполняем остальные поля
+                        for col_idx, value in updates.items():
+                            if col_idx < len(new_row):
+                                new_row[col_idx] = value
+
+                        worksheet.append_row(new_row)
+                        logger.debug(f"Добавлен преподаватель: {teacher_id}")
+
+                logger.info(f"✅ Обновлено преподавателей: {updated_count}")
 
         except Exception as e:
             logger.error(f"Ошибка синхронизации преподавателей: {e}")
+            logger.error(traceback.format_exc())
 
     async def sync_bookings_to_gsheets(self):
-        """Синхронизация бронирований в Google Sheets"""
+        """Синхронизация бронирований - ТОЛЬКО ВРЕМЯ В РАСПИСАНИИ"""
         try:
-            logger.info("🔄 Синхронизация бронирований...")
+            logger.info("🔄 Синхронизация бронирований (только время)...")
 
             if not self.gsheets:
                 logger.warning("Google Sheets не подключен")
@@ -329,9 +464,9 @@ class DBToGSheetsSyncer:
                     logger.info("Нет активных бронирований для синхронизации")
                     return
 
-                # Сначала загружаем существующие данные из листов
-                await self._update_bookings_in_sheet("Ученики бот", bookings, is_teacher=False)
-                await self._update_bookings_in_sheet("Преподаватели бот", bookings, is_teacher=True)
+                # Синхронизируем в оба листа
+                await self._update_bookings_in_sheet_safe("Ученики бот", bookings, is_teacher=False)
+                await self._update_bookings_in_sheet_safe("Преподаватели бот", bookings, is_teacher=True)
 
                 logger.info(f"✅ Синхронизировано {len(bookings)} бронирований")
 
@@ -339,29 +474,55 @@ class DBToGSheetsSyncer:
             logger.error(f"Ошибка синхронизации бронирований: {e}")
             logger.error(traceback.format_exc())
 
-    async def _update_bookings_in_sheet(self, sheet_name: str, bookings: List[Dict[str, Any]], is_teacher: bool):
-        """Обновляет бронирования в указанном листе"""
+    async def _update_bookings_in_sheet_safe(self, sheet_name: str, bookings: List[Dict[str, Any]], is_teacher: bool):
+        """Безопасное обновление бронирований (только время, не трогаем структуру)"""
         try:
             worksheet = self.gsheets._get_or_create_worksheet(sheet_name)
             data = worksheet.get_all_values()
 
-            if len(data) < 2:  # Только заголовки
-                logger.warning(f"Лист '{sheet_name}' пустой или содержит только заголовки")
+            if len(data) < 2:
+                logger.warning(f"Лист '{sheet_name}' почти пустой, пропускаем обновление бронирований")
                 return
 
             # Получаем заголовки
             headers = [str(h).strip().lower() for h in data[0]]
 
-            # Создаем карту дат для быстрого поиска колонок
-            date_columns = {}
-            for i, header in enumerate(headers):
-                if 'начало' in header:
-                    # Извлекаем дату из заголовка
-                    date_part = header.replace('начало', '').strip()
-                    date_columns[date_part] = {
-                        'start_col': i,
-                        'end_col': i + 1 if 'конец' in headers[i + 1].lower() else i + 1
+            # Находим индекс колонки ID
+            id_col_name = "id" if is_teacher else "id"
+            id_col_idx = self._find_column_index(headers, id_col_name, case_sensitive=False)
+
+            if id_col_idx == -1:
+                logger.error(f"Столбец '{id_col_name}' не найден в листе '{sheet_name}'")
+                return
+
+            # Для студентов также нужен столбец предмета
+            subject_col_idx = -1
+            if not is_teacher:
+                subject_col_idx = self._find_column_index(headers, "предмет id", case_sensitive=False)
+                if subject_col_idx == -1:
+                    logger.warning(f"Столбец 'предмет id' не найден для студентов")
+
+            # Создаем карту строк для быстрого поиска
+            row_map = {}
+            for i, row in enumerate(data[1:], start=2):
+                if len(row) > id_col_idx and row[id_col_idx]:
+                    user_id = str(row[id_col_idx]).strip()
+
+                    if not is_teacher and subject_col_idx != -1 and len(row) > subject_col_idx:
+                        # Для студентов: ключ = user_id + subject_id
+                        subject_id = str(row[subject_col_idx]).strip()
+                        key = f"{user_id}_{subject_id}"
+                    else:
+                        # Для преподавателей: ключ = user_id
+                        key = user_id
+
+                    row_map[key] = {
+                        'row_index': i,
+                        'row_data': row
                     }
+
+            # Находим колонки с датами для обновления времени
+            date_columns = self._find_date_columns(headers)
 
             # Фильтруем бронирования по типу пользователя
             filtered_bookings = [b for b in bookings if
@@ -372,54 +533,89 @@ class DBToGSheetsSyncer:
                 logger.info(f"Нет бронирований для листа '{sheet_name}'")
                 return
 
-            # Для каждого бронирования находим строку и обновляем ячейки
+            # Обновляем время бронирований
+            updated_count = 0
+
             for booking in filtered_bookings:
                 user_id = str(booking['user_id'])
                 date_obj = booking['date']
                 date_str = date_obj.strftime("%d.%m.%Y")
 
-                # Находим строку пользователя
-                row_index = -1
-                for i, row in enumerate(data[1:], start=2):  # Пропускаем заголовок
-                    if row and len(row) > 0 and str(row[0]).strip() == user_id:
-                        # Для студентов проверяем еще предмет
-                        if not is_teacher:
-                            subject_id = booking['subject_id']
-                            if len(row) > 2 and str(row[2]).strip() == str(subject_id):
-                                row_index = i
-                                break
-                        else:
-                            row_index = i
-                            break
+                # Определяем ключ для поиска строки
+                if not is_teacher:
+                    subject_id = booking['subject_id'] or ""
+                    key = f"{user_id}_{subject_id}"
+                else:
+                    key = user_id
 
-                if row_index == -1:
-                    logger.warning(f"Не найдена строка для user_id {user_id} в листе '{sheet_name}'")
+                # Находим строку
+                if key not in row_map:
+                    logger.debug(f"Не найдена строка для {key} в листе '{sheet_name}'")
                     continue
 
-                # Находим колонку для даты
-                if date_str in date_columns:
-                    start_col = date_columns[date_str]['start_col']
-                    end_col = date_columns[date_str]['end_col']
+                row_info = row_map[key]
+                row_index = row_info['row_index']
 
-                    # Обновляем время
-                    start_time = booking['start_time'].strftime("%H:%M") if booking['start_time'] else ""
-                    end_time = booking['end_time'].strftime("%H:%M") if booking['end_time'] else ""
+                # Находим колонки для этой даты
+                date_cols = date_columns.get(date_str)
+                if not date_cols:
+                    logger.debug(f"Не найдены колонки для даты {date_str}")
+                    continue
 
-                    try:
-                        worksheet.update_cell(row_index, start_col + 1, start_time)
-                        worksheet.update_cell(row_index, end_col + 1, end_time)
-                        logger.debug(f"Обновлено бронирование: {user_id} {date_str} {start_time}-{end_time}")
-                    except Exception as e:
-                        logger.error(f"Ошибка обновления ячейки: {e}")
-                else:
-                    logger.warning(f"Дата {date_str} не найдена в заголовках листа '{sheet_name}'")
+                # Обновляем время
+                start_time = booking['start_time'].strftime("%H:%M") if booking['start_time'] else ""
+                end_time = booking['end_time'].strftime("%H:%M") if booking['end_time'] else ""
+
+                try:
+                    # Обновляем только ячейки времени
+                    worksheet.update_cell(row_index, date_cols['start_col'] + 1, start_time)
+                    worksheet.update_cell(row_index, date_cols['end_col'] + 1, end_time)
+                    updated_count += 1
+                    logger.debug(f"Обновлено время: {key} {date_str} {start_time}-{end_time}")
+                except Exception as e:
+                    logger.error(f"Ошибка обновления ячейки: {e}")
+
+            logger.info(f"✅ Обновлено {updated_count} бронирований в листе '{sheet_name}'")
 
         except Exception as e:
             logger.error(f"Ошибка обновления бронирований в листе '{sheet_name}': {e}")
             logger.error(traceback.format_exc())
 
+    def _find_date_columns(self, headers: List[str]) -> Dict[str, Dict[str, int]]:
+        """Находит колонки с датами в заголовках"""
+        date_columns = {}
+
+        for i, header in enumerate(headers):
+            header_lower = header.lower()
+
+            # Ищем даты в формате DD.MM.YYYY
+            import re
+            date_match = re.search(r'(\d{1,2}\.\d{1,2}\.\d{4})', header)
+            if date_match:
+                date_str = date_match.group(1)
+
+                # Определяем, это колонка "начало" или "конец"
+                if 'начало' in header_lower or 'нач' in header_lower:
+                    # Ищем соответствующую колонку "конец"
+                    end_col = -1
+                    for j in range(i + 1, min(i + 3, len(headers))):  # Ищем в следующих 2 колонках
+                        if 'конец' in headers[j].lower() or 'кон' in headers[j].lower():
+                            end_col = j
+                            break
+
+                    if end_col != -1:
+                        date_columns[date_str] = {
+                            'start_col': i,
+                            'end_col': end_col
+                        }
+                elif 'конец' in header_lower or 'кон' in header_lower:
+                    # Пропускаем, т.к. обработаем как часть пары
+                    continue
+
+        return date_columns
+
     async def sync_parents_to_gsheets(self):
-        """Синхронизация родителей в лист 'Родители бот'"""
+        """Синхронизация родителей в лист 'Родители бот' - СОХРАНЯЕМ СТРУКТУРУ"""
         try:
             logger.info("🔄 Синхронизация родителей...")
 
@@ -446,114 +642,82 @@ class DBToGSheetsSyncer:
                     logger.info("Нет родителей для синхронизации")
                     return
 
-                # Получаем или создаем лист
+                # Получаем лист БЕЗ очистки
                 worksheet = self.gsheets._get_or_create_parents_worksheet()
+                data = worksheet.get_all_values()
 
-                # Очищаем лист
-                worksheet.clear()
+                # Если лист пустой, создаем базовую структуру
+                if not data or len(data) == 0:
+                    headers = ["user_id", "user_name", "children_ids"]
+                    worksheet.append_row(headers)
+                    data = [headers]
 
-                # Заголовки
-                headers = ["user_id", "user_name", "children_ids"]
-                worksheet.append_row(headers)
+                # Находим индексы колонок
+                headers = data[0]
+                user_id_col = self._find_column_index(headers, "user_id")
+                user_name_col = self._find_column_index(headers, "user_name")
+                children_col = self._find_column_index(headers, "children_ids")
 
-                # Подготавливаем данные
-                rows = []
+                if user_id_col == -1:
+                    logger.error("Столбец user_id не найден в листе родителей")
+                    return
+
+                # Создаем карту существующих родителей
+                parent_map = {}
+                for i, row in enumerate(data[1:], start=2):
+                    if len(row) > user_id_col and row[user_id_col]:
+                        parent_map[row[user_id_col]] = {
+                            'row_index': i,
+                            'row_data': row
+                        }
+
+                # Обновляем или добавляем родителей
                 for parent in parents:
-                    rows.append([
-                        str(parent['parent_id']),
-                        parent['parent_name'] or "",
-                        parent['children_ids'] or ""
-                    ])
+                    parent_id = str(parent['parent_id'])
 
-                # Добавляем данные
-                if rows:
-                    worksheet.append_rows(rows)
+                    # Подготавливаем строку
+                    row_data = [''] * len(headers)
+                    if user_id_col != -1:
+                        row_data[user_id_col] = parent_id
+                    if user_name_col != -1:
+                        row_data[user_name_col] = parent['parent_name'] or ""
+                    if children_col != -1:
+                        row_data[children_col] = parent['children_ids'] or ""
+
+                    # Обновляем или добавляем
+                    if parent_id in parent_map:
+                        row_index = parent_map[parent_id]['row_index']
+                        worksheet.update(f'A{row_index}', [row_data])
+                    else:
+                        worksheet.append_row(row_data)
 
                 logger.info(f"✅ Синхронизировано {len(parents)} родителей")
 
         except Exception as e:
             logger.error(f"Ошибка синхронизации родителей: {e}")
 
+    def _find_column_index(self, headers: List[str], column_name: str, case_sensitive: bool = False) -> int:
+        """Находит индекс колонки по имени"""
+        search_name = column_name if case_sensitive else column_name.lower()
+
+        for i, header in enumerate(headers):
+            header_to_check = header if case_sensitive else header.lower()
+            if search_name in header_to_check:
+                return i
+
+        return -1
+
     async def sync_incremental_changes(self):
         """Инкрементальная синхронизация только измененных данных"""
         try:
             if not self.last_sync_time:
-                # Первая синхронизация - синхронизируем все
-                logger.info("Первая синхронизация, загружаем все данные...")
+                # Первая синхронизация
                 return await self.sync_all_data_to_gsheets()
 
-            logger.info(f"🔄 Инкрементальная синхронизация с {self.last_sync_time}...")
-
-            async with self.db.pool.acquire() as conn:
-                # Получаем измененных пользователей
-                changed_users = await conn.fetch("""
-                    SELECT user_id FROM users 
-                    WHERE updated_at > $1 OR created_at > $1
-                """, self.last_sync_time)
-
-                # Получаем новые/измененные бронирования
-                changed_bookings = await conn.fetch("""
-                    SELECT booking_id FROM bookings
-                    WHERE updated_at > $1 OR created_at > $1
-                """, self.last_sync_time)
-
-                # Получаем измененных студентов
-                changed_students = await conn.fetch("""
-                    SELECT user_id FROM students
-                    WHERE updated_at > $1 OR created_at > $1
-                """, self.last_sync_time)
-
-                # Получаем измененных преподавателей
-                changed_teachers = await conn.fetch("""
-                    SELECT user_id FROM teachers
-                    WHERE updated_at > $1 OR created_at > $1
-                """, self.last_sync_time)
-
-                if not any([changed_users, changed_bookings, changed_students, changed_teachers]):
-                    logger.info("Нет изменений для инкрементальной синхронизации")
-                    return False
-
-                # Обновляем все данные, так как изменения могут быть в любом месте
-                logger.info(f"Обнаружены изменения: "
-                            f"пользователей={len(changed_users)}, "
-                            f"бронирований={len(changed_bookings)}, "
-                            f"студентов={len(changed_students)}, "
-                            f"преподавателей={len(changed_teachers)}")
-
-                await self.sync_all_data_to_gsheets()
-
-                self.last_sync_time = datetime.now()
-                return True
+            # Для простоты - всегда синхронизируем все
+            # В будущем можно оптимизировать
+            return await self.sync_all_data_to_gsheets()
 
         except Exception as e:
             logger.error(f"Ошибка инкрементальной синхронизации: {e}")
             return False
-
-    async def debug_gsheets_structure(self):
-        """Отладочный метод для проверки структуры Google Sheets"""
-        try:
-            logger.info("=== ОТЛАДКА СТРУКТУРЫ GOOGLE SHEETS ===")
-
-            if not self.gsheets:
-                logger.warning("Google Sheets не подключен")
-                return
-
-            # Проверяем листы
-            sheet_names = [ws.title for ws in self.gsheets.spreadsheet.worksheets()]
-            logger.info(f"Доступные листы: {sheet_names}")
-
-            for sheet_name in ['Ученики бот', 'Преподаватели бот', 'Пользователи бот', 'Родители бот']:
-                try:
-                    worksheet = self.gsheets.spreadsheet.worksheet(sheet_name)
-                    data = worksheet.get_all_values()
-                    logger.info(f"Лист '{sheet_name}': {len(data)} строк, {len(data[0]) if data else 0} столбцов")
-
-                    if data and len(data) > 0:
-                        logger.info(f"  Заголовки: {data[0]}")
-                        if len(data) > 1:
-                            logger.info(f"  Первая строка данных: {data[1]}")
-                except Exception as e:
-                    logger.warning(f"Лист '{sheet_name}' не найден или ошибка: {e}")
-
-        except Exception as e:
-            logger.error(f"Ошибка при отладке структуры: {e}")
