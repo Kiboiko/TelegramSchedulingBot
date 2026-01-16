@@ -10,7 +10,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 BOOKINGS_FILE = "bookings.json"
 current_dir = os.path.dirname(os.path.abspath(__file__))
 CREDENTIALS_PATH = os.path.join(current_dir, "credentials.json")
-SPREADSHEET_ID = "1gFtQ7UJstu-Uv_BpgCUp24unsVT9oajSyWxU0j0GMpg"
+SPREADSHEET_ID = "17wM2Ub-hbxLWA5kbpKZnh4NNJ-Rt3grE8oTQj7YtLKw"
 # ADMIN_IDS = [1180878673, 973231400, 1312414595]
 ADMIN_IDS = [1180878673, 973231400]
 BOOKING_TYPES = ["Тип1"]
@@ -42,9 +42,17 @@ FEEDBACK_CONFIG = {
 }
 
 # config.py (дополнение)
+# FINANCE_CONFIG = {
+#     "start_date": "01.09.2025",  # Дата начала финансового учета
+#     "finance_columns_start": "JG",  # Начало столбцов с финансовыми данными
+#     "tariff_column": "N",  # Столбец с тарифом
+#     "replenishment_offset": 0,  # Смещение для пополнения (первый столбец даты)
+#     "withdrawal_offset": 1,  # Смещение для списания (второй столбец даты)
+# }
+
 FINANCE_CONFIG = {
-    "start_date": "01.09.2025",  # Дата начала финансового учета
-    "finance_columns_start": "JG",  # Начало столбцов с финансовыми данными
+    "start_date": "05.01.2026",  # Дата начала финансового учета
+    "finance_columns_start": "LY",  # Начало столбцов с финансовыми данными
     "tariff_column": "N",  # Столбец с тарифом
     "replenishment_offset": 0,  # Смещение для пополнения (первый столбец даты)
     "withdrawal_offset": 1,  # Смещение для списания (второй столбец даты)

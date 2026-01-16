@@ -1,7 +1,11 @@
 # calendar_utils.py
-from datetime import datetime, timedelta,time
+from datetime import datetime, timedelta, time
 from aiogram import types
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from calendar import monthrange
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def generate_finance_calendar(year=None, month=None):
@@ -12,13 +16,26 @@ def generate_finance_calendar(year=None, month=None):
     if month is None:
         month = now.month
 
+    # Исправление: корректируем некорректные значения месяца
+    if month < 1:
+        month = 12
+        year -= 1
+    elif month > 12:
+        month = 1
+        year += 1
+
     # Определяем минимальную дату (1 сентября текущего года)
     min_date = datetime(year=now.year, month=9, day=1).date()
 
     builder = InlineKeyboardBuilder()
 
     # Заголовок с месяцем и годом
-    month_name = datetime(year, month, 1).strftime("%B %Y")
+    try:
+        month_name = datetime(year, month, 1).strftime("%B %Y")
+    except ValueError as e:
+        logger.error(f"Ошибка создания заголовка месяца: {e}, year={year}, month={month}")
+        month_name = datetime.now().strftime("%B %Y")
+
     builder.row(types.InlineKeyboardButton(
         text=month_name,
         callback_data="ignore_month_header"
@@ -34,7 +51,9 @@ def generate_finance_calendar(year=None, month=None):
     # Генерация дней месяца
     first_day = datetime(year, month, 1)
     start_weekday = first_day.weekday()  # 0-6 (пн-вс)
-    days_in_month = (datetime(year, month + 1, 1) - first_day).days if month < 12 else 31
+
+    # Используем monthrange для корректного определения дней в месяце
+    days_in_month = monthrange(year, month)[1]
 
     buttons = []
     # Пустые кнопки для дней предыдущего месяца
@@ -59,11 +78,19 @@ def generate_finance_calendar(year=None, month=None):
             builder.row(*buttons)
             buttons = []
 
-    # Кнопки навигации
-    prev_month = month - 1 if month > 1 else 12
-    prev_year = year if month > 1 else year - 1
-    next_month = month + 1 if month < 12 else 1
-    next_year = year if month < 12 else year + 1
+    # Кнопки навигации с корректной логикой
+    prev_month = month - 1
+    prev_year = year
+    next_month = month + 1
+    next_year = year
+
+    if prev_month < 1:
+        prev_month = 12
+        prev_year = year - 1
+
+    if next_month > 12:
+        next_month = 1
+        next_year = year + 1
 
     nav_buttons = []
 
@@ -82,6 +109,8 @@ def generate_finance_calendar(year=None, month=None):
     builder.row(*nav_buttons)
 
     return builder.as_markup()
+
+
 def generate_calendar(year=None, month=None):
     """Генерирует календарь с корректной обработкой переключения месяцев"""
     now = datetime.now()
@@ -90,15 +119,23 @@ def generate_calendar(year=None, month=None):
     if month is None:
         month = now.month
 
-    # Определяем минимальную дату (1 сентября текущего года)
-    min_date = datetime(year=now.year, month=9, day=1).date()
-    if now.date() > min_date:
-        min_date = now.date()
+    # Исправление: корректируем некорректные значения месяца
+    if month < 1:
+        month = 12
+        year -= 1
+    elif month > 12:
+        month = 1
+        year += 1
 
     builder = InlineKeyboardBuilder()
 
     # Заголовок с месяцем и годом
-    month_name = datetime(year, month, 1).strftime("%B %Y")
+    try:
+        month_name = datetime(year, month, 1).strftime("%B %Y")
+    except ValueError as e:
+        logger.error(f"Ошибка создания заголовка месяца: {e}, year={year}, month={month}")
+        month_name = datetime.now().strftime("%B %Y")
+
     builder.row(types.InlineKeyboardButton(
         text=month_name,
         callback_data="ignore_month_header"
@@ -114,7 +151,9 @@ def generate_calendar(year=None, month=None):
     # Генерация дней месяца
     first_day = datetime(year, month, 1)
     start_weekday = first_day.weekday()  # 0-6 (пн-вс)
-    days_in_month = (datetime(year, month + 1, 1) - first_day).days if month < 12 else 31
+
+    # Используем monthrange для корректного определения дней в месяце
+    days_in_month = monthrange(year, month)[1]
 
     buttons = []
     # Пустые кнопки для дней предыдущего месяца
@@ -124,10 +163,12 @@ def generate_calendar(year=None, month=None):
             callback_data="ignore_empty_day"
         ))
 
-    # Кнопки дней текущего месяца
+    # УПРОЩЕННАЯ ЛОГИКА: показываем все даты, начиная с текущей даты
     for day in range(1, days_in_month + 1):
         current_date = datetime(year, month, day).date()
-        if current_date < min_date:
+
+        # Проверяем, не раньше ли текущая дата
+        if current_date < now.date():
             buttons.append(types.InlineKeyboardButton(
                 text=" ",
                 callback_data="ignore_past_day"
@@ -143,14 +184,20 @@ def generate_calendar(year=None, month=None):
             builder.row(*buttons)
             buttons = []
 
-    # Кнопки навигации
-    prev_month = month - 1 if month > 1 else 12
-    prev_year = year if month > 1 else year - 1
-    next_month = month + 1 if month < 12 else 1
-    next_year = year if month < 12 else year + 1
+    # Кнопки навигации с корректной логикой
+    prev_month = month - 1
+    prev_year = year
+    next_month = month + 1
+    next_year = year
 
-    # ИСПРАВЛЕНИЕ: Всегда показываем кнопку "назад", если есть предыдущий месяц
-    # независимо от того, есть ли в нем доступные даты
+    if prev_month < 1:
+        prev_month = 12
+        prev_year = year - 1
+
+    if next_month > 12:
+        next_month = 1
+        next_year = year + 1
+
     nav_buttons = []
 
     # Всегда показываем кнопку "назад" для навигации
@@ -169,6 +216,7 @@ def generate_calendar(year=None, month=None):
 
     return builder.as_markup()
 
+
 def get_time_range_for_date(selected_date=None):
     """
     Возвращает временной диапазон и шаг в зависимости от дня недели
@@ -177,12 +225,12 @@ def get_time_range_for_date(selected_date=None):
         weekday = selected_date.weekday()
     else:
         weekday = datetime.now().weekday()
-    
+
     if weekday <= 4:  # будни (пн-пт)
         start_time = time(14, 0)
         end_time = time(20, 0)
     else:  # выходные (сб-вс)
         start_time = time(9, 0)
         end_time = time(15, 0)
-    
+
     return start_time, end_time, 15  # шаг 15 минут
